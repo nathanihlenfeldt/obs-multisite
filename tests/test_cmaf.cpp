@@ -11,6 +11,7 @@ extern "C" {
 }
 
 #include <cstdio>
+#include <filesystem>
 #include <fstream>
 #include <vector>
 #include <string>
@@ -67,15 +68,15 @@ int main(int argc, char** argv) {
     if (!mux.ok()) { std::printf("FAIL: muxer setup: %s\n", mux.error().c_str()); return 2; }
 
     std::string dir = outdir;
-    system(("mkdir -p " + dir).c_str());
+    std::error_code mkec; std::filesystem::create_directories(dir, mkec);
     write_file(dir + "/init.mp4", mux.init_segment());
     std::printf("init.mp4: %zu bytes\n", mux.init_segment().size());
 
     int seg_count = 0;
     mux.on_segment([&](uint64_t idx, std::vector<uint8_t> bytes, double dur, double pts) {
-        char name[64]; std::snprintf(name, sizeof(name), "/seg_%03llu.m4s",
-                                     (unsigned long long)idx);
-        write_file(dir + name, bytes);
+        char num[16];
+        std::snprintf(num, sizeof(num), "%03llu", (unsigned long long)idx);
+        write_file(dir + "/seg_" + num + ".m4s", bytes);
         std::printf("segment %llu: %zu bytes, dur=%.3fs, pts=%.3fs\n",
                     (unsigned long long)idx, bytes.size(), dur, pts);
         ++seg_count;
@@ -117,34 +118,41 @@ int main(int argc, char** argv) {
     // Validate each fragment structurally (not by grepping log text, which
     // varies between FFmpeg versions): concatenate init+fragment, then use
     // ffprobe to count decoded video frames and audio streams.
+    //
+    // NOTE: all paths are std::string. Fixed-size char buffers are a trap here
+    // because CI checkout paths can be very long and silently truncate.
+    const std::string out = outdir;
     for (int i = 0; i < seg_count; ++i) {
-        char seg[64], cmd[768];
-        std::snprintf(seg, sizeof(seg), "%s/seg_%03d.m4s", outdir, i);
-        std::snprintf(cmd, sizeof(cmd),
-            "cat %s/init.mp4 %s > %s/_chk.mp4", outdir, seg, outdir);
-        if (system(cmd) != 0) { check(false, "concat init+fragment"); continue; }
+        char idx[16];
+        std::snprintf(idx, sizeof(idx), "%03d", i);
+        const std::string seg  = out + "/seg_" + idx + ".m4s";
+        const std::string chk  = out + "/_chk.mp4";
+        const std::string fcnt = out + "/_frames.txt";
+
+        if (system(("cat '" + out + "/init.mp4' '" + seg + "' > '" + chk + "'").c_str()) != 0) {
+            check(false, "concat init+fragment");
+            continue;
+        }
 
         // Decoded video frames must be > 0 (proves the fragment really decodes).
-        std::snprintf(cmd, sizeof(cmd),
-            "ffprobe -v error -count_frames -select_streams v "
-            "-show_entries stream=nb_read_frames -of csv=p=0 %s/_chk.mp4 "
-            "2>/dev/null > %s/_frames.txt", outdir, outdir);
-        system(cmd);
+        int probe_rc = system(("ffprobe -v error -count_frames -select_streams v "
+                "-show_entries stream=nb_read_frames -of csv=p=0 '" + chk +
+                "' 2>/dev/null > '" + fcnt + "'").c_str());
+        (void)probe_rc;
         long frames = 0;
-        {
-            char path[256];
-            std::snprintf(path, sizeof(path), "%s/_frames.txt", outdir);
-            FILE* f = fopen(path, "r");
-            if (f) { if (fscanf(f, "%ld", &frames) != 1) frames = 0; fclose(f); }
+        if (FILE* f = fopen(fcnt.c_str(), "r")) {
+            if (fscanf(f, "%ld", &frames) != 1) frames = 0;
+            fclose(f);
         }
         std::printf("     (fragment %d: %ld decoded video frames)\n", i, frames);
         check(frames > 0, "fragment decodes to real video frames");
 
         // Every audio track must survive inside the fragment.
-        std::snprintf(cmd, sizeof(cmd),
+        const std::string acount =
             "test $(ffprobe -v error -select_streams a -show_entries stream=index "
-            "-of csv=p=0 %s/_chk.mp4 2>/dev/null | wc -l) -eq %d", outdir, audio_n);
-        check(system(cmd) == 0, "all audio tracks present in fragment");
+            "-of csv=p=0 '" + chk + "' 2>/dev/null | wc -l) -eq " +
+            std::to_string(audio_n);
+        check(system(acount.c_str()) == 0, "all audio tracks present in fragment");
     }
 
     std::printf("\n%s\n", failures == 0 ? "CMAF MUXER TESTS PASSED"
