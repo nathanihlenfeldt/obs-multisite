@@ -14,6 +14,9 @@ add_library(multisite_core STATIC
     src/core/session.cpp
     src/core/aws_sigv4.cpp)
 target_include_directories(multisite_core PUBLIC src src/core)
+# Must be position-independent: this static lib gets linked into the shared
+# OBS plugin module.
+set_target_properties(multisite_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
 if(WIN32)
     target_sources(multisite_core PRIVATE src/core/crypto_bcrypt.cpp)
@@ -42,6 +45,7 @@ if(CURL_FOUND)
     add_library(multisite_s3 STATIC src/core/s3_transport.cpp)
     target_include_directories(multisite_s3 PUBLIC src src/core)
     target_link_libraries(multisite_s3 PUBLIC multisite_core CURL::libcurl)
+    set_target_properties(multisite_s3 PROPERTIES POSITION_INDEPENDENT_CODE ON)
     message(STATUS "libcurl found — building S3 transport")
 else()
     message(STATUS "libcurl not found — skipping S3 transport")
@@ -58,6 +62,7 @@ if(FFMPEG_FOUND)
     add_library(multisite_cmaf STATIC src/core/cmaf_muxer.cpp)
     target_include_directories(multisite_cmaf PUBLIC src src/core)
     target_link_libraries(multisite_cmaf PUBLIC PkgConfig::FFMPEG)
+    set_target_properties(multisite_cmaf PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
     add_executable(test_cmaf tests/test_cmaf.cpp)
     target_link_libraries(test_cmaf PRIVATE multisite_cmaf)
@@ -70,18 +75,50 @@ else()
 endif()
 
 # ── Optional: the OBS plugin module ───────────────────────────────────────────
-# Enable with -DBUILD_OBS_PLUGIN=ON once libobs + obs-deps are available.
+# Enable with -DBUILD_OBS_PLUGIN=ON. libobs is discovered either via its CMake
+# config (obs-deps / an OBS build tree) or via pkg-config (distro libobs-dev).
 if(BUILD_OBS_PLUGIN)
-    find_package(libobs REQUIRED)
     if(NOT FFMPEG_FOUND OR NOT CURL_FOUND)
         message(FATAL_ERROR "OBS plugin needs both FFmpeg and libcurl")
     endif()
+
+    find_package(libobs CONFIG QUIET)
+    if(NOT TARGET OBS::libobs)
+        if(PkgConfig_FOUND)
+            pkg_check_modules(LIBOBS IMPORTED_TARGET libobs)
+        endif()
+        if(TARGET PkgConfig::LIBOBS)
+            add_library(OBS::libobs ALIAS PkgConfig::LIBOBS)
+            message(STATUS "libobs found via pkg-config (${LIBOBS_VERSION})")
+        else()
+            message(FATAL_ERROR
+                "libobs not found. Install libobs-dev, or pass "
+                "-DCMAKE_PREFIX_PATH=<obs-deps>.")
+        endif()
+    else()
+        message(STATUS "libobs found via CMake config")
+    endif()
+
     add_library(obs-multisite MODULE
         src/obs/plugin-main.cpp
         src/obs/multisite_output.cpp)
     target_include_directories(obs-multisite PRIVATE src src/core)
-    target_compile_definitions(obs-multisite PRIVATE PLUGIN_VERSION="${PROJECT_VERSION}")
+    target_compile_definitions(obs-multisite PRIVATE
+        PLUGIN_VERSION="${PROJECT_VERSION}")
     target_link_libraries(obs-multisite PRIVATE
         OBS::libobs multisite_core multisite_s3 multisite_cmaf)
+    set_target_properties(obs-multisite PROPERTIES PREFIX "")
+
+    if(WIN32)
+        install(TARGETS obs-multisite
+            RUNTIME DESTINATION "obs-plugins/64bit")
+        install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/"
+            DESTINATION "data/obs-plugins/obs-multisite")
+    else()
+        install(TARGETS obs-multisite
+            LIBRARY DESTINATION "$ENV{HOME}/.config/obs-studio/plugins/obs-multisite/bin/64bit")
+        install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/"
+            DESTINATION "$ENV{HOME}/.config/obs-studio/plugins/obs-multisite/data")
+    endif()
     message(STATUS "Building OBS plugin module")
 endif()

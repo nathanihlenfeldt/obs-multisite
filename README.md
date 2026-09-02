@@ -74,13 +74,27 @@ It tags every object for lifecycle expiry, sets `Cache-Control`, distinguishes
 retryable failures (network, 5xx, 429) from permanent ones (bad credentials), and
 offers `self_test()` for a write/read-back credential check.
 
-### OBS plugin module
+### OBS plugin module — compiles and links against real libobs
 
 `src/obs/` registers `multisite_output`: it takes OBS's encoded packets (video +
 up to 6 audio tracks via `OBS_OUTPUT_MULTI_TRACK`), muxes them to CMAF, and hands
 fragments to the session. The OBS encode thread never blocks on the network —
 publishing only writes to the local durable spool. It offers resume automatically
 when a previous event was interrupted.
+
+Verified against real OBS headers (libobs 30.0.2): the module compiles warning-
+free, links, and exports all of OBS's required entry points
+(`obs_module_load`, `obs_module_ver`, etc.). Build it with:
+
+```
+cmake -S . -B build -DBUILD_OBS_PLUGIN=ON
+cmake --build build
+```
+
+`.github/workflows/obs-plugin.yml` does this on every push: a Linux job builds
+against distro `libobs-dev` and asserts the entry-point symbols exist, and a
+Windows job builds `libobs` from the pinned OBS 31.1.1 release plus obs-deps and
+produces a downloadable `obs-multisite.dll` artifact.
 
 ### What's proven
 
