@@ -54,6 +54,35 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Don't hardcode a Visual Studio version: the runner image changes over
+      # time. Ask vswhere what's installed and map it to a CMake generator,
+      # falling back to CMake's own default.
+      - name: Detect Visual Studio generator
+        shell: pwsh
+        run: |
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $gen = ""
+          if (Test-Path $vswhere) {
+            Write-Host "--- Visual Studio installations ---"
+            & $vswhere -latest -products * -format value `
+              -property catalog_productDisplayVersion
+            $line = & $vswhere -latest -products * -property catalog_productLineVersion
+            Write-Host "product line version: $line"
+            switch ("$line") {
+              "2022" { $gen = "Visual Studio 17 2022" }
+              "2026" { $gen = "Visual Studio 18 2026" }
+              default { $gen = "" }
+            }
+          } else {
+            Write-Host "vswhere not found at $vswhere"
+          }
+          if ($gen -eq "") {
+            Write-Host "using CMake's default generator"
+          } else {
+            Write-Host "using generator: $gen"
+          }
+          echo "CMAKE_GEN=$gen" >> $env:GITHUB_ENV
+
       - name: Fetch obs-deps (prebuilt Windows dependencies)
         shell: pwsh
         run: |
@@ -76,11 +105,54 @@ jobs:
           Write-Host "obs source dir: $obs"
           # Configure only what libobs needs. Extra flags keep OBS's own
           # plugin/UI/browser targets out of the build.
-          cmake -S $obs -B obs-build -G "Visual Studio 17 2022" -A x64 `
+          $genArgs = @()
+          if ($env:CMAKE_GEN -ne "") { $genArgs += @("-G", $env:CMAKE_GEN, "-A", "x64") }
+          cmake -S $obs -B obs-build @genArgs `
             -DCMAKE_PREFIX_PATH="$env:OBS_DEPS" `
             -DENABLE_PLUGINS=OFF -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF `
             -DENABLE_BROWSER=OFF -DENABLE_WEBRTC=OFF -DENABLE_VLC=OFF `
             -DENABLE_VIRTUALCAM=OFF -DBUILD_TESTS=OFF `
             -DCMAKE_BUILD_TYPE=Release
           if ($LASTEXITCODE -ne 0) { Write-Host "libobs CONFIGURE failed"; exit 1 }
-          cmake --build obs-build --config Release --target
+          cmake --build obs-build --config Release --target libobs
+          if ($LASTEXITCODE -ne 0) { Write-Host "libobs BUILD failed"; exit 1 }
+          Write-Host "--- built libobs artifacts ---"
+          Get-ChildItem -Recurse obs-build -Include obs.lib,obs.dll -ErrorAction SilentlyContinue |
+            Select-Object FullName | Format-Table -AutoSize
+          echo "LIBOBS_BUILD=$env:GITHUB_WORKSPACE\obs-build" >> $env:GITHUB_ENV
+
+      - name: Configure plugin
+        shell: pwsh
+        run: |
+          $genArgs = @()
+          if ($env:CMAKE_GEN -ne "") { $genArgs += @("-G", $env:CMAKE_GEN, "-A", "x64") }
+          cmake -S . -B build @genArgs `
+            -DBUILD_OBS_PLUGIN=ON `
+            -DCMAKE_PREFIX_PATH="$env:OBS_DEPS;$env:LIBOBS_BUILD"
+
+      - name: Build plugin
+        run: cmake --build build --config Release
+
+      # Output location differs by generator: multi-config (Visual Studio) puts
+      # the DLL in build/Release, single-config in build/. Locate it and stage
+      # it so the artifact path is stable either way.
+      - name: Stage the built DLL
+        shell: pwsh
+        run: |
+          $dll = Get-ChildItem -Recurse build -Filter obs-multisite.dll -ErrorAction SilentlyContinue |
+                 Select-Object -First 1
+          if (-not $dll) {
+            Write-Host "obs-multisite.dll not found under build/"
+            Get-ChildItem -Recurse build -Filter *.dll | Select-Object FullName | Format-Table -AutoSize
+            exit 1
+          }
+          Write-Host "found: $($dll.FullName)"
+          New-Item -ItemType Directory -Force -Path dist | Out-Null
+          Copy-Item $dll.FullName dist/
+          Copy-Item -Recurse data dist/data -ErrorAction SilentlyContinue
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: obs-multisite-windows
+          path: dist/
