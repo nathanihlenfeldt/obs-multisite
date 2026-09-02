@@ -52,16 +52,59 @@ else()
 endif()
 
 # ── Optional: CMAF muxer + tests (needs FFmpeg) ───────────────────────────────
-find_package(PkgConfig QUIET)
-if(PkgConfig_FOUND)
-    pkg_check_modules(FFMPEG IMPORTED_TARGET libavformat libavcodec libavutil)
+# FFmpeg discovery has two paths:
+#   1. pkg-config (Linux/macOS, and anywhere .pc files exist)
+#   2. a direct search of CMAKE_PREFIX_PATH (Windows obs-deps ships headers and
+#      import libs with no pkg-config metadata)
+option(FORCE_FFMPEG_MANUAL_SEARCH "Skip pkg-config and use the manual search" OFF)
+
+set(FFMPEG_FOUND FALSE)
+
+if(NOT FORCE_FFMPEG_MANUAL_SEARCH)
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(FFMPEG IMPORTED_TARGET libavformat libavcodec libavutil)
+    endif()
+endif()
+
+if(FFMPEG_FOUND AND TARGET PkgConfig::FFMPEG)
+    add_library(ffmpeg_iface INTERFACE)
+    target_link_libraries(ffmpeg_iface INTERFACE PkgConfig::FFMPEG)
+    message(STATUS "FFmpeg found via pkg-config (${FFMPEG_libavformat_VERSION})")
+else()
+    # Manual search: works against obs-deps on Windows.
+    find_path(FFMPEG_INCLUDE_DIR
+        NAMES libavformat/avformat.h
+        PATH_SUFFIXES include)
+    set(_ffmpeg_libs "")
+    set(_ffmpeg_missing "")
+    foreach(_lib avformat avcodec avutil swresample swscale)
+        find_library(FFMPEG_${_lib}_LIBRARY
+            NAMES ${_lib} lib${_lib}
+            PATH_SUFFIXES lib bin)
+        if(FFMPEG_${_lib}_LIBRARY)
+            list(APPEND _ffmpeg_libs "${FFMPEG_${_lib}_LIBRARY}")
+        else()
+            list(APPEND _ffmpeg_missing ${_lib})
+        endif()
+    endforeach()
+
+    if(FFMPEG_INCLUDE_DIR AND NOT _ffmpeg_missing)
+        set(FFMPEG_FOUND TRUE)
+        add_library(ffmpeg_iface INTERFACE)
+        target_include_directories(ffmpeg_iface INTERFACE "${FFMPEG_INCLUDE_DIR}")
+        target_link_libraries(ffmpeg_iface INTERFACE ${_ffmpeg_libs})
+        message(STATUS "FFmpeg found by manual search: ${FFMPEG_INCLUDE_DIR}")
+    else()
+        message(STATUS "FFmpeg not found "
+                       "(include: ${FFMPEG_INCLUDE_DIR}, missing libs: ${_ffmpeg_missing})")
+    endif()
 endif()
 
 if(FFMPEG_FOUND)
-    message(STATUS "FFmpeg found — building CMAF muxer")
     add_library(multisite_cmaf STATIC src/core/cmaf_muxer.cpp)
     target_include_directories(multisite_cmaf PUBLIC src src/core)
-    target_link_libraries(multisite_cmaf PUBLIC PkgConfig::FFMPEG)
+    target_link_libraries(multisite_cmaf PUBLIC ffmpeg_iface)
     set_target_properties(multisite_cmaf PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
     add_executable(test_cmaf tests/test_cmaf.cpp)
@@ -71,7 +114,7 @@ if(FFMPEG_FOUND)
                      -DTEST_EXE=$<TARGET_FILE:test_cmaf>
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_cmaf_test.cmake)
 else()
-    message(STATUS "FFmpeg not found — skipping CMAF muxer")
+    message(STATUS "skipping CMAF muxer targets")
 endif()
 
 # ── Optional: the OBS plugin module ───────────────────────────────────────────
