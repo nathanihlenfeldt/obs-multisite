@@ -7,6 +7,12 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 option(BUILD_OBS_PLUGIN "Build the OBS plugin module (needs libobs)" OFF)
 
 # ── Reliability core: no OBS, no FFmpeg. Builds everywhere. ───────────────────
+# Windows: keep <windows.h> from defining min/max macros that break std::min /
+# std::max, and trim the header surface.
+if(WIN32)
+    add_compile_definitions(NOMINMAX WIN32_LEAN_AND_MEAN _CRT_SECURE_NO_WARNINGS)
+endif()
+
 add_library(multisite_core STATIC
     src/core/spool_queue.cpp
     src/core/retry_uploader.cpp
@@ -196,7 +202,10 @@ if(BUILD_OBS_PLUGIN)
     set_target_properties(obs-multisite PROPERTIES PREFIX "")
 
     if(WIN32)
+        # A MODULE library installs under LIBRARY on every platform, including
+        # Windows — RUNTIME applies to executables and DLLs from SHARED targets.
         install(TARGETS obs-multisite
+            LIBRARY DESTINATION "obs-plugins/64bit"
             RUNTIME DESTINATION "obs-plugins/64bit")
         install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/data/"
             DESTINATION "data/obs-plugins/obs-multisite")
