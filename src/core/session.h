@@ -1,128 +1,241 @@
-#pragma once
-//
-// session.h — the publishing layer.
-//
-// Ties the CMAF muxer → durable spool → retrying uploader → manifest/live
-// pointer together, and enforces the protocol's write-ordering invariant:
-// a segment is only ever listed in manifest.json AFTER the object store has
-// confirmed it durable. If a decoder can see a manifest entry, the segment
-// exists.
-//
-// Object layout written by a session:
-//   rooms/{room_id}/live.json
-//   events/{event_id}/event.json
-//   events/{event_id}/init.mp4
-//   events/{event_id}/segments/{seq:08d}.m4s
-//   events/{event_id}/manifest.json
-//   events/{event_id}/markers.json
-//
-#include "model.h"
-#include "spool_queue.h"
-#include "retry_uploader.h"
-#include "transport.h"
+#include "session.h"
 
-#include <memory>
-#include <mutex>
-#include <string>
-#include <vector>
-#include <cstdint>
+#include <chrono>
+#include <random>
+#include <cstdio>
+#include <algorithm>
 
 namespace multisite {
 
-struct SessionConfig {
-    std::string room_id = "main-auditorium";
-    std::string spool_dir;                 // local durable queue location
-    double      segment_duration_s = 6.0;
-    size_t      manifest_window = 50;      // rolling window size
-    std::string expiry_tag_key = "MultisiteExpiry";
-    std::string expiry_tag_val = "7d";
-    int         heartbeat_interval_s = 10; // live.json refresh cadence
-    // Upload retry tuning (production defaults; tests shorten these).
-    int         base_backoff_ms = 250;
-    int         max_backoff_ms  = 15000;
-    double      backoff_jitter  = 0.30;
-};
+int64_t now_ms() {
+    return std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::system_clock::now().time_since_epoch()).count();
+}
 
-// Generates a lexicographically-sortable, time-prefixed unique event id
-// (ULID-style: 10 chars of time + 16 of randomness, Crockford base32).
-std::string make_event_id(int64_t now_ms = 0);
+// Crockford base32 alphabet (ULID-style)
+static const char* B32 = "0123456789ABCDEFGHJKMNPQRSTVWXYZ";
 
-int64_t now_ms();
+std::string make_event_id(int64_t t) {
+    if (t == 0) t = now_ms();
+    std::string out(26, '0');
+    // 10 chars of timestamp (48 bits)
+    uint64_t ts = (uint64_t)t;
+    for (int i = 9; i >= 0; --i) { out[i] = B32[ts & 31]; ts >>= 5; }
+    // 16 chars of randomness
+    static thread_local std::mt19937_64 rng{std::random_device{}()};
+    std::uniform_int_distribution<int> d(0, 31);
+    for (int i = 10; i < 26; ++i) out[i] = B32[d(rng)];
+    return out;
+}
 
-class Session {
-public:
-    Session(SessionConfig cfg, Transport& transport);
-    ~Session();
+static std::string seq_name(uint64_t seq) {
+    char b[16];
+    std::snprintf(b, sizeof(b), "%08llu", (unsigned long long)seq);
+    return b;
+}
 
-    // Is there an unfinished event on disk that could be resumed?
-    ResumeInfo check_resumable() const;
+Session::Session(SessionConfig cfg, Transport& transport)
+    : m_cfg(std::move(cfg)), m_tx(transport) {
+    m_spool = std::make_unique<SpoolQueue>(m_cfg.spool_dir);
 
-    // Start a new event. Publishes event.json + init.mp4, then live.json.
-    // `init` is the CMAF init segment; tracks describe what's inside segments.
-    bool start_new(const std::vector<uint8_t>& init,
-                   const VideoInfo& video,
-                   const std::vector<AudioTrack>& audio_tracks);
+    UploaderConfig ucfg;
+    ucfg.content_type = "video/mp4";
+    if (m_cfg.use_object_tags)
+        ucfg.tags = { { m_cfg.expiry_tag_key, m_cfg.expiry_tag_val } };
+    else
+        ucfg.tags.clear();
+    ucfg.base_backoff_ms = m_cfg.base_backoff_ms;
+    ucfg.max_backoff_ms  = m_cfg.max_backoff_ms;
+    ucfg.jitter          = m_cfg.backoff_jitter;
+    m_uploader = std::make_unique<RetryUploader>(*m_spool, m_tx, ucfg);
+    m_uploader->set_confirm_callback(
+        [this](const SpooledSegment& s) { on_confirmed(s); });
+}
 
-    // Resume the on-disk event, continuing its sequence numbering.
-    bool resume(const std::vector<uint8_t>& init,
-                const VideoInfo& video,
-                const std::vector<AudioTrack>& audio_tracks);
+Session::~Session() {
+    if (m_uploader) m_uploader->stop();
+}
 
-    // Durably enqueue a finished media fragment. Returns its sequence number.
-    // Safe to call from the encode thread; never blocks on the network.
-    uint64_t publish_segment(std::vector<uint8_t> fragment,
-                             double duration_s,
-                             double pts_offset_s);
+std::string Session::event_prefix() const {
+    return "events/" + m_event_id + "/";
+}
+std::string Session::segment_key(uint64_t seq) const {
+    return event_prefix() + "segments/" + seq_name(seq) + ".m4s";
+}
 
-    // Append a marker and publish markers.json.
-    void add_marker(const std::string& label, const std::string& type = "cue");
+bool Session::put_bytes(const std::string& key, const std::vector<uint8_t>& b,
+                        const std::string& content_type) {
+    std::map<std::string, std::string> tags;
+    if (m_cfg.use_object_tags)
+        tags[m_cfg.expiry_tag_key] = m_cfg.expiry_tag_val;
+    PutResult r = m_tx.put(key, b, content_type, tags);
+    if (!r.success) {
+        m_last_error = "PUT " + key + " -> HTTP " +
+                       std::to_string(r.http_status) + " " + r.error;
+    }
+    return r.success;
+}
+bool Session::put_json(const std::string& key, const std::string& body) {
+    std::vector<uint8_t> b(body.begin(), body.end());
+    return put_bytes(key, b, "application/json");
+}
 
-    // Refresh live.json's heartbeat (drives decoder stale-detection).
-    void heartbeat();
+ResumeInfo Session::check_resumable() const { return m_spool->inspect(); }
 
-    // Flush remaining spool, mark the event ended, publish final state.
-    void end(std::chrono::milliseconds drain_deadline = std::chrono::milliseconds(30000));
+bool Session::begin_common(const std::vector<uint8_t>& init,
+                           const VideoInfo& video,
+                           const std::vector<AudioTrack>& tracks) {
+    m_last_error.clear();
+    // event.json — static descriptor
+    EventInfo ev;
+    ev.event_id           = m_event_id;
+    ev.room_id            = m_cfg.room_id;
+    ev.started_at_ms      = now_ms();
+    ev.first_seq          = m_next_seq;
+    ev.segment_duration_s = m_cfg.segment_duration_s;
+    ev.init               = "init.mp4";
+    ev.video              = video;
+    ev.audio_tracks       = tracks;
+    if (!put_json(event_prefix() + "event.json", ev.to_json())) return false;
 
-    // Status for the encoder UI.
-    struct Status {
-        std::string event_id;
-        uint64_t    last_confirmed = 0;
-        uint64_t    last_enqueued  = 0;
-        size_t      pending        = 0;
-        uint64_t    confirmed_total = 0;
-        uint64_t    bytes_uploaded = 0;
-        uint64_t    retries        = 0;
-        LinkHealth  health = LinkHealth::Healthy;
-    };
-    Status status() const;
+    // init.mp4 — must exist before any segment is referenced
+    if (!put_bytes(event_prefix() + "init.mp4", init, "video/mp4")) return false;
 
-    const std::string& event_id() const { return m_event_id; }
+    // seed manifest state
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        m_manifest = Manifest{};
+        m_manifest.event_id            = m_event_id;
+        m_manifest.status              = "live";
+        m_manifest.init                = "init.mp4";
+        m_manifest.video               = video;
+        m_manifest.audio_tracks        = tracks;
+        m_manifest.first_available_seq = m_next_seq;
+        m_manifest.updated_at_ms       = now_ms();
+        publish_manifest_locked();
+    }
 
-private:
-    SessionConfig m_cfg;
-    Transport&    m_tx;
-    std::unique_ptr<SpoolQueue>    m_spool;
-    std::unique_ptr<RetryUploader> m_uploader;
+    publish_live("live");
+    m_uploader->start();
+    return true;
+}
 
-    std::string m_event_id;
-    uint64_t    m_next_seq = 0;
-    int64_t     m_last_heartbeat_ms = 0;
+bool Session::start_new(const std::vector<uint8_t>& init,
+                        const VideoInfo& video,
+                        const std::vector<AudioTrack>& tracks) {
+    m_event_id = make_event_id();
+    m_next_seq = 0;
+    m_spool->begin_event(m_event_id, 0);
+    m_markers = MarkerList{};
+    return begin_common(init, video, tracks);
+}
 
-    Manifest    m_manifest;
-    MarkerList  m_markers;
-    mutable std::mutex m_mtx;
+bool Session::resume(const std::vector<uint8_t>& init,
+                     const VideoInfo& video,
+                     const std::vector<AudioTrack>& tracks) {
+    auto info = m_spool->inspect();
+    if (!info.resumable) return false;
+    m_event_id = info.event_id;
+    m_next_seq = info.last_enqueued + 1;   // continue the sequence
+    m_spool->resume_event();
+    return begin_common(init, video, tracks);
+}
 
-    std::string segment_key(uint64_t seq) const;
-    std::string event_prefix() const;
-    bool  put_json(const std::string& key, const std::string& body);
-    bool  put_bytes(const std::string& key, const std::vector<uint8_t>& b,
-                    const std::string& content_type);
-    void  publish_manifest_locked();
-    void  publish_live(const std::string& status);
-    bool  begin_common(const std::vector<uint8_t>& init,
-                       const VideoInfo& video,
-                       const std::vector<AudioTrack>& tracks);
-    void  on_confirmed(const SpooledSegment& seg);
-};
+uint64_t Session::publish_segment(std::vector<uint8_t> fragment,
+                                  double duration_s, double pts_offset_s) {
+    uint64_t seq = m_next_seq++;
+    SpooledSegment s;
+    s.seq          = seq;
+    s.data         = std::move(fragment);
+    s.duration_s   = duration_s;
+    s.pts_offset_s = pts_offset_s;
+    s.key          = segment_key(seq);
+    m_spool->enqueue(std::move(s));   // durable BEFORE any upload attempt
+    return seq;
+}
+
+// Called by the uploader once the store has confirmed a segment durable.
+// This is the only place the manifest gains an entry — the write-ordering rule.
+void Session::on_confirmed(const SpooledSegment& seg) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    ManifestSegment ms;
+    ms.seq        = seg.seq;
+    ms.duration_s = seg.duration_s;
+    ms.checksum   = seg.checksum;
+    m_manifest.push(ms, m_cfg.manifest_window);
+    m_manifest.updated_at_ms = now_ms();
+    publish_manifest_locked();
+
+    // Periodic heartbeat so decoders can distinguish "quiet" from "dead".
+    int64_t t = now_ms();
+    if (t - m_last_heartbeat_ms > (int64_t)m_cfg.heartbeat_interval_s * 1000) {
+        m_last_heartbeat_ms = t;
+        // publish outside the manifest lock is not required; live.json is small
+        LivePointer lp;
+        lp.room_id = m_cfg.room_id;
+        lp.event_id = m_event_id;
+        lp.status = "live";
+        lp.updated_at_ms = t;
+        put_json("rooms/" + m_cfg.room_id + "/live.json", lp.to_json());
+    }
+}
+
+void Session::publish_manifest_locked() {
+    put_json(event_prefix() + "manifest.json", m_manifest.to_json());
+}
+
+void Session::publish_live(const std::string& status) {
+    LivePointer lp;
+    lp.room_id       = m_cfg.room_id;
+    lp.event_id      = m_event_id;
+    lp.status        = status;
+    lp.updated_at_ms = now_ms();
+    m_last_heartbeat_ms = lp.updated_at_ms;
+    put_json("rooms/" + m_cfg.room_id + "/live.json", lp.to_json());
+}
+
+void Session::heartbeat() { publish_live("live"); }
+
+void Session::add_marker(const std::string& label, const std::string& type) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    Marker mk;
+    mk.seq   = m_next_seq;          // marker applies at the current live edge
+    mk.at_ms = now_ms();
+    mk.type  = type;
+    mk.label = label;
+    mk.id    = make_event_id(mk.at_ms);
+    m_markers.markers.push_back(mk);
+    put_json(event_prefix() + "markers.json", m_markers.to_json());
+}
+
+void Session::end(std::chrono::milliseconds drain_deadline) {
+    // Drain whatever is still spooled so nothing is lost on a clean stop.
+    m_uploader->stop();
+    m_uploader->drain_blocking(drain_deadline);
+
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        m_manifest.status = "ended";
+        m_manifest.updated_at_ms = now_ms();
+        publish_manifest_locked();
+    }
+    publish_live("ended");
+    m_spool->mark_ended();
+}
+
+Session::Status Session::status() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    Status s;
+    auto st = m_spool->state();
+    s.event_id        = m_event_id;
+    s.last_confirmed  = st.last_confirmed;
+    s.last_enqueued   = st.last_enqueued;
+    s.pending         = m_spool->pending_count();
+    s.confirmed_total = m_uploader->stats().confirmed.load();
+    s.bytes_uploaded  = m_uploader->stats().bytes.load();
+    s.retries         = m_uploader->stats().retries.load();
+    s.health          = m_uploader->health();
+    return s;
+}
 
 } // namespace multisite
