@@ -128,6 +128,12 @@ jobs:
           echo "LIBOBS_BUILD=$env:GITHUB_WORKSPACE\obs-build" >> $env:GITHUB_ENV
           echo "LIBOBS_INCLUDE_DIR=$obs\libobs" >> $env:GITHUB_ENV
           echo "LIBOBS_LIBRARY=$($obslib.FullName)" >> $env:GITHUB_ENV
+         # obsconfig.h is generated during the libobs build — find its directory.
+          $obscfg = Get-ChildItem -Recurse obs-build -Filter obsconfig.h -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+          if (-not $obscfg) { Write-Host "obsconfig.h not found in the OBS build tree"; exit 1 }
+          Write-Host "obsconfig.h: $($obscfg.FullName)"
+          echo "LIBOBS_CONFIG_INCLUDE_DIR=$($obscfg.Directory.FullName)" >> $env:GITHUB_ENV
 
       - name: Configure plugin
         shell: pwsh
@@ -138,8 +144,8 @@ jobs:
             -DBUILD_OBS_PLUGIN=ON `
             -DCMAKE_PREFIX_PATH="$env:OBS_DEPS" `
             -DLIBOBS_INCLUDE_DIR="$env:LIBOBS_INCLUDE_DIR" `
-            -DLIBOBS_LIBRARY="$env:LIBOBS_LIBRARY"
-
+            -DLIBOBS_LIBRARY="$env:LIBOBS_LIBRARY" `
+            -DLIBOBS_CONFIG_INCLUDE_DIR="$env:LIBOBS_CONFIG_INCLUDE_DIR"
       - name: Build plugin
         run: cmake --build build --config Release
 
