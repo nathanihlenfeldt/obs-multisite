@@ -37,6 +37,7 @@ static constexpr char S_REGION[]    = "region";
 static constexpr char S_ROOM[]      = "room_id";
 static constexpr char S_SEGDUR[]    = "segment_duration_s";
 static constexpr char S_TRACKLBL[]  = "track_labels";   // comma-separated
+static constexpr char S_TAGS[]      = "use_object_tags";
 
 struct OutputCtx {
     obs_output_t* output = nullptr;
@@ -150,6 +151,7 @@ static void out_defaults(obs_data_t* s) {
     obs_data_set_default_string(s, S_REGION, "auto");
     obs_data_set_default_double(s, S_SEGDUR, 6.0);
     obs_data_set_default_string(s, S_TRACKLBL, "Main mix,Sermon ISO,Click");
+    obs_data_set_default_bool(s, S_TAGS, false);
 }
 
 static obs_properties_t* out_props(void*) {
@@ -163,6 +165,8 @@ static obs_properties_t* out_props(void*) {
     obs_properties_add_text(p, S_ROOM,     obs_module_text("RoomID"),       OBS_TEXT_DEFAULT);
     obs_properties_add_float_slider(p, S_SEGDUR, obs_module_text("SegmentDuration"), 2.0, 15.0, 0.5);
     obs_properties_add_text(p, S_TRACKLBL, obs_module_text("TrackLabels"), OBS_TEXT_DEFAULT);
+    // R2 rejects x-amz-tagging; leave off unless the store supports tagging.
+    obs_properties_add_bool(p, S_TAGS, obs_module_text("UseObjectTags"));
     return p;
 }
 
@@ -183,6 +187,7 @@ static bool out_start(void* data) {
     sc.room_id            = obs_data_get_string(s, S_ROOM);
     sc.segment_duration_s = obs_data_get_double(s, S_SEGDUR);
     std::string labels    = obs_data_get_string(s, S_TRACKLBL);
+    sc.use_object_tags    = obs_data_get_bool(s, S_TAGS);
     obs_data_release(s);
 
     if (s3.bucket.empty() ||
@@ -223,7 +228,22 @@ static bool out_start(void* data) {
     } else {
         ok = ctx->session->start_new(ctx->muxer->init_segment(), vinfo, ainfo);
     }
-    if (!ok) { mlog_error("failed to start session (check credentials)"); return false; }
+    if (!ok) {
+        // Surface the actual HTTP failure rather than guessing.
+        mlog_error("failed to start session: %s",
+                   ctx->session->last_error().empty()
+                       ? "no error recorded"
+                       : ctx->session->last_error().c_str());
+        // Probe the bucket so the operator learns whether it's credentials,
+        // permissions, endpoint, or something request-specific.
+        std::string probe = ctx->transport->self_test();
+        if (probe.empty())
+            mlog_error("connectivity probe SUCCEEDED — credentials and bucket are "
+                       "fine, so the failure is request-specific (see above)");
+        else
+            mlog_error("connectivity probe also failed: %s", probe.c_str());
+        return false;
+    }
 
     ctx->muxer->on_segment([ctx](uint64_t, std::vector<uint8_t> bytes,
                                  double dur, double pts) {
