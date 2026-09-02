@@ -31,6 +31,7 @@ public:
     int fail_budget = 0;
     bool expect_tags = false;
     bool fail_all = false;
+    bool silently_discard = false;   // returns 200 but stores nothing
     bool ordering_violation = false;
     std::string violation_detail;
 
@@ -50,7 +51,7 @@ public:
             ordering_violation = true;
             violation_detail = "missing expiry tag on " + key;
         }
-        objects[key] = body;
+        if (!silently_discard) objects[key] = body;
 
         // INVARIANT CHECK: if this is a manifest, every segment it lists must
         // already exist as an object in the store.
@@ -76,6 +77,12 @@ public:
             }
         }
         return {true, 200, true, ""};
+    }
+
+    int64_t object_size(const std::string& k) override {
+        std::lock_guard<std::mutex> lk(mtx);
+        auto it = objects.find(k);
+        return it == objects.end() ? -1 : (int64_t)it->second.size();
     }
 
     bool has(const std::string& k) {
@@ -262,7 +269,25 @@ int main() {
               "error names the HTTP status");
     }
 
-    std::printf("== 7. Clean end marks the event ended ==\n");
+    std::printf("== 7. A store that lies about success is caught ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg; cfg.spool_dir = (base / "s7v").string();
+        Session ses(cfg, store);
+        ses.start_new(blob(0), video, tracks);
+        store.silently_discard = true;   // 200 OK, but nothing persisted
+        ses.publish_segment(blob(1), 6.0, 0.0);
+        for (int i = 0; i < 200 && ses.status().confirmed_total < 1; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        auto st = ses.status();
+        CHECK(st.verify_failures > 0,
+              "verification detects a segment that wasn't really stored");
+        std::printf("     (note: %s)\n", st.verify_note.c_str());
+        store.silently_discard = false;
+        ses.end();
+    }
+
+    std::printf("== 8. Clean end marks the event ended ==\n");
     {
         MemStore store;
         SessionConfig cfg; cfg.spool_dir = (base / "s5").string();

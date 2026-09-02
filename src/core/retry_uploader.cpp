@@ -5,6 +5,7 @@
 
 namespace multisite {
 
+// Human-readable note about the most recent verification attempt.
 RetryUploader::RetryUploader(SpoolQueue& spool, Transport& transport,
                              UploaderConfig cfg)
     : m_spool(spool), m_transport(transport), m_cfg(std::move(cfg)) {}
@@ -25,6 +26,24 @@ bool RetryUploader::upload_one(const SpooledSegment& seg) {
     while (m_running) {
         ++attempt;
         PutResult r = m_transport.put(seg.key, seg.data, m_cfg.content_type, m_cfg.tags);
+        if (r.success && m_cfg.verify_first_n > 0 &&
+            (int)m_stats.confirmed.load() < m_cfg.verify_first_n) {
+            // Trust nothing: confirm the bytes are actually in the store.
+            int64_t stored = m_transport.object_size(seg.key);
+            if (stored >= 0 && stored != (int64_t)seg.data.size()) {
+                m_stats.verify_failures++;
+                m_last_verify_note = "stored size " + std::to_string(stored) +
+                    " != sent " + std::to_string(seg.data.size()) +
+                    " for " + seg.key;
+            } else if (stored < 0) {
+                m_stats.verify_failures++;
+                m_last_verify_note =
+                    "object not found after a successful PUT: " + seg.key;
+            } else {
+                m_last_verify_note = "verified " + seg.key + " (" +
+                    std::to_string(stored) + " bytes)";
+            }
+        }
         if (r.success) {
             // Order matters for durability: publish the manifest entry FIRST,
             // then drop the spool file. If we crashed the other way round the
@@ -34,8 +53,12 @@ bool RetryUploader::upload_one(const SpooledSegment& seg) {
             m_stats.confirmed++;
             m_stats.bytes += seg.data.size();
             m_health = LinkHealth::Healthy;
+            // Publish the manifest entry BEFORE clearing the spool file (a
+            // crash in between must not orphan the object), then clear it so
+            // status counters reflect reality for the confirm callback.
             if (m_on_confirm) m_on_confirm(seg);
             m_spool.confirm(seg.seq);
+            if (m_on_confirmed_after) m_on_confirmed_after(seg);
             return true;
         }
         if (!r.retryable) {

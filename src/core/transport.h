@@ -29,6 +29,11 @@ public:
                           const std::vector<uint8_t>& body,
                           const std::string& content_type,
                           const std::map<std::string, std::string>& tags) = 0;
+
+    // Optional: report the stored size of an object (HEAD). Returns -1 if the
+    // transport can't check or the object is absent. Used to VERIFY that a PUT
+    // reported as successful actually persisted the bytes.
+    virtual int64_t object_size(const std::string& /*key*/) { return -1; }
 };
 
 } // namespace multisite

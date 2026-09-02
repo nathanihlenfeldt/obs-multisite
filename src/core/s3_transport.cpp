@@ -166,6 +166,39 @@ PutResult S3Transport::put(const std::string& key,
     return d->do_put(key, body, content_type, tags);
 }
 
+int64_t S3Transport::object_size(const std::string& key) {
+    ensure_curl();
+    CURL* curl = curl_easy_init();
+    if (!curl) return -1;
+
+    std::string url = d->url_for(key);
+    SigV4Signer signer(d->cfg.access_key_id, d->cfg.secret_access_key,
+                       d->cfg.region, "s3");
+    auto sr = signer.sign("HEAD", url, {}, {});
+    struct curl_slist* h = nullptr;
+    for (const auto& l : sr.header_lines()) h = curl_slist_append(h, l.c_str());
+
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, h);
+    curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);          // HEAD
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)d->cfg.request_timeout_ms);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+
+    int64_t size = -1;
+    if (curl_easy_perform(curl) == CURLE_OK) {
+        long code = 0;
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+        if (code >= 200 && code < 300) {
+            curl_off_t len = -1;
+            curl_easy_getinfo(curl, CURLINFO_CONTENT_LENGTH_DOWNLOAD_T, &len);
+            size = (int64_t)len;
+        }
+    }
+    curl_slist_free_all(h);
+    curl_easy_cleanup(curl);
+    return size;
+}
+
 std::string S3Transport::self_test() {
     const std::string key = "_multisite_probe.txt";
     std::string payload = "obs-multisite connectivity probe";

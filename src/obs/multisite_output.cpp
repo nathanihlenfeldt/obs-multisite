@@ -18,10 +18,14 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 }
 
+#include <atomic>
+#include <condition_variable>
+#include <deque>
 #include <memory>
-#include <string>
-#include <vector>
 #include <mutex>
+#include <string>
+#include <thread>
+#include <vector>
 
 namespace multisite_obs {
 
@@ -39,6 +43,13 @@ static constexpr char S_SEGDUR[]    = "segment_duration_s";
 static constexpr char S_TRACKLBL[]  = "track_labels";   // comma-separated
 static constexpr char S_TAGS[]      = "use_object_tags";
 
+// A finished fragment on its way from the muxer to the durable spool.
+struct PendingFragment {
+    std::vector<uint8_t> bytes;
+    double duration_s = 0.0;
+    double pts_offset_s = 0.0;
+};
+
 struct OutputCtx {
     obs_output_t* output = nullptr;
     std::unique_ptr<S3Transport> transport;
@@ -48,13 +59,29 @@ struct OutputCtx {
     // OBS encoder index → muxer track index
     int  video_track = -1;
     int  audio_track_for[MAX_AUDIO_MIXES];
-    bool started = false;
-    std::mutex mtx;
+    std::mutex mtx;                  // guards start/stop transitions
+
+    // Packets arrive on OBS's encoder threads while stop() runs on the UI
+    // thread. `accepting` gates new packets and `mux_mtx` protects the muxer
+    // itself, so the muxer can never be destroyed while it's being written to.
+    std::atomic<bool> accepting{false};
+    std::mutex        mux_mtx;
+    bool              started = false;
+
+    // Hashing a fragment and writing ~5 MB to disk must NOT happen on OBS's
+    // encoder thread (it stalls audio). Fragments are handed to this writer
+    // thread instead.
+    std::deque<PendingFragment> wq;
+    std::mutex                  wq_mtx;
+    std::condition_variable     wq_cv;
+    std::thread                 writer;
+    std::atomic<bool>           writer_run{false};
 
     // diagnostics
     bool     logged_first_packets = false;
     uint64_t video_packets_seen = 0;
     uint64_t segments_muxed = 0;
+    std::string last_verify_note;
 
     // progress logging state
     uint64_t last_logged_seq = 0;
@@ -180,6 +207,46 @@ static obs_properties_t* out_props(void*) {
     return p;
 }
 
+// Drains finished fragments into the durable spool, off the encoder thread.
+static void writer_loop(OutputCtx* ctx) {
+    for (;;) {
+        PendingFragment f;
+        {
+            std::unique_lock<std::mutex> lk(ctx->wq_mtx);
+            ctx->wq_cv.wait(lk, [ctx] {
+                return !ctx->wq.empty() || !ctx->writer_run.load();
+            });
+            if (ctx->wq.empty()) {
+                if (!ctx->writer_run.load()) return;   // asked to stop, nothing left
+                continue;
+            }
+            f = std::move(ctx->wq.front());
+            ctx->wq.pop_front();
+        }
+        // Checksum + durable write happen here, safely away from OBS threads.
+        uint64_t seq = ctx->session->publish_segment(std::move(f.bytes),
+                                                     f.duration_s, f.pts_offset_s);
+        ctx->segments_muxed++;
+        mlog_debug("segment %llu spooled (%.1fs)",
+                   (unsigned long long)seq, f.duration_s);
+    }
+}
+
+// Wait for queued fragments to reach the spool (bounded), then stop the writer.
+static void writer_shutdown(OutputCtx* ctx, int timeout_ms = 10000) {
+    if (!ctx->writer_run.load()) return;
+    for (int waited = 0; waited < timeout_ms; waited += 25) {
+        {
+            std::lock_guard<std::mutex> lk(ctx->wq_mtx);
+            if (ctx->wq.empty()) break;
+        }
+        std::this_thread::sleep_for(std::chrono::milliseconds(25));
+    }
+    ctx->writer_run = false;
+    ctx->wq_cv.notify_all();
+    if (ctx->writer.joinable()) ctx->writer.join();
+}
+
 static bool out_start(void* data) {
     auto* ctx = static_cast<OutputCtx*>(data);
     std::lock_guard<std::mutex> lk(ctx->mtx);
@@ -278,6 +345,16 @@ static bool out_start(void* data) {
             ctx->last_log_ms = now;
             ctx->last_health = st.health;
         }
+
+        // Report the store-side verification of early uploads. A store that
+        // returns success without persisting is otherwise invisible.
+        if (!st.verify_note.empty() && st.verify_note != ctx->last_verify_note) {
+            ctx->last_verify_note = st.verify_note;
+            if (st.verify_failures > 0)
+                mlog_error("UPLOAD VERIFICATION FAILED: %s", st.verify_note.c_str());
+            else
+                mlog_info("upload verified in bucket: %s", st.verify_note.c_str());
+        }
         // Always warn when the link degrades — that's the thing an operator
         // must know about mid-service.
         if (health_changed && st.health != LinkHealth::Healthy) {
@@ -287,16 +364,30 @@ static bool out_start(void* data) {
         }
     });
 
+    // Hand finished fragments to the writer thread. This callback runs on an
+    // OBS encoder thread, so it must stay cheap — no hashing, no disk I/O.
     ctx->muxer->on_segment([ctx](uint64_t, std::vector<uint8_t> bytes,
                                  double dur, double pts) {
-        uint64_t seq = ctx->session->publish_segment(std::move(bytes), dur, pts);
-        ctx->segments_muxed++;
-        mlog_debug("segment %llu muxed and spooled (%.1fs)",
-                   (unsigned long long)seq, dur);
+        PendingFragment f;
+        f.bytes = std::move(bytes);
+        f.duration_s = dur;
+        f.pts_offset_s = pts;
+        {
+            std::lock_guard<std::mutex> lk(ctx->wq_mtx);
+            ctx->wq.push_back(std::move(f));
+        }
+        ctx->wq_cv.notify_one();
     });
 
-    if (!obs_output_begin_data_capture(ctx->output, 0)) return false;
+    ctx->writer_run = true;
+    ctx->writer = std::thread(writer_loop, ctx);
+
+    if (!obs_output_begin_data_capture(ctx->output, 0)) {
+        writer_shutdown(ctx);
+        return false;
+    }
     ctx->started = true;
+    ctx->accepting = true;      // packets may now enter the muxer
     mlog_info("multisite output started — room=%s event=%s",
               sc.room_id.c_str(), ctx->session->event_id().c_str());
     return true;
@@ -306,8 +397,23 @@ static void out_stop(void* data, uint64_t) {
     auto* ctx = static_cast<OutputCtx*>(data);
     std::lock_guard<std::mutex> lk(ctx->mtx);
     if (!ctx->started) return;
+
+    // ORDER MATTERS. Packets arrive on OBS's encoder threads; stop runs on the
+    // caller's thread. Close the gate first, let OBS stop delivering, and only
+    // then touch the muxer — otherwise the muxer can be destroyed mid-write
+    // (a use-after-free that crashes inside avformat).
+    ctx->accepting = false;
     obs_output_end_data_capture(ctx->output);
-    if (ctx->muxer) ctx->muxer->flush();       // emit final fragment
+
+    {
+        std::lock_guard<std::mutex> mlk(ctx->mux_mtx);
+        if (ctx->muxer) ctx->muxer->flush();   // emits the final fragment
+        ctx->muxer.reset();                    // safe: no packet can be inside
+    }
+
+    // Make sure queued fragments reach the durable spool before draining.
+    writer_shutdown(ctx);
+
     if (ctx->session) {
         auto st = ctx->session->status();
         mlog_info("stopping: %llu confirmed, %zu pending, %llu retries, "
@@ -346,7 +452,8 @@ static inline int64_t ts_to_ns(int64_t ts, int32_t tb_num, int32_t tb_den) {
 
 static void out_packet(void* data, struct encoder_packet* pkt) {
     auto* ctx = static_cast<OutputCtx*>(data);
-    if (!ctx->started || !pkt || !ctx->muxer) return;
+    // Cheap gate first: once stop() begins, packets are dropped immediately.
+    if (!ctx || !pkt || !ctx->accepting.load()) return;
 
     int track = -1;
     if (pkt->type == OBS_ENCODER_VIDEO) track = ctx->video_track;
@@ -376,7 +483,13 @@ static void out_packet(void* data, struct encoder_packet* pkt) {
         }
     }
 
-    ctx->muxer->push(cp);
+    // Hold the muxer lock only for the push itself. stop() takes this same
+    // lock before destroying the muxer, so this can never touch freed memory.
+    {
+        std::lock_guard<std::mutex> mlk(ctx->mux_mtx);
+        if (!ctx->muxer) return;               // stop() got here first
+        ctx->muxer->push(cp);
+    }
 }
 
 void register_output() {

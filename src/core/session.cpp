@@ -50,6 +50,11 @@ Session::Session(SessionConfig cfg, Transport& transport)
     m_uploader = std::make_unique<RetryUploader>(*m_spool, m_tx, ucfg);
     m_uploader->set_confirm_callback(
         [this](const SpooledSegment& s) { on_confirmed(s); });
+    // Progress is reported after the spool entry clears, so the counters the
+    // host logs (confirmed / queued) are accurate rather than off-by-one.
+    m_uploader->set_post_confirm_callback([this](const SpooledSegment&) {
+        if (m_on_progress) m_on_progress(status());
+    });
 }
 
 Session::~Session() {
@@ -180,8 +185,6 @@ void Session::on_confirmed(const SpooledSegment& seg) {
         put_json("rooms/" + m_cfg.room_id + "/live.json", lp.to_json());
     }
   }
-    // Report progress outside the lock so the host can log/update UI freely.
-    if (m_on_progress) m_on_progress(status());
 }
 
 uint64_t Session::bytes_uploaded() const {
@@ -242,6 +245,8 @@ Session::Status Session::status() const {
     s.confirmed_total = m_uploader->stats().confirmed.load();
     s.bytes_uploaded  = m_uploader->stats().bytes.load();
     s.retries         = m_uploader->stats().retries.load();
+    s.verify_failures = m_uploader->stats().verify_failures.load();
+    s.verify_note     = m_uploader->last_verify_note();
     s.health          = m_uploader->health();
     return s;
 }

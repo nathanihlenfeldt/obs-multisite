@@ -97,6 +97,8 @@ public:
         uint64_t    confirmed_total = 0;
         uint64_t    bytes_uploaded = 0;
         uint64_t    retries        = 0;
+        uint64_t    verify_failures = 0;
+        std::string verify_note;      // result of the last upload verification
         LinkHealth  health = LinkHealth::Healthy;
     };
     Status status() const;
