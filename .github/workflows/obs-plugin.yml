@@ -1,0 +1,96 @@
+name: obs plugin build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  # Compiles the OBS plugin module against real libobs headers from the distro.
+  # This is the cheap, fast guard on our OBS API usage — it catches API
+  # mistakes without needing the full obs-deps toolchain.
+  linux:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Install libobs, FFmpeg and libcurl
+        run: |
+          sudo apt-get update -o Acquire::Retries=3
+          sudo apt-get install -y --no-install-recommends \
+            libobs-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev \
+            libswresample-dev libswscale-dev libcurl4-openssl-dev
+          echo "--- versions ---"
+          pkg-config --modversion libobs
+          pkg-config --modversion libavformat
+
+      - name: Configure (plugin enabled)
+        run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DBUILD_OBS_PLUGIN=ON
+
+      - name: Build
+        run: cmake --build build --config Release
+
+      - name: Verify the module exports OBS's entry points
+        run: |
+          set -e
+          test -f build/obs-multisite.so
+          for sym in obs_module_load obs_module_unload obs_module_set_pointer \
+                     obs_module_ver obs_module_description; do
+            nm -D --defined-only build/obs-multisite.so | grep -q " $sym$" \
+              || { echo "MISSING SYMBOL: $sym"; exit 1; }
+            echo "ok: $sym"
+          done
+
+      - name: Run core tests
+        run: ctest --test-dir build -C Release --output-on-failure
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: obs-multisite-linux
+          path: build/obs-multisite.so
+
+  # Produces the actual installable Windows plugin. Builds libobs from the
+  # pinned OBS release plus prebuilt obs-deps, then builds the plugin against it.
+  windows:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Fetch obs-deps (prebuilt Windows dependencies)
+        shell: pwsh
+        run: |
+          $url = "https://github.com/obsproject/obs-deps/releases/download/2025-07-11/windows-deps-2025-07-11-x64.zip"
+          Invoke-WebRequest -Uri $url -OutFile deps.zip
+          Expand-Archive deps.zip -DestinationPath "$env:GITHUB_WORKSPACE\obs-deps"
+          echo "OBS_DEPS=$env:GITHUB_WORKSPACE\obs-deps" >> $env:GITHUB_ENV
+
+      - name: Fetch and build libobs from the pinned OBS release
+        shell: pwsh
+        run: |
+          $tag = "31.1.1"
+          Invoke-WebRequest -Uri "https://github.com/obsproject/obs-studio/archive/refs/tags/$tag.zip" -OutFile obs.zip
+          Expand-Archive obs.zip -DestinationPath obs-src
+          $obs = (Get-ChildItem obs-src -Directory | Select-Object -First 1).FullName
+          cmake -S $obs -B obs-build -G "Visual Studio 17 2022" -A x64 `
+            -DCMAKE_PREFIX_PATH="$env:OBS_DEPS" `
+            -DENABLE_PLUGINS=OFF -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF `
+            -DCMAKE_BUILD_TYPE=Release
+          cmake --build obs-build --config Release --target libobs
+          echo "LIBOBS_BUILD=$env:GITHUB_WORKSPACE\obs-build" >> $env:GITHUB_ENV
+
+      - name: Configure plugin
+        shell: pwsh
+        run: |
+          cmake -S . -B build -G "Visual Studio 17 2022" -A x64 `
+            -DBUILD_OBS_PLUGIN=ON `
+            -DCMAKE_PREFIX_PATH="$env:OBS_DEPS;$env:LIBOBS_BUILD"
+
+      - name: Build plugin
+        run: cmake --build build --config Release
+
+      - uses: actions/upload-artifact@v4
+        if: success()
+        with:
+          name: obs-multisite-windows
+          path: build/Release/obs-multisite.dll
