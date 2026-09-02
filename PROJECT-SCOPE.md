@@ -174,10 +174,15 @@ limited to the manifest window — essential for timeslipping.
 
 ### 4.6 Lifecycle / retention
 
-- Every `PUT` carries an object tag (`MultisiteExpiry=7d`) and a
-  `Cache-Control: max-age=604800` header.
-- The organization sets **one bucket lifecycle rule**: delete objects tagged
-  `MultisiteExpiry=7d` after 7 days. Set-and-forget.
+- Retention is handled by a **bucket lifecycle rule keyed on prefix and age**:
+  delete objects under `events/` older than 7 days. Set-and-forget, configured
+  once in the storage provider's console.
+- Object *tagging* is deliberately not used. S3 supports it, but Cloudflare R2
+  rejects requests carrying `x-amz-tagging`, so tag-driven expiry is not
+  portable. Tagging remains available as an option for stores that support it,
+  off by default.
+- Every `PUT` carries `Cache-Control: max-age=604800` for any CDN in front of
+  the bucket.
 - Old segments are removed by lifecycle expiry, not active deletion, so a
   paused or behind-live decoder can still fetch older segments for the full
   retention window — enabling deep DVR rather than a short buffer.

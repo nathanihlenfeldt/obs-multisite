@@ -86,6 +86,15 @@ struct SourceCtx {
     // future, which it drops (producing jumpy video).
     int64_t  last_video_pts_ns = 0;
     bool     logged_av_offset = false;
+    // Wall clock when playback was paused, so the playout clock can be
+    // advanced by the same amount on resume (see on_resume).
+    std::atomic<uint64_t> pause_started_ns{0};
+    // Pause is enforced at DELIVERY, not at segment feeding: by the time a
+    // fragment is fed, its whole 6 s is already decoded, so gating the feed
+    // would let playback run on for up to a segment after the click. Holding
+    // frames here makes pause and resume take effect immediately, and nothing
+    // is discarded — the queue is simply not drained while paused.
+    std::atomic<bool> paused{false};
     uint64_t feed_start_ns = 0;      // wall clock when this decoder started
     uint64_t pushed_media_ns = 0;    // media duration handed over so far
 
@@ -120,6 +129,9 @@ static constexpr uint64_t kMaxDeliveryLeadNs = 400000000ULL;   // 400 ms
 // lateness; 16 leaves margin. At 720p an I420 frame is ~1.3 MB, so this caps
 // out around 21 MB instead of 60 MB.
 static constexpr size_t   kMaxQueuedFrames = 16;
+// If frames fall further behind wall time than this, the playout clock is
+// re-anchored rather than dumping a backlog into OBS.
+static constexpr uint64_t kClockResyncThresholdNs = 2000000000ULL;   // 2 s
 // Push a stamped frame for delivery. Blocks while the queue is full, which
 // back-pressures the decoder rather than letting memory grow.
 static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
@@ -138,6 +150,14 @@ static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
 static void deliver_loop(SourceCtx* ctx) {
     mlog_info("source: delivery loop started");
     while (ctx->running.load()) {
+        // While paused, deliver nothing: the picture holds on the last frame
+        // OBS received and the queue stays put, so resume continues exactly
+        // where the operator stopped.
+        if (ctx->paused.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            continue;
+        }
+
         PendingFrame item;
         {
             std::unique_lock<std::mutex> lk(ctx->dq_mtx);
@@ -157,6 +177,25 @@ static void deliver_loop(SourceCtx* ctx) {
             ctx->dq.erase(it);
         }
         ctx->dq_cv.notify_all();        // let the decoder push again
+
+        // If a frame is far past due, the playout clock has drifted behind
+        // wall time — normally because playback stalled waiting for a segment
+        // (a network hiccup) rather than an explicit pause. Re-anchor instead
+        // of flushing a backlog at OBS, which it would report as audio lagging.
+        {
+            const uint64_t now = os_gettime_ns();
+            if (item.timestamp + kClockResyncThresholdNs < now) {
+                const uint64_t behind = now - item.timestamp;
+                ctx->playout_base_ns += behind;
+                item.timestamp += behind;
+                {
+                    std::lock_guard<std::mutex> qlk(ctx->dq_mtx);
+                    for (auto& q : ctx->dq) q.timestamp += behind;
+                }
+                mlog_warn("source: playout clock fell %.1fs behind (stall?) — "
+                          "re-anchored", (double)behind / 1e9);
+            }
+        }
 
         // Hold until nearly due, in slices so shutdown stays responsive.
         // A frame that is already due (or late) is released immediately.
@@ -533,6 +572,9 @@ static bool on_pause(obs_properties_t*, obs_property_t*, void* data) {
     auto* ctx = static_cast<SourceCtx*>(data);
     std::lock_guard<std::mutex> lk(ctx->mtx);
     if (ctx->session) {
+        // Stop delivery immediately, then stop pulling new segments.
+        ctx->paused = true;
+        ctx->pause_started_ns = os_gettime_ns();
         ctx->session->pause();
         mlog_info("source: PAUSED at segment %llu — cache keeps filling",
                   (unsigned long long)ctx->session->playback_head());
@@ -542,18 +584,44 @@ static bool on_pause(obs_properties_t*, obs_property_t*, void* data) {
 static bool on_resume(obs_properties_t*, obs_property_t*, void* data) {
     auto* ctx = static_cast<SourceCtx*>(data);
     std::lock_guard<std::mutex> lk(ctx->mtx);
-    if (ctx->session) {
-        ctx->session->resume();
-        mlog_info("source: RESUMED from segment %llu (%.0fs behind live)",
-                  (unsigned long long)ctx->session->playback_head(),
-                  ctx->session->behind_live_s());
+    if (!ctx->session) return false;
+
+    // The playout clock maps media time to wall time via playout_base_ns.
+    // While paused, wall time keeps running but media time does not, so on
+    // resume every frame's due time would already be in the past — they'd all
+    // be dumped out at once and OBS would report audio lagging by the length
+    // of the pause. Advance the base by the paused duration instead.
+    const uint64_t paused_at = ctx->pause_started_ns.exchange(0);
+    if (paused_at != 0) {
+        const uint64_t paused_for = os_gettime_ns() - paused_at;
+        ctx->playout_base_ns += paused_for;
+        // Shift the frames held during the pause onto the new clock rather
+        // than discarding them: they are the content the operator paused on,
+        // so playback must continue from exactly there.
+        {
+            std::lock_guard<std::mutex> qlk(ctx->dq_mtx);
+            for (auto& q : ctx->dq) q.timestamp += paused_for;
+        }
+        ctx->dq_cv.notify_all();
+        mlog_info("source: playout clock advanced %.1fs to cover the pause",
+                  (double)paused_for / 1e9);
     }
+
+    ctx->paused = false;          // delivery resumes at once
+    ctx->session->resume();
+    mlog_info("source: RESUMED from segment %llu (%.0fs behind live)",
+              (unsigned long long)ctx->session->playback_head(),
+              ctx->session->behind_live_s());
     return false;
 }
 static bool on_jump_live(obs_properties_t*, obs_property_t*, void* data) {
     auto* ctx = static_cast<SourceCtx*>(data);
     std::lock_guard<std::mutex> lk(ctx->mtx);
     if (ctx->session) {
+        // A jump restarts the decoder and re-anchors the clock, so any pending
+        // pause offset is irrelevant — and the operator expects picture back.
+        ctx->pause_started_ns = 0;
+        ctx->paused = false;
         ctx->session->jump_to_live();
         mlog_info("source: JUMPED TO LIVE (segment %llu)",
                   (unsigned long long)ctx->session->playback_head());

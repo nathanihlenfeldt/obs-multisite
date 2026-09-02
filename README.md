@@ -174,6 +174,19 @@ Push to GitHub and the workflow in `.github/workflows/core-tests.yml` builds and
 runs the test suite on both Ubuntu and Windows automatically. Watch it under the
 repository's **Actions** tab. For a public repository this is free.
 
+## Known gaps
+
+- **Only audio track 0 is played at the satellite.** The encoder delivers every
+  enabled OBS track (main mix, ISOs, click) and they are all present in the
+  segments, but `multisite_source` currently outputs the first one and ignores
+  the rest. Multi-track output — companion audio-only sources sharing one cache,
+  or multi-track output from a single source — is the next substantial piece of
+  work.
+- **Markers are authored but not consumed.** `Session::add_marker` publishes
+  `markers.json`; the decoder does not yet read it or offer jump-to-marker.
+- **No Qt UI yet.** Timeslipping is driven from buttons in the source
+  properties; the scrub bar, behind-live indicator and dock come in Phase 5.
+
 ## Roadmap
 
 - **Phase 1 — reliability core.** ✅ this.
