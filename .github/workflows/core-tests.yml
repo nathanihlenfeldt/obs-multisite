@@ -16,20 +16,20 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
-      # Optional deps: enable the CMAF muxer + S3 transport targets.
-      # Never fatal — the CMake build skips those targets if they're absent,
-      # so a flaky package mirror can't hide a real test failure.
+      # Optional deps enable the CMAF muxer + S3 transport targets. If they are
+      # missing the CMake build skips those targets and the reliability/session
+      # suites still run.
       - name: Install FFmpeg and libcurl (Linux)
         if: runner.os == 'Linux'
-        continue-on-error: true
         run: |
-          sudo apt-get update -o Acquire::Retries=3 || true
+          sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends \
             ffmpeg libavformat-dev libavcodec-dev libavutil-dev \
-            libswresample-dev libswscale-dev libcurl4-openssl-dev || true
-          echo "--- optional dependency status ---"
-          pkg-config --modversion libavformat || echo "libavformat: not available"
-          pkg-config --modversion libcurl      || echo "libcurl: not available"
+            libswresample-dev libswscale-dev libcurl4-openssl-dev
+          echo "--- dependency versions ---"
+          ffmpeg -version | head -1
+          pkg-config --modversion libavformat
+          pkg-config --modversion libcurl
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
@@ -37,5 +37,7 @@ jobs:
       - name: Build
         run: cmake --build build --config Release
 
+      # -V prints the CMAF driver's diagnostics (ffmpeg version, encoder used,
+      # fixture streams, per-fragment frame counts) so any failure is legible.
       - name: Test
-        run: ctest --test-dir build -C Release --output-on-failure
+        run: ctest --test-dir build -C Release -V --output-on-failure
