@@ -26,11 +26,16 @@ bool RetryUploader::upload_one(const SpooledSegment& seg) {
         ++attempt;
         PutResult r = m_transport.put(seg.key, seg.data, m_cfg.content_type, m_cfg.tags);
         if (r.success) {
-            m_spool.confirm(seg.seq);
+            // Order matters for durability: publish the manifest entry FIRST,
+            // then drop the spool file. If we crashed the other way round the
+            // object would exist in the bucket but never be listed, leaving a
+            // silent gap. This way a crash simply re-uploads (PUT is idempotent)
+            // and the manifest de-duplicates by seq.
             m_stats.confirmed++;
             m_stats.bytes += seg.data.size();
             m_health = LinkHealth::Healthy;
             if (m_on_confirm) m_on_confirm(seg);
+            m_spool.confirm(seg.seq);
             return true;
         }
         if (!r.retryable) {

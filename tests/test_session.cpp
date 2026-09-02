@@ -1,0 +1,247 @@
+// test_session.cpp — proves the publishing layer's protocol guarantees.
+//
+// The critical invariant: manifest.json must NEVER list a segment that isn't
+// already durable in the store. A decoder that can see an entry must be able to
+// fetch the object. This is checked continuously, including across a simulated
+// network outage.
+#include "../src/core/session.h"
+
+#include <cassert>
+#include <cstdio>
+#include <filesystem>
+#include <map>
+#include <mutex>
+#include <set>
+#include <string>
+#include <thread>
+
+namespace fs = std::filesystem;
+using namespace multisite;
+
+static int g_fail = 0;
+#define CHECK(c, m) do { if(!(c)){ std::printf("  [FAIL] %s\n", m); ++g_fail; } \
+                         else { std::printf("  [ok]   %s\n", m); } } while(0)
+
+// An in-memory object store that can simulate an outage, and which validates
+// the write-ordering rule on every manifest write.
+class MemStore : public Transport {
+public:
+    std::map<std::string, std::vector<uint8_t>> objects;
+    std::mutex mtx;
+    int fail_budget = 0;
+    bool ordering_violation = false;
+    std::string violation_detail;
+
+    PutResult put(const std::string& key, const std::vector<uint8_t>& body,
+                  const std::string&, const std::map<std::string,std::string>& tags) override {
+        std::lock_guard<std::mutex> lk(mtx);
+        // Simulate an outage for SEGMENT uploads only (control files still fail
+        // over separately in reality, but this isolates the invariant test).
+        if (fail_budget > 0 && key.find("/segments/") != std::string::npos) {
+            --fail_budget;
+            return {false, 0, true, "network down"};
+        }
+        // Every object must carry the retention tag.
+        if (tags.find("MultisiteExpiry") == tags.end()) {
+            ordering_violation = true;
+            violation_detail = "missing expiry tag on " + key;
+        }
+        objects[key] = body;
+
+        // INVARIANT CHECK: if this is a manifest, every segment it lists must
+        // already exist as an object in the store.
+        if (key.find("manifest.json") != std::string::npos) {
+            std::string js(body.begin(), body.end());
+            try {
+                Manifest m = Manifest::from_json(js);
+                for (const auto& s : m.segments) {
+                    char name[64];
+                    std::snprintf(name, sizeof(name), "%08llu",
+                                  (unsigned long long)s.seq);
+                    std::string skey = "events/" + m.event_id +
+                                       "/segments/" + name + ".m4s";
+                    if (objects.find(skey) == objects.end()) {
+                        ordering_violation = true;
+                        violation_detail = "manifest listed " + skey +
+                                           " before it was stored";
+                    }
+                }
+            } catch (...) {
+                ordering_violation = true;
+                violation_detail = "manifest was not valid JSON";
+            }
+        }
+        return {true, 200, true, ""};
+    }
+
+    bool has(const std::string& k) {
+        std::lock_guard<std::mutex> lk(mtx);
+        return objects.count(k) > 0;
+    }
+    std::string text(const std::string& k) {
+        std::lock_guard<std::mutex> lk(mtx);
+        auto it = objects.find(k);
+        return it == objects.end() ? "" : std::string(it->second.begin(), it->second.end());
+    }
+};
+
+static std::vector<uint8_t> blob(uint64_t n, size_t sz = 2048) {
+    std::vector<uint8_t> v(sz);
+    for (size_t i = 0; i < sz; ++i) v[i] = (uint8_t)((n * 31 + i) & 0xFF);
+    return v;
+}
+
+int main() {
+    fs::path base = fs::temp_directory_path() / "multisite_session_test";
+    fs::remove_all(base);
+    fs::create_directories(base);
+
+    VideoInfo video{ "h264", 1920, 1080, 30.0 };
+    std::vector<AudioTrack> tracks = {
+        { 0, "Main mix",   "aac", 2, 48000 },
+        { 1, "Sermon ISO", "aac", 1, 48000 },
+        { 2, "Click",      "aac", 1, 48000 },
+    };
+
+    std::printf("== 1. Start event publishes the full object layout ==\n");
+    std::string event_id;
+    {
+        MemStore store;
+        SessionConfig cfg;
+        cfg.room_id = "main-auditorium";
+        cfg.spool_dir = (base / "s1").string();
+        cfg.segment_duration_s = 6.0;
+        Session ses(cfg, store);
+
+        CHECK(ses.start_new(blob(0, 1500), video, tracks), "start_new succeeded");
+        event_id = ses.event_id();
+        CHECK(!event_id.empty() && event_id.size() == 26, "event id is a 26-char ULID");
+        CHECK(store.has("rooms/main-auditorium/live.json"), "live.json published");
+        CHECK(store.has("events/" + event_id + "/event.json"), "event.json published");
+        CHECK(store.has("events/" + event_id + "/init.mp4"), "init.mp4 published");
+        CHECK(store.has("events/" + event_id + "/manifest.json"), "manifest.json published");
+
+        EventInfo ev = EventInfo::from_json(store.text("events/" + event_id + "/event.json"));
+        CHECK(ev.audio_tracks.size() == 3 && ev.audio_tracks[2].label == "Click",
+              "event.json carries all 3 audio tracks");
+        CHECK(ev.video.width == 1920, "event.json carries video info");
+
+        LivePointer lp = LivePointer::from_json(store.text("rooms/main-auditorium/live.json"));
+        CHECK(lp.event_id == event_id && lp.status == "live",
+              "live.json points at the event");
+        ses.end();
+    }
+
+    std::printf("== 2. Write-ordering invariant holds through an outage ==\n");
+    {
+        MemStore store;
+        store.fail_budget = 10;          // segment uploads fail at first
+        SessionConfig cfg;
+        cfg.room_id = "main-auditorium";
+        cfg.spool_dir = (base / "s2").string();
+        cfg.manifest_window = 5;
+        cfg.base_backoff_ms = 2; cfg.max_backoff_ms = 10; cfg.backoff_jitter = 0.0;
+        Session ses(cfg, store);
+        ses.start_new(blob(0, 1200), video, tracks);
+
+        for (uint64_t i = 0; i < 8; ++i)
+            ses.publish_segment(blob(i + 1), 6.0, (double)i * 6.0);
+
+        // Let the uploader retry through the outage and drain.
+        for (int i = 0; i < 400 && ses.status().confirmed_total < 8; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+
+        auto st = ses.status();
+        CHECK(st.pending == 0, "all segments drained after the outage");
+        CHECK(st.confirmed_total == 8, "all 8 segments confirmed");
+        CHECK(st.retries > 0, "retries occurred (outage was real)");
+        CHECK(!store.ordering_violation,
+              store.ordering_violation ? store.violation_detail.c_str()
+                                       : "manifest never listed an unstored segment");
+
+        Manifest m = Manifest::from_json(store.text("events/" + ses.event_id() + "/manifest.json"));
+        std::printf("     (diag: latest_seq=%llu segments=%zu confirmed=%llu)\n",
+                    (unsigned long long)m.latest_seq, m.segments.size(),
+                    (unsigned long long)st.confirmed_total);
+        CHECK(m.latest_seq == 7, "manifest latest_seq tracks the live edge");
+        CHECK(m.segments.size() == 5, "rolling window honoured (5)");
+        CHECK(!m.segments.empty() && !m.segments.back().checksum.empty(),
+              "checksums recorded in manifest");
+        ses.end();
+    }
+
+    std::printf("== 3. Markers publish and accumulate ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg; cfg.spool_dir = (base / "s3").string();
+        Session ses(cfg, store);
+        ses.start_new(blob(0), video, tracks);
+        ses.publish_segment(blob(1), 6.0, 0.0);
+        ses.add_marker("Sermon Start");
+        ses.add_marker("Offering");
+        MarkerList ml = MarkerList::from_json(
+            store.text("events/" + ses.event_id() + "/markers.json"));
+        CHECK(ml.markers.size() == 2, "two markers published");
+        CHECK(ml.markers[0].label == "Sermon Start", "marker label preserved");
+        CHECK(!ml.markers[0].id.empty(), "marker has an id");
+        ses.end();
+    }
+
+    std::printf("== 4. Resume continues the sequence after a crash ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg; cfg.spool_dir = (base / "s4").string();
+        cfg.base_backoff_ms = 2; cfg.max_backoff_ms = 10; cfg.backoff_jitter = 0.0;
+        std::string first_event;
+        {
+            Session ses(cfg, store);
+            ses.start_new(blob(0), video, tracks);
+            first_event = ses.event_id();
+            store.fail_budget = 1000;                 // network dead: nothing confirms
+            for (uint64_t i = 0; i < 4; ++i)
+                ses.publish_segment(blob(i + 1), 6.0, (double)i * 6.0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(80));
+        } // destructor = crash (no end() called)
+
+        Session ses2(cfg, store);
+        auto info = ses2.check_resumable();
+        CHECK(info.resumable, "unfinished event detected after crash");
+        CHECK(info.event_id == first_event, "same event id offered for resume");
+        CHECK(info.pending_count == 4, "4 unsent segments survived the crash");
+
+        store.fail_budget = 0;                        // network back
+        CHECK(ses2.resume(blob(0), video, tracks), "resume succeeded");
+        CHECK(ses2.event_id() == first_event, "resumed into the same event");
+
+        uint64_t next = ses2.publish_segment(blob(99), 6.0, 24.0);
+        CHECK(next == 4, "sequence continues (next seq = 4, no restart at 0)");
+
+        for (int i = 0; i < 400 && ses2.status().pending > 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        CHECK(ses2.status().pending == 0, "backlog from before the crash uploaded");
+        CHECK(!store.ordering_violation, "write-ordering held across the resume");
+        ses2.end();
+    }
+
+    std::printf("== 5. Clean end marks the event ended ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg; cfg.spool_dir = (base / "s5").string();
+        Session ses(cfg, store);
+        ses.start_new(blob(0), video, tracks);
+        ses.publish_segment(blob(1), 6.0, 0.0);
+        ses.end();
+        LivePointer lp = LivePointer::from_json(store.text("rooms/main-auditorium/live.json"));
+        CHECK(lp.status == "ended", "live.json marked ended");
+        Manifest m = Manifest::from_json(store.text("events/" + ses.event_id() + "/manifest.json"));
+        CHECK(m.status == "ended", "manifest marked ended");
+
+        Session ses2(cfg, store);
+        CHECK(!ses2.check_resumable().resumable,
+              "cleanly-ended event is not offered for resume");
+    }
+
+    fs::remove_all(base);
+    std::printf("\n%s\n", g_fail == 0 ? "ALL SESSION TESTS PASSED" : "SOME TESTS FAILED");
+    return g_fail == 0 ? 0 : 1;
+}

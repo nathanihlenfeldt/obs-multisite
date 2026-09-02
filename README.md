@@ -8,7 +8,13 @@ no vendor.
 
 See `PROJECT-SCOPE.md` for the full design.
 
-## Status: Phase 1 — reliability core (complete, tested)
+## Status
+
+- **Phase 1 — reliability core:** complete and tested.
+- **Phase 2 — format, namespace & audio:** CMAF muxer, multi-track audio,
+  publishing layer (`live.json` / `event.json` / `manifest.json` / `markers.json`),
+  and the S3 transport are all in. The OBS plugin module is written and ready to
+  compile once `libobs` is available (`-DBUILD_OBS_PLUGIN=ON`).
 
 Reliability is the top priority, so it's built and proven first. This is the
 store-and-forward spine that guarantees no segment is ever lost, independent of
@@ -31,6 +37,50 @@ What's in `src/core/`:
 - `aws_sigv4` + `crypto_*` — the AWS SigV4 request signer (validated
   byte-for-byte against botocore) with a platform crypto backend: Windows CNG
   (bcrypt, no external dependency) or OpenSSL elsewhere.
+
+### Phase 2 so far — `cmaf_muxer`
+
+`src/core/cmaf_muxer.cpp` wraps FFmpeg's fragmented-MP4 muxer to produce CMAF:
+one `init.mp4` (ftyp+moov) plus media fragments (moof+mdat) cut on video
+keyframes at the target duration. Video and **every enabled audio track are
+multiplexed into the same fragment**, so the main mix, mic ISOs, and click stay
+locked to the video and to each other. It is codec-agnostic — HEVC/AV1 need only
+a different codec id and extradata.
+
+Validated by `tests/test_cmaf.cpp`: a real 1-video + 2-audio source is fed
+through the muxer, and every emitted fragment is re-assembled with the init
+segment and checked with ffprobe/ffmpeg — all audio tracks present, video frames
+intact, **zero decode errors**.
+
+### Publishing layer — `session`
+
+`src/core/session.cpp` ties muxer → spool → uploader → manifest and enforces the
+protocol's central invariant: **a segment is only listed in `manifest.json`
+after the object store confirms it durable.** It publishes the whole object
+layout (`rooms/{room}/live.json`, `events/{ulid}/event.json`, `init.mp4`,
+`segments/{seq:08d}.m4s`, `manifest.json`, `markers.json`), maintains the rolling
+window, heartbeats `live.json`, appends markers, and continues the sequence when
+resuming an interrupted event.
+
+`tests/test_session.cpp` verifies the invariant *continuously* — the mock store
+checks every manifest write against what it actually holds — including through a
+simulated network outage and across a crash-and-resume.
+
+### S3 transport
+
+`src/core/s3_transport.cpp` is the production transport: libcurl + the validated
+SigV4 signer, against any S3-compatible endpoint (R2, AWS S3, MinIO, B2, Wasabi).
+It tags every object for lifecycle expiry, sets `Cache-Control`, distinguishes
+retryable failures (network, 5xx, 429) from permanent ones (bad credentials), and
+offers `self_test()` for a write/read-back credential check.
+
+### OBS plugin module
+
+`src/obs/` registers `multisite_output`: it takes OBS's encoded packets (video +
+up to 6 audio tracks via `OBS_OUTPUT_MULTI_TRACK`), muxes them to CMAF, and hands
+fragments to the session. The OBS encode thread never blocks on the network —
+publishing only writes to the local durable spool. It offers resume automatically
+when a previous event was interrupted.
 
 ### What's proven
 
@@ -69,9 +119,9 @@ repository's **Actions** tab. For a public repository this is free.
 ## Roadmap
 
 - **Phase 1 — reliability core.** ✅ this.
-- **Phase 2 — format, namespace & audio.** FFmpeg CMAF muxing, multi-track
-  production audio, the `rooms/live.json` + `events/{ulid}` layout, and wiring
-  the core into an OBS output plugin.
+- **Phase 2 — format, namespace & audio.** ✅ CMAF muxing, multi-track audio,
+  publishing layer, S3 transport, and the OBS output module (pending a first
+  compile against libobs).
 - **Phase 3 — timeslipping** (per-campus live-DVR).
 - **Phase 4 — markers & cues.**
 - **Phase 5 — user interface** (encoder Tools panel, decoder DVR dock).

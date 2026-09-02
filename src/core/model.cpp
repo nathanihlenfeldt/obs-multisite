@@ -83,6 +83,15 @@ EventInfo EventInfo::from_json(const std::string& s) {
 
 // ── Manifest ──────────────────────────────────────────────────────────────────
 void Manifest::push(const ManifestSegment& s, size_t window) {
+    // De-duplicate: a crash between publishing the manifest and clearing the
+    // spool causes a harmless re-upload, which must not double-list the segment.
+    for (auto& existing : segments) {
+        if (existing.seq == s.seq) {
+            existing = s;                       // refresh in place
+            if (s.seq > latest_seq) latest_seq = s.seq;
+            return;
+        }
+    }
     segments.push_back(s);
     if (s.seq > latest_seq) latest_seq = s.seq;
     while (segments.size() > window) segments.erase(segments.begin());
