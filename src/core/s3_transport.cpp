@@ -67,7 +67,8 @@ struct S3Transport::Impl {
 
         std::map<std::string, std::string> extra;
         if (!content_type.empty()) extra["Content-Type"] = content_type;
-        // Retention tagging + CDN cache hint, per the storage protocol.
+        // Retention tagging + CDN cache hint. NOTE: Cloudflare R2 rejects
+        // x-amz-tagging, so the header is only sent when tags are supplied.
         std::string tg = tag_header(tags);
         if (!tg.empty()) extra["x-amz-tagging"] = tg;
         extra["Cache-Control"] = "max-age=604800";

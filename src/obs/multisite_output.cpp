@@ -50,6 +50,16 @@ struct OutputCtx {
     int  audio_track_for[MAX_AUDIO_MIXES];
     bool started = false;
     std::mutex mtx;
+
+    // diagnostics
+    bool     logged_first_packets = false;
+    uint64_t video_packets_seen = 0;
+    uint64_t segments_muxed = 0;
+
+    // progress logging state
+    uint64_t last_logged_seq = 0;
+    int64_t  last_log_ms = 0;
+    LinkHealth last_health = LinkHealth::Healthy;
 };
 
 static std::vector<std::string> split_csv(const std::string& s) {
@@ -245,9 +255,44 @@ static bool out_start(void* data) {
         return false;
     }
 
+    // Log upload progress so the operator can see it working without going
+    // and inspecting the bucket. Chatty for the first few segments (so you
+    // get quick confirmation), then once every ~30s.
+    ctx->session->set_progress_callback([ctx](const Session::Status& st) {
+        int64_t now = now_ms();
+        bool early   = st.confirmed_total <= 3;
+        bool overdue = (now - ctx->last_log_ms) > 30000;
+        bool health_changed = st.health != ctx->last_health;
+
+        if (early || overdue || health_changed) {
+            const char* h = st.health == LinkHealth::Healthy  ? "healthy"
+                          : st.health == LinkHealth::Degraded ? "DEGRADED"
+                                                              : "OFFLINE";
+            mlog_info("uploaded segment %llu — %llu confirmed, %.1f MB, "
+                      "%zu queued, %llu retries, link %s",
+                      (unsigned long long)st.last_confirmed,
+                      (unsigned long long)st.confirmed_total,
+                      (double)st.bytes_uploaded / (1024.0 * 1024.0),
+                      st.pending,
+                      (unsigned long long)st.retries, h);
+            ctx->last_log_ms = now;
+            ctx->last_health = st.health;
+        }
+        // Always warn when the link degrades — that's the thing an operator
+        // must know about mid-service.
+        if (health_changed && st.health != LinkHealth::Healthy) {
+            mlog_warn("upload link %s — capture continues, segments are "
+                      "queued to disk and will be sent when it recovers",
+                      st.health == LinkHealth::Degraded ? "degraded" : "offline");
+        }
+    });
+
     ctx->muxer->on_segment([ctx](uint64_t, std::vector<uint8_t> bytes,
                                  double dur, double pts) {
-        ctx->session->publish_segment(std::move(bytes), dur, pts);
+        uint64_t seq = ctx->session->publish_segment(std::move(bytes), dur, pts);
+        ctx->segments_muxed++;
+        mlog_debug("segment %llu muxed and spooled (%.1fs)",
+                   (unsigned long long)seq, dur);
     });
 
     if (!obs_output_begin_data_capture(ctx->output, 0)) return false;
@@ -265,13 +310,38 @@ static void out_stop(void* data, uint64_t) {
     if (ctx->muxer) ctx->muxer->flush();       // emit final fragment
     if (ctx->session) {
         auto st = ctx->session->status();
-        mlog_info("stopping: %llu confirmed, %zu pending, %llu retries",
+        mlog_info("stopping: %llu confirmed, %zu pending, %llu retries, "
+                  "%llu segments muxed",
                   (unsigned long long)st.confirmed_total, st.pending,
-                  (unsigned long long)st.retries);
+                  (unsigned long long)st.retries,
+                  (unsigned long long)ctx->segments_muxed);
+        if (ctx->segments_muxed == 0)
+            mlog_warn("no segments were produced — check that the video "
+                      "encoder's keyframe interval is <= the segment duration");
         ctx->session->end();                    // drains spool, marks ended
     }
     ctx->started = false;
     ctx->session.reset(); ctx->muxer.reset(); ctx->transport.reset();
+}
+
+// Lets OBS (and scripts via obs_output_get_total_bytes) show upload volume.
+static uint64_t out_total_bytes(void* data) {
+    auto* ctx = static_cast<OutputCtx*>(data);
+    return (ctx && ctx->session) ? ctx->session->bytes_uploaded() : 0;
+}
+
+// OBS timestamps are in the ENCODER's timebase (e.g. 1/30 for 30fps video,
+// 1/48000 for audio) — NOT nanoseconds. Convert explicitly; getting this wrong
+// silently breaks segmentation, because the muxer's "have we reached the target
+// duration?" test never becomes true.
+static inline int64_t ts_to_ns(int64_t ts, int32_t tb_num, int32_t tb_den) {
+    if (tb_den <= 0) tb_den = 1;
+    if (tb_num <= 0) tb_num = 1;
+    // ts * (tb_num / tb_den) seconds → nanoseconds. Split the multiply to
+    // avoid overflow without needing 128-bit math (MSVC has no __int128).
+    const int64_t ns_per_unit = 1000000000LL * (int64_t)tb_num / (int64_t)tb_den;
+    const int64_t rem         = 1000000000LL * (int64_t)tb_num % (int64_t)tb_den;
+    return ts * ns_per_unit + (ts * rem) / (int64_t)tb_den;
 }
 
 static void out_packet(void* data, struct encoder_packet* pkt) {
@@ -288,9 +358,24 @@ static void out_packet(void* data, struct encoder_packet* pkt) {
     CmafPacket cp;
     cp.track = track;
     cp.data.assign(pkt->data, pkt->data + pkt->size);
-    cp.pts_ns = pkt->pts;    // OBS packets are already in nanoseconds
-    cp.dts_ns = pkt->dts;
+    cp.pts_ns = ts_to_ns(pkt->pts, pkt->timebase_num, pkt->timebase_den);
+    cp.dts_ns = ts_to_ns(pkt->dts, pkt->timebase_num, pkt->timebase_den);
     cp.keyframe = pkt->keyframe;
+
+    // One-time sanity log: confirms the timebase conversion is sane and that
+    // keyframes are arriving (both are prerequisites for segmentation).
+    if (!ctx->logged_first_packets && pkt->type == OBS_ENCODER_VIDEO) {
+        ctx->video_packets_seen++;
+        if (ctx->video_packets_seen <= 2 || pkt->keyframe) {
+            mlog_info("video pkt: pts=%lld tb=%d/%d -> %.3fs%s",
+                      (long long)pkt->pts, (int)pkt->timebase_num,
+                      (int)pkt->timebase_den, (double)cp.pts_ns / 1e9,
+                      pkt->keyframe ? " [KEYFRAME]" : "");
+            if (pkt->keyframe && ctx->video_packets_seen > 2)
+                ctx->logged_first_packets = true;   // seen enough
+        }
+    }
+
     ctx->muxer->push(cp);
 }
 
@@ -306,6 +391,7 @@ void register_output() {
     info.encoded_packet = out_packet;
     info.get_properties = out_props;
     info.get_defaults   = out_defaults;
+    info.get_total_bytes = out_total_bytes;
     info.encoded_video_codecs = "h264;hevc";
     info.encoded_audio_codecs = "aac";
     obs_register_output(&info);

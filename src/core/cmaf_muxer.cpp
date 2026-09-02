@@ -10,6 +10,7 @@ extern "C" {
 
 #include <cstring>
 #include <algorithm>
+
 // FFmpeg 7.0 (libavformat 61) made the AVIO write callback's buffer const.
 // Support both so the same source builds against FFmpeg 6.x and 7.x.
 #if LIBAVFORMAT_VERSION_MAJOR >= 61

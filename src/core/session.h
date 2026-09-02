@@ -21,6 +21,7 @@
 #include "retry_uploader.h"
 #include "transport.h"
 
+#include <functional>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -100,6 +101,14 @@ public:
     };
     Status status() const;
 
+    // Called after every segment is confirmed durable, so the host can report
+    // progress (segment count, bytes, pending depth, link health).
+    using ProgressCallback = std::function<void(const Status&)>;
+    void set_progress_callback(ProgressCallback cb) { m_on_progress = std::move(cb); }
+
+    // Bytes confirmed uploaded so far (feeds OBS's own output stats).
+    uint64_t bytes_uploaded() const;
+
     const std::string& event_id() const { return m_event_id; }
 
     // Why the last operation failed (HTTP status + body). Empty if none.
@@ -118,6 +127,7 @@ private:
     Manifest    m_manifest;
     MarkerList  m_markers;
     std::string m_last_error;
+    ProgressCallback m_on_progress;
     mutable std::mutex m_mtx;
 
     std::string segment_key(uint64_t seq) const;

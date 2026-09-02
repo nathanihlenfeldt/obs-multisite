@@ -157,6 +157,7 @@ uint64_t Session::publish_segment(std::vector<uint8_t> fragment,
 // Called by the uploader once the store has confirmed a segment durable.
 // This is the only place the manifest gains an entry — the write-ordering rule.
 void Session::on_confirmed(const SpooledSegment& seg) {
+  {
     std::lock_guard<std::mutex> lk(m_mtx);
     ManifestSegment ms;
     ms.seq        = seg.seq;
@@ -178,6 +179,13 @@ void Session::on_confirmed(const SpooledSegment& seg) {
         lp.updated_at_ms = t;
         put_json("rooms/" + m_cfg.room_id + "/live.json", lp.to_json());
     }
+  }
+    // Report progress outside the lock so the host can log/update UI freely.
+    if (m_on_progress) m_on_progress(status());
+}
+
+uint64_t Session::bytes_uploaded() const {
+    return m_uploader ? m_uploader->stats().bytes.load() : 0;
 }
 
 void Session::publish_manifest_locked() {
