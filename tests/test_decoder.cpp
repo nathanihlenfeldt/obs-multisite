@@ -246,6 +246,20 @@ int main() {
               "behind-live figure shrinks after jumping");
 
         CHECK(!dec.seek(9999), "cannot seek beyond the live edge");
+
+        // A jump must be signalled so the host can restart its decoder: the
+        // next fragment has an unrelated baseMediaDecodeTime.
+        uint64_t d0 = dec.discontinuity_id();
+        dec.seek(5);
+        CHECK(dec.discontinuity_id() > d0, "seek raises a discontinuity");
+        uint64_t d1 = dec.discontinuity_id();
+        dec.jump_to_live();
+        CHECK(dec.discontinuity_id() > d1, "jump_to_live raises a discontinuity");
+        // ...and the init segment must be re-sent after one.
+        for (int i = 0; i < 6; ++i) dec.pump_downloads(10);
+        auto after_jump = dec.next_segment();
+        CHECK(after_jump && !after_jump->init.empty(),
+              "init is re-sent after a discontinuity (decoder restarts)");
         CHECK(!dec.seek(0) || dec.playback_head() == 0,
               "seek within the retained window is allowed");
     }

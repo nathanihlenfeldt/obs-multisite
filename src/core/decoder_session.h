@@ -89,6 +89,12 @@ public:
     uint64_t   live_edge()    const { return m_latest_seq; }
     uint64_t   earliest_available() const { return m_first_available_seq; }
 
+    // Increments whenever playback jumps (seek, jump-to-live, event change).
+    // The host must tear down and restart its decoder when this changes: the
+    // next fragment will carry an unrelated baseMediaDecodeTime, which would
+    // otherwise decode as out-of-order timestamps and a glitched picture.
+    uint64_t discontinuity_id() const;
+
     // How far behind live the campus currently is, in seconds.
     double behind_live_s() const;
 
@@ -125,6 +131,7 @@ private:
     uint64_t m_head = 0;
     bool     m_head_set = false;
     bool     m_init_sent = false;
+    uint64_t m_discontinuity = 0;
 
     Stats m_stats;
     mutable std::mutex m_mtx;

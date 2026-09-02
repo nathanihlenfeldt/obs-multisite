@@ -76,7 +76,8 @@ set(FFMPEG_FOUND FALSE)
 if(NOT FORCE_FFMPEG_MANUAL_SEARCH)
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)
-        pkg_check_modules(FFMPEG IMPORTED_TARGET libavformat libavcodec libavutil)
+        pkg_check_modules(FFMPEG IMPORTED_TARGET
+            libavformat libavcodec libavutil libswresample libswscale)
     endif()
 endif()
 
@@ -115,7 +116,9 @@ else()
 endif()
 
 if(FFMPEG_FOUND)
-    add_library(multisite_cmaf STATIC src/core/cmaf_muxer.cpp)
+    add_library(multisite_cmaf STATIC
+        src/core/cmaf_muxer.cpp
+        src/core/cmaf_decoder.cpp)
     target_include_directories(multisite_cmaf PUBLIC src src/core)
     target_link_libraries(multisite_cmaf PUBLIC ffmpeg_iface)
     set_target_properties(multisite_cmaf PROPERTIES POSITION_INDEPENDENT_CODE ON)
@@ -126,6 +129,18 @@ if(FFMPEG_FOUND)
              COMMAND ${CMAKE_COMMAND}
                      -DTEST_EXE=$<TARGET_FILE:test_cmaf>
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_cmaf_test.cmake)
+
+    # Round trip: decode the output the muxer test just produced. Generating
+    # the fixture at test time keeps large media out of the repository while
+    # still exercising encode -> decode on real bytes.
+    add_executable(test_cmaf_decode tests/test_cmaf_decode.cpp)
+    target_link_libraries(test_cmaf_decode PRIVATE multisite_cmaf)
+    add_test(NAME cmaf_decode
+             COMMAND $<TARGET_FILE:test_cmaf_decode>
+                     "${CMAKE_CURRENT_BINARY_DIR}/cmaf_out/init.mp4"
+                     "${CMAKE_CURRENT_BINARY_DIR}/cmaf_out/seg_000.m4s")
+    # The muxer test writes that fixture, so it has to run first.
+    set_tests_properties(cmaf_decode PROPERTIES DEPENDS cmaf)
 else()
     message(STATUS "skipping CMAF muxer targets")
 endif()
@@ -206,7 +221,8 @@ if(BUILD_OBS_PLUGIN)
 
     add_library(obs-multisite MODULE
         src/obs/plugin-main.cpp
-        src/obs/multisite_output.cpp)
+        src/obs/multisite_output.cpp
+        src/obs/multisite_source.cpp)
     target_include_directories(obs-multisite PRIVATE src src/core)
     target_compile_definitions(obs-multisite PRIVATE
         PLUGIN_VERSION="${PROJECT_VERSION}")

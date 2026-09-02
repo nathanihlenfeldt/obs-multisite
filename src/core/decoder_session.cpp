@@ -67,6 +67,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
         m_head_set = false;
         m_init_sent = false;
         m_play = PlayState::Stopped;
+        ++m_discontinuity;          // new event: new init segment and timeline
     }
 
     // 2. Fetch the rolling manifest.
@@ -212,6 +213,10 @@ void DecoderSession::jump_to_live() {
     uint64_t back = (uint64_t)std::max(0, m_cfg.prebuffer_segments);
     uint64_t want = (m_latest_seq > back) ? (m_latest_seq - back)
                                           : m_first_available_seq;
+    if (!m_head_set || m_head != std::max(want, m_first_available_seq)) {
+        ++m_discontinuity;
+        m_init_sent = false;        // decoder restarts, so it needs init again
+    }
     m_head = std::max(want, m_first_available_seq);
     m_head_set = true;
     if (m_play == PlayState::Paused) m_play = PlayState::Playing;
@@ -221,6 +226,10 @@ bool DecoderSession::seek(uint64_t seq) {
     std::lock_guard<std::mutex> lk(m_mtx);
     // Only within what the store still retains.
     if (seq < m_first_available_seq || seq > m_latest_seq) return false;
+    if (!m_head_set || seq != m_head) {
+        ++m_discontinuity;
+        m_init_sent = false;        // decoder restarts, so it needs init again
+    }
     m_head = seq;
     m_head_set = true;
     return true;
@@ -256,6 +265,11 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
     ++m_head;
     m_stats.served++;
     return out;
+}
+
+uint64_t DecoderSession::discontinuity_id() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_discontinuity;
 }
 
 double DecoderSession::behind_live_s() const {

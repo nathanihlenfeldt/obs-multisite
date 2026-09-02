@@ -112,6 +112,34 @@ bucket and checks the behaviours a campus depends on: prebuffer, cache filling
 bounds, corrupt-segment rejection and re-fetch, stale-encoder detection, and
 no silent skipping across a gap.
 
+### CMAF decoder — closes the round trip (`cmaf_decoder`)
+
+`src/core/cmaf_decoder.cpp` decodes a CMAF stream that arrives as discrete
+objects. FFmpeg wants a continuous byte stream, so a blocking byte queue sits
+behind a custom AVIO read callback: push the init segment, then push fragments
+as they're cached, and the decoder consumes them as one long file. Starvation
+blocks rather than reporting a false EOF, which is what a live stream needs.
+Emits I420 video frames and interleaved float audio, ready for OBS.
+
+`tests/test_cmaf_decode.cpp` runs against **real captured output** in
+`test-data/` (taken straight from the R2 bucket): 241 video frames at 1280x720
+and 378 audio frames decoded from a single 6 MB fragment, with valid planes and
+monotonic timestamps. Encoder → R2 → decoder is verified with production bytes.
+
+### OBS source — the satellite side (`multisite_source`)
+
+`src/obs/multisite_source.cpp` registers an async video+audio source. A poll
+thread refreshes `live.json`/`manifest.json` and drives download-ahead; a feed
+thread hands cached fragments to `CmafDecoder` in order; the decoder's callbacks
+push frames straight to OBS with timestamps on OBS's clock, so OBS's async
+buffering paces playout. **Pause / Resume / Jump to live** are buttons in the
+source properties (the Qt dock lands in Phase 5).
+
+A jump (seek, jump-to-live, or a new event) raises a *discontinuity*, and the
+source tears the decoder down and restarts it from the re-sent init segment —
+feeding fragments across a jump would otherwise decode as out-of-order
+timestamps and a glitched picture.
+
 ### What's proven
 
 `tests/test_reliability.cpp` runs on every push (Linux and Windows) and checks:
@@ -152,9 +180,8 @@ repository's **Actions** tab. For a public repository this is free.
 - **Phase 2 — format, namespace & audio.** ✅ CMAF muxing, multi-track audio,
   publishing layer, S3 transport, and the OBS output module (pending a first
   compile against libobs).
-- **Phase 3 — timeslipping** (per-campus live-DVR): decoder core ✅ (cache,
-  download-ahead, pause/resume/jump-to-live/scrub, stale detection); OBS source
-  wiring still to do.
+- **Phase 3 — timeslipping** (per-campus live-DVR): ✅ decoder core and the
+  OBS source (`multisite_source`) with Pause / Resume / Jump-to-live.
 - **Phase 4 — markers & cues.**
 - **Phase 5 — user interface** (encoder Tools panel, decoder DVR dock).
 - **Phase 6 — extensions** (web simulcast, scheduling, redundancy).
