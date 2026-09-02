@@ -40,7 +40,10 @@ Session::Session(SessionConfig cfg, Transport& transport)
 
     UploaderConfig ucfg;
     ucfg.content_type = "video/mp4";
-    ucfg.tags = { { m_cfg.expiry_tag_key, m_cfg.expiry_tag_val } };
+    if (m_cfg.use_object_tags)
+        ucfg.tags = { { m_cfg.expiry_tag_key, m_cfg.expiry_tag_val } };
+    else
+        ucfg.tags.clear();
     ucfg.base_backoff_ms = m_cfg.base_backoff_ms;
     ucfg.max_backoff_ms  = m_cfg.max_backoff_ms;
     ucfg.jitter          = m_cfg.backoff_jitter;
@@ -62,9 +65,15 @@ std::string Session::segment_key(uint64_t seq) const {
 
 bool Session::put_bytes(const std::string& key, const std::vector<uint8_t>& b,
                         const std::string& content_type) {
-    std::map<std::string, std::string> tags = {
-        { m_cfg.expiry_tag_key, m_cfg.expiry_tag_val } };
-    return m_tx.put(key, b, content_type, tags).success;
+    std::map<std::string, std::string> tags;
+    if (m_cfg.use_object_tags)
+        tags[m_cfg.expiry_tag_key] = m_cfg.expiry_tag_val;
+    PutResult r = m_tx.put(key, b, content_type, tags);
+    if (!r.success) {
+        m_last_error = "PUT " + key + " -> HTTP " +
+                       std::to_string(r.http_status) + " " + r.error;
+    }
+    return r.success;
 }
 bool Session::put_json(const std::string& key, const std::string& body) {
     std::vector<uint8_t> b(body.begin(), body.end());
@@ -76,6 +85,7 @@ ResumeInfo Session::check_resumable() const { return m_spool->inspect(); }
 bool Session::begin_common(const std::vector<uint8_t>& init,
                            const VideoInfo& video,
                            const std::vector<AudioTrack>& tracks) {
+    m_last_error.clear();
     // event.json — static descriptor
     EventInfo ev;
     ev.event_id           = m_event_id;
