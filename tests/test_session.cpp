@@ -29,6 +29,8 @@ public:
     std::map<std::string, std::vector<uint8_t>> objects;
     std::mutex mtx;
     int fail_budget = 0;
+    bool expect_tags = false;
+    bool fail_all = false;
     bool ordering_violation = false;
     std::string violation_detail;
 
@@ -37,12 +39,14 @@ public:
         std::lock_guard<std::mutex> lk(mtx);
         // Simulate an outage for SEGMENT uploads only (control files still fail
         // over separately in reality, but this isolates the invariant test).
+        if (fail_all) return {false, 403, false, "AccessDenied (simulated)"};
         if (fail_budget > 0 && key.find("/segments/") != std::string::npos) {
             --fail_budget;
             return {false, 0, true, "network down"};
         }
-        // Every object must carry the retention tag.
-        if (tags.find("MultisiteExpiry") == tags.end()) {
+        // Retention tags are optional (R2 doesn't support them), so only
+        // check them when the session was configured to send them.
+        if (expect_tags && tags.find("MultisiteExpiry") == tags.end()) {
             ordering_violation = true;
             violation_detail = "missing expiry tag on " + key;
         }
@@ -223,7 +227,42 @@ int main() {
         ses2.end();
     }
 
-    std::printf("== 5. Clean end marks the event ended ==\n");
+    std::printf("== 5. Tag-free mode (Cloudflare R2 compatibility) ==\n");
+    {
+        MemStore store;
+        // Simulate a store that REJECTS tagged requests, the way R2 does.
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s5t").string();
+        cfg.use_object_tags = false;          // R2 mode
+        store.expect_tags = false;
+        Session ses(cfg, store);
+        CHECK(ses.start_new(blob(0), video, tracks), "session starts without tags");
+        ses.publish_segment(blob(1), 6.0, 0.0);
+        for (int i = 0; i < 200 && ses.status().confirmed_total < 1; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        CHECK(ses.status().confirmed_total == 1, "segment uploads with no tags");
+        CHECK(ses.last_error().empty(), "no error recorded on success");
+        ses.end();
+    }
+
+    std::printf("== 6. Failures report a real HTTP error ==\n");
+    {
+        MemStore store;
+        store.fail_budget = 100000;   // everything fails
+        store.fail_all = true;        // including control files
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s6").string();
+        cfg.base_backoff_ms = 1; cfg.max_backoff_ms = 2;
+        Session ses(cfg, store);
+        bool started = ses.start_new(blob(0), video, tracks);
+        CHECK(!started, "start fails when the store rejects writes");
+        CHECK(!ses.last_error().empty(), "a real error string is recorded");
+        std::printf("     (reported: %s)\n", ses.last_error().c_str());
+        CHECK(ses.last_error().find("HTTP") != std::string::npos,
+              "error names the HTTP status");
+    }
+
+    std::printf("== 7. Clean end marks the event ended ==\n");
     {
         MemStore store;
         SessionConfig cfg; cfg.spool_dir = (base / "s5").string();
