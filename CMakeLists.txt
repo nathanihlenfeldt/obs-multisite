@@ -122,24 +122,66 @@ endif()
 # config (obs-deps / an OBS build tree) or via pkg-config (distro libobs-dev).
 if(BUILD_OBS_PLUGIN)
     if(NOT FFMPEG_FOUND OR NOT CURL_FOUND)
-        message(FATAL_ERROR "OBS plugin needs both FFmpeg and libcurl")
+        message(FATAL_ERROR
+            "OBS plugin needs both FFmpeg and libcurl.\n"
+            "  FFmpeg found: ${FFMPEG_FOUND}\n"
+            "  libcurl found: ${CURL_FOUND}\n"
+            "Point CMAKE_PREFIX_PATH at obs-deps (which ships both), e.g.\n"
+            "  cmake -S . -B build -DBUILD_OBS_PLUGIN=ON "
+            "-DCMAKE_PREFIX_PATH=<obs-deps>")
     endif()
 
-    find_package(libobs CONFIG QUIET)
-    if(NOT TARGET OBS::libobs)
-        if(PkgConfig_FOUND)
-            pkg_check_modules(LIBOBS IMPORTED_TARGET libobs)
-        endif()
-        if(TARGET PkgConfig::LIBOBS)
-            add_library(OBS::libobs ALIAS PkgConfig::LIBOBS)
-            message(STATUS "libobs found via pkg-config (${LIBOBS_VERSION})")
-        else()
+    # libobs discovery. Three paths, in order:
+    #   1. explicit -DLIBOBS_INCLUDE_DIR / -DLIBOBS_LIBRARY (most deterministic;
+    #      what CI uses on Windows against an OBS build tree)
+    #   2. its CMake config package (obs-deps / installed OBS)
+    #   3. pkg-config (distro libobs-dev)
+    #
+    # Path 2 is skipped on Windows: libobsConfig.cmake from a build tree calls
+    # find_dependency(w32-pthreads), which isn't exported with it and hard-fails.
+    option(LIBOBS_MANUAL_SEARCH "Bypass libobs's CMake config package" OFF)
+    if(WIN32)
+        set(LIBOBS_MANUAL_SEARCH ON)
+    endif()
+
+    if(LIBOBS_INCLUDE_DIR OR LIBOBS_LIBRARY)
+        if(NOT LIBOBS_INCLUDE_DIR OR NOT LIBOBS_LIBRARY)
             message(FATAL_ERROR
-                "libobs not found. Install libobs-dev, or pass "
-                "-DCMAKE_PREFIX_PATH=<obs-deps>.")
+                "Give both -DLIBOBS_INCLUDE_DIR and -DLIBOBS_LIBRARY, or neither.\n"
+                "  LIBOBS_INCLUDE_DIR: ${LIBOBS_INCLUDE_DIR}\n"
+                "  LIBOBS_LIBRARY: ${LIBOBS_LIBRARY}")
         endif()
+        if(NOT EXISTS "${LIBOBS_INCLUDE_DIR}/obs-module.h")
+            message(FATAL_ERROR
+                "obs-module.h not found in LIBOBS_INCLUDE_DIR "
+                "(${LIBOBS_INCLUDE_DIR}) — point it at obs-studio's libobs/ dir")
+        endif()
+        add_library(OBS::libobs UNKNOWN IMPORTED)
+        set_target_properties(OBS::libobs PROPERTIES
+            IMPORTED_LOCATION "${LIBOBS_LIBRARY}"
+            INTERFACE_INCLUDE_DIRECTORIES "${LIBOBS_INCLUDE_DIR}")
+        message(STATUS "libobs used explicitly: ${LIBOBS_LIBRARY}")
     else()
-        message(STATUS "libobs found via CMake config")
+        if(NOT LIBOBS_MANUAL_SEARCH)
+            find_package(libobs CONFIG QUIET)
+            if(TARGET OBS::libobs)
+                message(STATUS "libobs found via CMake config")
+            endif()
+        endif()
+        if(NOT TARGET OBS::libobs)
+            if(PkgConfig_FOUND)
+                pkg_check_modules(LIBOBS IMPORTED_TARGET libobs)
+            endif()
+            if(TARGET PkgConfig::LIBOBS)
+                add_library(OBS::libobs ALIAS PkgConfig::LIBOBS)
+                message(STATUS "libobs found via pkg-config (${LIBOBS_VERSION})")
+            else()
+                message(FATAL_ERROR
+                    "libobs not found. Either install libobs-dev, or pass\n"
+                    "  -DLIBOBS_INCLUDE_DIR=<obs-studio>/libobs\n"
+                    "  -DLIBOBS_LIBRARY=<path to obs.lib or libobs.so>")
+            endif()
+        endif()
     endif()
 
     add_library(obs-multisite MODULE
@@ -150,6 +192,7 @@ if(BUILD_OBS_PLUGIN)
         PLUGIN_VERSION="${PROJECT_VERSION}")
     target_link_libraries(obs-multisite PRIVATE
         OBS::libobs multisite_core multisite_s3 multisite_cmaf)
+    # FFmpeg comes through multisite_cmaf's INTERFACE link (ffmpeg_iface).
     set_target_properties(obs-multisite PROPERTIES PREFIX "")
 
     if(WIN32)
