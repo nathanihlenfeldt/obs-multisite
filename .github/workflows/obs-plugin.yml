@@ -11,6 +11,8 @@ env:
   # this release's own buildspec.json, so FFmpeg/curl DLL versions line up with
   # what your OBS ships — otherwise the plugin fails to load with error 126.
   OBS_TAG: "32.2.2"
+  # Used only if the OBS source tree has no parsable buildspec.json.
+  OBS_DEPS_FALLBACK: "2026-06-02"
 
 jobs:
   # Fast guard on our OBS API usage, against distro libobs headers.
@@ -87,16 +89,42 @@ jobs:
           $obs = (Get-ChildItem obs-src -Directory | Select-Object -First 1).FullName
           Write-Host "obs source dir: $obs"
 
-          # Read the obs-deps version straight from this OBS release, so the
-          # FFmpeg/curl we link against are the ones OBS itself ships.
-          $spec = Get-Content "$obs\buildspec.json" -Raw | ConvertFrom-Json
-          $depsVer = $spec.dependencies.prebuilt.version
-          if (-not $depsVer) { Write-Host "could not read obs-deps version"; exit 1 }
-          Write-Host "obs-deps version from OBS buildspec: $depsVer"
+          # OBS has moved buildspec.json between releases, so search for it
+          # rather than assuming the root. Fall back to OBS_DEPS_FALLBACK.
+          $depsVer = ""
+          $spec = Get-ChildItem -Recurse $obs -Filter buildspec.json -ErrorAction SilentlyContinue |
+                  Select-Object -First 1
+          if ($spec) {
+            Write-Host "found buildspec: $($spec.FullName)"
+            try {
+              $json = Get-Content $spec.FullName -Raw | ConvertFrom-Json
+              $depsVer = $json.dependencies.prebuilt.version
+            } catch {
+              Write-Host "could not parse buildspec.json: $_"
+            }
+          } else {
+            Write-Host "no buildspec.json in the OBS source tree"
+            Write-Host "--- OBS source root ---"
+            Get-ChildItem $obs | Select-Object Name | Format-Table -AutoSize
+          }
+
+          if (-not $depsVer) {
+            $depsVer = $env:OBS_DEPS_FALLBACK
+            Write-Host "using fallback obs-deps version: $depsVer"
+          } else {
+            Write-Host "obs-deps version from OBS: $depsVer"
+          }
 
           $url = "https://github.com/obsproject/obs-deps/releases/download/$depsVer/windows-deps-$depsVer-x64.zip"
           Write-Host "downloading $url"
-          Invoke-WebRequest -Uri $url -OutFile deps.zip
+          try {
+            Invoke-WebRequest -Uri $url -OutFile deps.zip
+          } catch {
+            Write-Host "obs-deps download FAILED for version '$depsVer'."
+            Write-Host "Check https://github.com/obsproject/obs-deps/releases for the"
+            Write-Host "version matching OBS $tag, then set OBS_DEPS_FALLBACK to it."
+            exit 1
+          }
           Expand-Archive deps.zip -DestinationPath "$env:GITHUB_WORKSPACE\obs-deps"
 
           echo "OBS_SRC=$obs" >> $env:GITHUB_ENV
