@@ -113,15 +113,13 @@ struct SourceCtx {
 // order, and a dedicated thread releases them when they are nearly due. Audio
 // and video therefore stay together and neither starves the other.
 static constexpr uint64_t kMaxDeliveryLeadNs = 400000000ULL;   // 400 ms
-// A CMAF fragment stores each track's samples contiguously, so the demuxer
-// hands over roughly a second of video before the first audio of the same
-// period — even with a seekable buffer (FFmpeg's own demuxer does the same).
-// The delivery queue therefore has to REORDER by timestamp across a window
-// wider than that skew, or audio is released late and OBS resets it.
-// Measured against real captured segments: a window of 48 brings worst-case
-// audio lateness to zero (a plain FIFO of 24 left it 233 ms late).
-// Cost: at 720p an I420 frame is ~1.3 MB, so this caps out around 60 MB.
-static constexpr size_t   kMaxQueuedFrames = 48;
+// The decoder now emits frames in presentation order (it sorts each
+// fragment's packets by timestamp before decoding), so this queue only needs
+// to smooth small jitter rather than absorb a track-ordering skew. Measured
+// against real captured segments, a window of 8 already gives zero audio
+// lateness; 16 leaves margin. At 720p an I420 frame is ~1.3 MB, so this caps
+// out around 21 MB instead of 60 MB.
+static constexpr size_t   kMaxQueuedFrames = 16;
 // Push a stamped frame for delivery. Blocks while the queue is full, which
 // back-pressures the decoder rather than letting memory grow.
 static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
@@ -411,7 +409,10 @@ static void feed_loop(SourceCtx* ctx) {
 
         // Feed at playout rate, keeping a small lead so the decoder always has
         // work but never runs seconds ahead of the wall clock.
-        static constexpr uint64_t kFeedLeadNs = 1500000000ULL;   // 1.5 s
+        // Fragments must be decoded comfortably before their content is due,
+        // or the first frames of each fragment arrive late (visible as a burst
+        // of lateness at every fragment boundary).
+        static constexpr uint64_t kFeedLeadNs = 2500000000ULL;   // 2.5 s
         while (ctx->running.load()) {
             const uint64_t elapsed = os_gettime_ns() - ctx->feed_start_ns;
             if (ctx->pushed_media_ns <= elapsed + kFeedLeadNs) break;

@@ -9,6 +9,7 @@ extern "C" {
 #include <libswscale/swscale.h>
 }
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <cstring>
@@ -208,20 +209,48 @@ struct CmafDecoder::Impl {
         }
         audio_tracks = an;
 
-        AVPacket* pkt = av_packet_alloc();
-        AVFrame*  frm = av_frame_alloc();
-        while (running.load() && av_read_frame(fmt, pkt) >= 0) {
-            AVCodecContext* c = ctxs[pkt->stream_index];
-            if (c && avcodec_send_packet(c, pkt) >= 0) {
+        // Read every packet in the fragment, then decode in TIMESTAMP order.
+        //
+        // A CMAF fragment stores each track's samples contiguously, so the
+        // demuxer hands over ~a second of video before the first audio of the
+        // same period. Decoding in that order makes frames emerge out of
+        // presentation order, and audio then arrives late at every fragment
+        // boundary (OBS reports "audio is lagging" and resets it). Sorting
+        // first costs nothing extra — the fragment is already in memory — and
+        // removes the skew entirely instead of papering over it downstream.
+        struct Sortable { AVPacket* pkt; double t; };
+        std::vector<Sortable> plist;
+        {
+            AVPacket* rp = av_packet_alloc();
+            while (running.load() && av_read_frame(fmt, rp) >= 0) {
+                AVRational tb = fmt->streams[rp->stream_index]->time_base;
+                int64_t ts = (rp->dts != AV_NOPTS_VALUE) ? rp->dts : rp->pts;
+                double t = (ts == AV_NOPTS_VALUE) ? 0.0 : ts * av_q2d(tb);
+                AVPacket* keep = av_packet_alloc();
+                av_packet_move_ref(keep, rp);
+                plist.push_back({ keep, t });
+            }
+            av_packet_free(&rp);
+        }
+        std::stable_sort(plist.begin(), plist.end(),
+                         [](const Sortable& a, const Sortable& b) {
+                             return a.t < b.t;
+                         });
+
+        AVFrame* frm = av_frame_alloc();
+        for (auto& sp : plist) {
+            if (!running.load()) break;
+            AVCodecContext* c = ctxs[sp.pkt->stream_index];
+            if (c && avcodec_send_packet(c, sp.pkt) >= 0) {
                 while (avcodec_receive_frame(c, frm) >= 0) {
-                    AVRational tb = fmt->streams[pkt->stream_index]->time_base;
-                    if ((int)pkt->stream_index == video_stream) emit_video(frm, tb);
-                    else emit_audio(frm, tb, audio_idx[pkt->stream_index]);
+                    AVRational tb = fmt->streams[sp.pkt->stream_index]->time_base;
+                    if ((int)sp.pkt->stream_index == video_stream) emit_video(frm, tb);
+                    else emit_audio(frm, tb, audio_idx[sp.pkt->stream_index]);
                     av_frame_unref(frm);
                 }
             }
-            av_packet_unref(pkt);
         }
+        for (auto& sp : plist) av_packet_free(&sp.pkt);
         // Flush the decoders so no frames are left behind in this unit.
         for (unsigned i = 0; i < ctxs.size() && running.load(); ++i) {
             if (!ctxs[i]) continue;
@@ -234,7 +263,6 @@ struct CmafDecoder::Impl {
             }
         }
         av_frame_free(&frm);
-        av_packet_free(&pkt);
         for (auto*& c : ctxs) if (c) avcodec_free_context(&c);
         avformat_close_input(&fmt);
         if (avio) { if (avio->buffer) av_freep(&avio->buffer); avio_context_free(&avio); }
