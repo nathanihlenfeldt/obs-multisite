@@ -20,6 +20,14 @@ struct PutResult {
     std::string error;
 };
 
+struct GetResult {
+    bool        success = false;
+    long        http_status = 0;
+    bool        retryable = true;
+    std::string error;
+    std::vector<uint8_t> body;
+};
+
 // Abstract object-store transport.
 class Transport {
 public:
@@ -34,6 +42,14 @@ public:
     // transport can't check or the object is absent. Used to VERIFY that a PUT
     // reported as successful actually persisted the bytes.
     virtual int64_t object_size(const std::string& /*key*/) { return -1; }
+
+    // Fetch an object. Decoders need this; upload-only transports may leave it
+    // unimplemented.
+    virtual GetResult get(const std::string& /*key*/) {
+        GetResult r; r.error = "get() not implemented by this transport";
+        r.retryable = false;
+        return r;
+    }
 };
 
 } // namespace multisite

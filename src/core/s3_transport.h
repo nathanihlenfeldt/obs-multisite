@@ -37,6 +37,9 @@ public:
     // HEAD the object and return Content-Length, or -1 if missing/unreachable.
     int64_t object_size(const std::string& key) override;
 
+    // Signed GET. Used by the decoder to fetch manifests and segments.
+    GetResult get(const std::string& key) override;
+
     // Simple connectivity/credential check: PUT then GET a tiny probe object.
     // Returns an empty string on success, or a human-readable error.
     std::string self_test();

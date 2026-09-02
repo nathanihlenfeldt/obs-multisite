@@ -96,6 +96,22 @@ against distro `libobs-dev` and asserts the entry-point symbols exist, and a
 Windows job builds `libobs` from the pinned OBS 31.1.1 release plus obs-deps and
 produces a downloadable `obs-multisite.dll` artifact.
 
+### Decoder core — timeslipping (`decoder_session`, `segment_cache`)
+
+`src/core/decoder_session.cpp` is the satellite receive path. The **playback
+head is independent of the live edge**: downloads run ahead into a local disk
+cache no matter where playback sits, so a campus can pause to hold for its own
+welcome, sit behind live, or scrub backwards without losing anything. It polls
+`live.json` + `manifest.json`, verifies every segment against its manifest
+checksum before caching it, detects a dead encoder via manifest staleness, and
+stalls rather than skipping when a segment is missing.
+
+`tests/test_decoder.cpp` drives a simulated encoder publishing into a fake
+bucket and checks the behaviours a campus depends on: prebuffer, cache filling
+*while paused*, resume from the exact paused position, jump-to-live, scrub
+bounds, corrupt-segment rejection and re-fetch, stale-encoder detection, and
+no silent skipping across a gap.
+
 ### What's proven
 
 `tests/test_reliability.cpp` runs on every push (Linux and Windows) and checks:
@@ -136,7 +152,9 @@ repository's **Actions** tab. For a public repository this is free.
 - **Phase 2 — format, namespace & audio.** ✅ CMAF muxing, multi-track audio,
   publishing layer, S3 transport, and the OBS output module (pending a first
   compile against libobs).
-- **Phase 3 — timeslipping** (per-campus live-DVR).
+- **Phase 3 — timeslipping** (per-campus live-DVR): decoder core ✅ (cache,
+  download-ahead, pause/resume/jump-to-live/scrub, stale detection); OBS source
+  wiring still to do.
 - **Phase 4 — markers & cues.**
 - **Phase 5 — user interface** (encoder Tools panel, decoder DVR dock).
 - **Phase 6 — extensions** (web simulcast, scheduling, redundancy).

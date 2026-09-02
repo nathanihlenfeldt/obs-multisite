@@ -117,10 +117,23 @@ static bool build_tracks(OutputCtx* ctx, std::vector<CmafTrack>& tracks,
     vt.width  = (int)obs_encoder_get_width(venc);
     vt.height = (int)obs_encoder_get_height(venc);
 
-    // SPS/PPS extradata
+    // SPS/PPS extradata. This is CRITICAL: with empty_moov the codec config is
+    // baked into init.mp4 before any packet arrives, so if it's missing here
+    // the whole event is undecodable even though uploads succeed.
     uint8_t* hdr = nullptr; size_t hdr_size = 0;
-    if (obs_encoder_get_extra_data(venc, &hdr, &hdr_size) && hdr && hdr_size)
+    if (obs_encoder_get_extra_data(venc, &hdr, &hdr_size) && hdr && hdr_size) {
         vt.extradata.assign(hdr, hdr + hdr_size);
+        mlog_info("video extradata: %zu bytes, starts %02x %02x %02x %02x (%s)",
+                  hdr_size, hdr[0],
+                  hdr_size > 1 ? hdr[1] : 0,
+                  hdr_size > 2 ? hdr[2] : 0,
+                  hdr_size > 3 ? hdr[3] : 0,
+                  hdr[0] == 1 ? "avcC" : "Annex B");
+    } else {
+        mlog_error("NO VIDEO EXTRADATA available from the encoder — init.mp4 "
+                   "would carry no SPS/PPS and nothing could decode the stream");
+        return false;
+    }
 
     video_t* vid = obs_output_video(ctx->output);
     if (vid) {
@@ -149,8 +162,14 @@ static bool build_tracks(OutputCtx* ctx, std::vector<CmafTrack>& tracks,
             at.channels    = (int)audio_output_get_channels(aud);
         }
         uint8_t* ah = nullptr; size_t ah_size = 0;
-        if (obs_encoder_get_extra_data(aenc, &ah, &ah_size) && ah && ah_size)
+        if (obs_encoder_get_extra_data(aenc, &ah, &ah_size) && ah && ah_size) {
             at.extradata.assign(ah, ah + ah_size);
+            mlog_info("audio track %d extradata: %zu bytes (AudioSpecificConfig)",
+                      i, ah_size);
+        } else {
+            mlog_warn("audio track %d has no extradata — that track may not "
+                      "decode", i);
+        }
         at.obs_track_idx = i;
         at.label = (audio_n < (int)labels.size() && !trim(labels[audio_n]).empty())
                      ? trim(labels[audio_n])
@@ -291,6 +310,12 @@ static bool out_start(void* data) {
         mlog_error("muxer init failed: %s", ctx->muxer->error().c_str());
         return false;
     }
+
+    mlog_info("init segment: %zu bytes (carries the codec config for the event)",
+              ctx->muxer->init_segment().size());
+    if (ctx->muxer->init_segment().size() < 200)
+        mlog_error("init segment looks too small — codec config is probably "
+                   "missing, so decoders will reject the stream");
 
     ctx->transport = std::make_unique<S3Transport>(s3);
     ctx->session   = std::make_unique<Session>(sc, *ctx->transport);

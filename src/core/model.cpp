@@ -98,6 +98,16 @@ void Manifest::push(const ManifestSegment& s, size_t window) {
     window_start_seq = segments.empty() ? 0 : segments.front().seq;
 }
 
+double Manifest::stream_duration_hint() const {
+    // Median-ish: just take the last listed segment's duration, falling back to
+    // the first. Segment durations vary slightly with keyframe placement.
+    if (!segments.empty()) {
+        if (segments.back().duration_s > 0.1) return segments.back().duration_s;
+        if (segments.front().duration_s > 0.1) return segments.front().duration_s;
+    }
+    return 0.0;
+}
+
 std::string Manifest::to_json() const {
     json j;
     j["event_id"]            = event_id;

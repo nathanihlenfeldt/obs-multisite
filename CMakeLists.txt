@@ -18,6 +18,8 @@ add_library(multisite_core STATIC
     src/core/retry_uploader.cpp
     src/core/model.cpp
     src/core/session.cpp
+    src/core/segment_cache.cpp
+    src/core/decoder_session.cpp
     src/core/aws_sigv4.cpp)
 target_include_directories(multisite_core PUBLIC src src/core)
 # Must be position-independent: this static lib gets linked into the shared
@@ -44,6 +46,11 @@ add_test(NAME reliability COMMAND test_reliability)
 add_executable(test_session tests/test_session.cpp)
 target_link_libraries(test_session PRIVATE multisite_core)
 add_test(NAME session COMMAND test_session)
+
+# Phase 3: the satellite receive path and timeslipping.
+add_executable(test_decoder tests/test_decoder.cpp)
+target_link_libraries(test_decoder PRIVATE multisite_core)
+add_test(NAME decoder COMMAND test_decoder)
 
 # ── Optional: S3 transport (needs libcurl) ────────────────────────────────────
 find_package(CURL QUIET)

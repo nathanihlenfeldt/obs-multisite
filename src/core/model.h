@@ -71,6 +71,10 @@ struct Manifest {
     // Append a confirmed segment, trimming the window to `window` entries and
     // advancing latest_seq. Enforces the rolling window.
     void push(const ManifestSegment& s, size_t window);
+
+    // Typical segment duration, taken from the listed segments (decoders use
+    // it to estimate how far behind live they are). 0 if unknown.
+    double stream_duration_hint() const;
 };
 
 struct Marker {

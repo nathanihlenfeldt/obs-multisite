@@ -166,6 +166,20 @@ PutResult S3Transport::put(const std::string& key,
     return d->do_put(key, body, content_type, tags);
 }
 
+GetResult S3Transport::get(const std::string& key) {
+    GetResult out;
+    std::vector<uint8_t> body;
+    PutResult r = d->do_get(key, body);
+    out.success     = r.success;
+    out.http_status = r.http_status;
+    out.error       = r.error;
+    // 4xx (other than 408/429) are permanent: wrong key, bad creds, no bucket.
+    out.retryable   = !(r.http_status >= 400 && r.http_status < 500) ||
+                      r.http_status == 408 || r.http_status == 429;
+    out.body        = std::move(body);
+    return out;
+}
+
 int64_t S3Transport::object_size(const std::string& key) {
     ensure_curl();
     CURL* curl = curl_easy_init();

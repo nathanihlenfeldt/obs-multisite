@@ -24,6 +24,27 @@ namespace multisite {
 // Common muxer timebase for feeding packets (nanoseconds → 1/1e9).
 static const AVRational NS_TB = {1, 1000000000};
 
+// CMAF/DASH media segments are expected to begin with a `styp` box declaring
+// the segment brands. FFmpeg's movenc only writes it when it manages segment
+// files itself, so with caller-controlled cut points we emit it ourselves.
+static void append_styp(std::vector<uint8_t>& out) {
+    static const char* brands[] = { "msdh", "cmfs", "iso6" };
+    const uint32_t size = 8 + 4 + 4 + 4 * 3;   // hdr + major + minor + 3 brands
+    auto u32 = [&out](uint32_t v) {
+        out.push_back((uint8_t)(v >> 24)); out.push_back((uint8_t)(v >> 16));
+        out.push_back((uint8_t)(v >> 8));  out.push_back((uint8_t)v);
+    };
+    auto tag = [&out](const char* t) {
+        out.push_back((uint8_t)t[0]); out.push_back((uint8_t)t[1]);
+        out.push_back((uint8_t)t[2]); out.push_back((uint8_t)t[3]);
+    };
+    u32(size);
+    tag("styp");
+    tag("msdh");        // major brand
+    u32(0);             // minor version
+    for (const char* b : brands) tag(b);
+}
+
 struct CmafMuxer::Impl {
     std::vector<CmafTrack> tracks;
     double target_s = 6.0;
@@ -122,7 +143,11 @@ struct CmafMuxer::Impl {
         av_write_frame(fmt, nullptr);
         double dur = std::max(0.0, last_video_pts_s - seg_start_pts_s);
         if (dur <= 0) dur = target_s;
-        std::vector<uint8_t> seg = std::move(buf);
+        // styp first, then the moof+mdat FFmpeg produced.
+        std::vector<uint8_t> seg;
+        seg.reserve(buf.size() + 32);
+        append_styp(seg);
+        seg.insert(seg.end(), buf.begin(), buf.end());
         buf.clear();
         uint64_t idx = seg_index++;
         double start = seg_start_pts_s;

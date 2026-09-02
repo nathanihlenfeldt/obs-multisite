@@ -113,6 +113,17 @@ int main(int argc, char** argv) {
     check(mux.ok(), "muxer reported no error");
     check(!mux.init_segment().empty(), "init segment produced");
     check(seg_count >= 2, "multiple media fragments produced");
+
+    // Each media segment must start with a styp box (CMAF/DASH requirement).
+    {
+        const std::string seg0 = std::string(outdir) + "/seg_000.m4s";
+        std::ifstream sf(seg0, std::ios::binary);
+        char hdr[8] = {0};
+        sf.read(hdr, 8);
+        bool has_styp = (hdr[4] == 's' && hdr[5] == 't' &&
+                         hdr[6] == 'y' && hdr[7] == 'p');
+        check(has_styp, "segment begins with a styp box");
+    }
     check(audio_n >= 2, "source carried multiple audio tracks");
 
     // Validate each fragment structurally (not by grepping log text, which
