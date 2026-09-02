@@ -23,6 +23,9 @@
 #include "../core/s3_transport.h"
 
 #include <atomic>
+#include <chrono>
+#include <condition_variable>
+#include <deque>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -44,6 +47,15 @@ static constexpr char S_ROOM[]     = "room_id";
 static constexpr char S_POLL_MS[]  = "poll_interval_ms";
 static constexpr char S_PREBUF[]   = "prebuffer_segments";
 static constexpr char S_KEEP[]     = "keep_behind_segments";
+
+// One entry in the delivery queue: either a video or an audio frame, already
+// stamped with its OBS presentation time.
+struct PendingFrame {
+    bool     is_video = true;
+    uint64_t timestamp = 0;
+    DecodedVideoFrame video;
+    DecodedAudioFrame audio;
+};
 
 struct SourceCtx {
     obs_source_t* source = nullptr;
@@ -71,8 +83,16 @@ struct SourceCtx {
     // so fragments must be fed at roughly the rate they play out — decoding
     // as fast as the cache allows would hand OBS frames seconds into the
     // future, which it drops (producing jumpy video).
+    int64_t  last_video_pts_ns = 0;
+    bool     logged_av_offset = false;
     uint64_t feed_start_ns = 0;      // wall clock when this decoder started
     uint64_t pushed_media_ns = 0;    // media duration handed over so far
+
+    // Ordered delivery queue (see the note above kMaxQueuedFrames).
+    std::deque<PendingFrame> dq;
+    std::mutex               dq_mtx;
+    std::condition_variable  dq_cv;
+    std::thread              deliver_thread;
 
     // status for logging
     std::atomic<uint64_t> frames_out{0};
@@ -81,61 +101,133 @@ struct SourceCtx {
 };
 
 // ── Frame delivery ───────────────────────────────────────────────────────────
-// OBS's async buffer only holds a fraction of a second (its audio buffering
-// limit defaults to ~960 ms). Decoding a whole 6 s fragment produces 6 s of
-// frames almost instantly, so delivery — not fragment feeding — is what has to
-// be paced. Each frame is held until it is nearly due, which keeps OBS's queue
-// small and playback smooth.
+// OBS's async buffer only holds a fraction of a second (audio buffering
+// defaults to ~960 ms), while decoding a 6 s fragment yields 6 s of frames
+// almost instantly. So delivery has to be paced — but pacing must NOT happen
+// inside the decoder callbacks: video and audio share the decode thread, so
+// sleeping on a video frame delays every audio frame decoded after it, which
+// makes audio arrive seconds late and OBS reset it (audible as bursts).
+//
+// Instead the decoder pushes frames into one queue, in decode (timestamp)
+// order, and a dedicated thread releases them when they are nearly due. Audio
+// and video therefore stay together and neither starves the other.
 static constexpr uint64_t kMaxDeliveryLeadNs = 400000000ULL;   // 400 ms
-
-static void wait_until_due(SourceCtx* ctx, uint64_t target_ns) {
-    while (ctx->running.load()) {
-        const uint64_t now = os_gettime_ns();
-        if (target_ns <= now + kMaxDeliveryLeadNs) return;
-        uint64_t wait_ns = target_ns - now - kMaxDeliveryLeadNs;
-        if (wait_ns > 50000000ULL) wait_ns = 50000000ULL;   // 50 ms slices so
-        std::this_thread::sleep_for(                        // shutdown stays
-            std::chrono::nanoseconds(wait_ns));             // responsive
-    }
-}
-static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
+// Bounds memory: 720p I420 is ~1.4 MB per frame, so keep this modest. The
+// decoder's byte queue back-pressures once this fills.
+static constexpr size_t   kMaxQueuedFrames = 24;
+// Push a stamped frame for delivery. Blocks while the queue is full, which
+// back-pressures the decoder rather than letting memory grow.
+static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
+    std::unique_lock<std::mutex> lk(ctx->dq_mtx);
+    ctx->dq_cv.wait(lk, [ctx] {
+        return ctx->dq.size() < kMaxQueuedFrames || !ctx->running.load();
+    });
     if (!ctx->running.load()) return;
+    ctx->dq.push_back(std::move(item));
+    lk.unlock();
+    ctx->dq_cv.notify_all();
+}
 
-    // Anchor the playout clock on the first frame. A small cushion gives OBS
-    // frames slightly in the future so its async buffering has something to
-    // work with instead of presenting the moment each frame lands.
+// Releases frames to OBS when they are nearly due, in queue (timestamp) order,
+// so audio and video are handed over together.
+static void deliver_loop(SourceCtx* ctx) {
+    mlog_info("source: delivery loop started");
+    while (ctx->running.load()) {
+        PendingFrame item;
+        {
+            std::unique_lock<std::mutex> lk(ctx->dq_mtx);
+            ctx->dq_cv.wait_for(lk, std::chrono::milliseconds(50), [ctx] {
+                return !ctx->dq.empty() || !ctx->running.load();
+            });
+            if (!ctx->running.load()) break;
+            if (ctx->dq.empty()) continue;
+            item = std::move(ctx->dq.front());
+            ctx->dq.pop_front();
+        }
+        ctx->dq_cv.notify_all();        // let the decoder push again
+
+        // Hold until nearly due, in slices so shutdown stays responsive.
+        // A frame that is already due (or late) is released immediately.
+        while (ctx->running.load()) {
+            const uint64_t now = os_gettime_ns();
+            if (item.timestamp <= now + kMaxDeliveryLeadNs) break;
+            uint64_t wait_ns = item.timestamp - now - kMaxDeliveryLeadNs;
+            if (wait_ns > 50000000ULL) wait_ns = 50000000ULL;
+            std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns));
+        }
+        if (!ctx->running.load()) break;
+
+        if (item.is_video) {
+            const DecodedVideoFrame& f = item.video;
+            struct obs_source_frame frame = {};
+            frame.width  = (uint32_t)f.width;
+            frame.height = (uint32_t)f.height;
+            frame.format = VIDEO_FORMAT_I420;
+            frame.timestamp = item.timestamp;
+            // Plane pointers are recomputed here: the vector was copied, so the
+            // pointers captured at decode time belong to the original buffer.
+            uint8_t* base = const_cast<uint8_t*>(f.data.data());
+            size_t off = 0;
+            for (int i = 0; i < 3; ++i) {
+                frame.data[i]     = base + off;
+                frame.linesize[i] = (uint32_t)f.stride[i];
+                off += (size_t)f.stride[i] * (i == 0 ? f.height : f.height / 2);
+            }
+            frame.full_range = f.full_range;
+            video_format_get_parameters(VIDEO_CS_709,
+                                        f.full_range ? VIDEO_RANGE_FULL
+                                                     : VIDEO_RANGE_PARTIAL,
+                                        frame.color_matrix,
+                                        frame.color_range_min,
+                                        frame.color_range_max);
+            obs_source_output_video(ctx->source, &frame);
+            ctx->frames_out++;
+        } else {
+            const DecodedAudioFrame& f = item.audio;
+            struct obs_source_audio audio = {};
+            audio.data[0] = reinterpret_cast<const uint8_t*>(f.interleaved.data());
+            audio.frames  = f.frames;
+            audio.speakers = (f.channels >= 2) ? SPEAKERS_STEREO : SPEAKERS_MONO;
+            audio.format   = AUDIO_FORMAT_FLOAT;      // interleaved float
+            audio.samples_per_sec = (uint32_t)f.sample_rate;
+            audio.timestamp = item.timestamp;
+            obs_source_output_audio(ctx->source, &audio);
+        }
+    }
+    mlog_info("source: delivery loop exiting");
+}
+
+// Anchors the playout clock on the first frame of EITHER stream and returns
+// the reference pts. Audio must not wait for video here: anchoring on video
+// only meant every audio frame decoded before the first video frame was
+// dropped, which is audible as gaps and bursts (and it recurs on every
+// decoder restart).
+static int64_t anchor_pts(SourceCtx* ctx, int64_t pts_ns, bool is_video) {
     static constexpr uint64_t kPlayoutCushionNs = 250000000ULL;   // 250 ms
     int64_t first = ctx->first_pts_ns.load();
     if (first < 0) {
-        ctx->first_pts_ns = f.pts_ns;
-        first = f.pts_ns;
+        ctx->first_pts_ns = pts_ns;
         ctx->playout_base_ns = os_gettime_ns() + kPlayoutCushionNs;
+        first = pts_ns;
+        mlog_info("source: playout anchored on first %s frame (pts %.3fs)",
+                  is_video ? "video" : "audio", (double)pts_ns / 1e9);
     }
+    return first;
+}
 
-    struct obs_source_frame frame = {};
-    frame.width  = (uint32_t)f.width;
-    frame.height = (uint32_t)f.height;
-    frame.format = VIDEO_FORMAT_I420;
-    frame.timestamp = ctx->playout_base_ns.load() +
-                      (uint64_t)(f.pts_ns - first);
-    for (int i = 0; i < 3; ++i) {
-        frame.data[i]     = f.plane[i];
-        frame.linesize[i] = (uint32_t)f.stride[i];
-    }
-    frame.full_range = f.full_range;
-    video_format_get_parameters(VIDEO_CS_709,
-                                f.full_range ? VIDEO_RANGE_FULL
-                                             : VIDEO_RANGE_PARTIAL,
-                                frame.color_matrix,
-                                frame.color_range_min,
-                                frame.color_range_max);
-
-    ctx->width  = frame.width;
-    ctx->height = frame.height;
-    wait_until_due(ctx, frame.timestamp);
+static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
     if (!ctx->running.load()) return;
-    obs_source_output_video(ctx->source, &frame);
-    ctx->frames_out++;
+    const int64_t first = anchor_pts(ctx, f.pts_ns, true);
+
+    PendingFrame item;
+    item.is_video  = true;
+    item.timestamp = ctx->playout_base_ns.load() + (uint64_t)(f.pts_ns - first);
+    ctx->last_video_pts_ns = f.pts_ns;
+    item.video     = f;              // owns its plane buffer (deep copy)
+
+    ctx->width  = (uint32_t)f.width;
+    ctx->height = (uint32_t)f.height;
+    enqueue_frame(ctx, std::move(item));
 }
 
 static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
@@ -144,20 +236,21 @@ static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
     // exposed via companion sources in a later phase.
     if (f.track_index != 0) return;
 
-    int64_t first = ctx->first_pts_ns.load();
-    if (first < 0) return;           // wait until video anchors the clock
+    const int64_t first = anchor_pts(ctx, f.pts_ns, false);
 
-    struct obs_source_audio audio = {};
-    audio.data[0]        = reinterpret_cast<const uint8_t*>(f.interleaved.data());
-    audio.frames         = f.frames;
-    audio.speakers       = (f.channels >= 2) ? SPEAKERS_STEREO : SPEAKERS_MONO;
-    audio.format         = AUDIO_FORMAT_FLOAT;   // interleaved float
-    audio.samples_per_sec = (uint32_t)f.sample_rate;
-    audio.timestamp      = ctx->playout_base_ns.load() +
-                           (uint64_t)(f.pts_ns - first);
-    wait_until_due(ctx, audio.timestamp);
-    if (!ctx->running.load()) return;
-    obs_source_output_audio(ctx->source, &audio);
+    PendingFrame item;
+    item.is_video  = false;
+    item.timestamp = ctx->playout_base_ns.load() + (uint64_t)(f.pts_ns - first);
+    item.audio     = f;
+
+    // Report the audio/video pts offset once: a large value here is the
+    // signature of a stream-timing problem rather than a delivery problem.
+    if (!ctx->logged_av_offset && ctx->last_video_pts_ns != 0) {
+        ctx->logged_av_offset = true;
+        mlog_info("source: audio/video pts offset %.3fs (should be near zero)",
+                  (double)(f.pts_ns - ctx->last_video_pts_ns) / 1e9);
+    }
+    enqueue_frame(ctx, std::move(item));
 }
 
 // ── Worker loops ─────────────────────────────────────────────────────────────
@@ -260,6 +353,13 @@ static void feed_loop(SourceCtx* ctx) {
                     if (ctx->decoder) { ctx->decoder->stop(); ctx->decoder.reset(); }
                     ctx->decoder_started = false;
                     ctx->first_pts_ns = -1;      // re-anchor the playout clock
+                    ctx->logged_av_offset = false;
+                    ctx->last_video_pts_ns = 0;
+                    {
+                        std::lock_guard<std::mutex> qlk(ctx->dq_mtx);
+                        ctx->dq.clear();         // stale frames from the old timeline
+                    }
+                    ctx->dq_cv.notify_all();
                 }
             }
         }
@@ -327,8 +427,14 @@ static uint32_t src_height(void* data) {
 
 static void stop_workers(SourceCtx* ctx) {
     if (!ctx->running.exchange(false)) return;
-    if (ctx->poll_thread.joinable()) ctx->poll_thread.join();
-    if (ctx->feed_thread.joinable()) ctx->feed_thread.join();
+    ctx->dq_cv.notify_all();      // release anyone blocked on the queue
+    if (ctx->poll_thread.joinable())    ctx->poll_thread.join();
+    if (ctx->feed_thread.joinable())    ctx->feed_thread.join();
+    if (ctx->deliver_thread.joinable()) ctx->deliver_thread.join();
+    {
+        std::lock_guard<std::mutex> lk(ctx->dq_mtx);
+        ctx->dq.clear();
+    }
     {
         std::lock_guard<std::mutex> lk(ctx->mtx);
         if (ctx->decoder) { ctx->decoder->stop(); ctx->decoder.reset(); }
@@ -373,8 +479,9 @@ static void src_update(void* data, obs_data_t* s) {
     }
 
     ctx->running = true;
-    ctx->poll_thread = std::thread(poll_loop, ctx);
-    ctx->feed_thread = std::thread(feed_loop, ctx);
+    ctx->deliver_thread = std::thread(deliver_loop, ctx);
+    ctx->poll_thread    = std::thread(poll_loop, ctx);
+    ctx->feed_thread    = std::thread(feed_loop, ctx);
     mlog_info("source: watching room '%s' (prebuffer %d segments, poll %dms)",
               dc.room_id.c_str(), dc.prebuffer_segments, ctx->poll_interval_ms);
 }
