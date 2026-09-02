@@ -16,13 +16,20 @@ jobs:
     steps:
       - uses: actions/checkout@v5
 
+      # Optional deps: enable the CMAF muxer + S3 transport targets.
+      # Never fatal — the CMake build skips those targets if they're absent,
+      # so a flaky package mirror can't hide a real test failure.
       - name: Install FFmpeg and libcurl (Linux)
         if: runner.os == 'Linux'
+        continue-on-error: true
         run: |
-          sudo apt-get update
-          sudo apt-get install -y ffmpeg libavformat-dev libavcodec-dev \
-                                  libavutil-dev libswresample-dev libswscale-dev \
-                                  libcurl4-openssl-dev
+          sudo apt-get update -o Acquire::Retries=3 || true
+          sudo apt-get install -y --no-install-recommends \
+            ffmpeg libavformat-dev libavcodec-dev libavutil-dev \
+            libswresample-dev libswscale-dev libcurl4-openssl-dev || true
+          echo "--- optional dependency status ---"
+          pkg-config --modversion libavformat || echo "libavformat: not available"
+          pkg-config --modversion libcurl      || echo "libcurl: not available"
 
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
