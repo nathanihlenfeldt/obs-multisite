@@ -323,33 +323,67 @@ int main() {
         CHECK(dec.poll(enc.clock_ms) == RoomState::Ended, "reports Ended");
     }
 
-    std::printf("== 8. A missing segment stalls rather than skipping ==\n");
+    std::printf("== 8. A missing segment mid-stream stalls rather than skipping ==\n");
     {
         FakeStore store;
         FakeEncoder enc(store, "r", "01EVENTHHHHHHHHHHHHHHHHHHH");
         enc.publish_start();
-        for (int i = 0; i < 6; ++i) enc.publish_segment();
+        for (int i = 0; i < 6; ++i) enc.publish_segment();   // seqs 0..5
 
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d8").string();
-        cfg.prebuffer_segments = 0;
+        // Large prebuffer so the head starts at 0 and the gap is genuinely
+        // mid-stream (a hole at the live edge is just "not published yet").
+        cfg.prebuffer_segments = 6;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         dec.pump_downloads(10);
-        dec.start();
-        // Serve what's cached, then remove the next one to simulate a gap.
+        CHECK(dec.start(), "playback started at the start of the window");
+        CHECK(dec.playback_head() == 0, "head starts at segment 0");
+
         auto first = dec.next_segment();
-        CHECK(first.has_value(), "served a segment");
+        CHECK(first && first->seq == 0, "served segment 0");
         uint64_t head = dec.playback_head();
-        // Wipe the cache entry the head now points at.
+        CHECK(head == 1, "head advanced to 1");
+        CHECK(head < dec.live_edge(), "head is behind the live edge (real gap)");
+
+        char name[16];
+        std::snprintf(name, sizeof(name), "%08llu", (unsigned long long)head);
         fs::remove(fs::path(cfg.cache_dir) / dec.event_id() /
-                   (std::string(8 - std::to_string(head).size(), '0') +
-                    std::to_string(head) + ".m4s"));
+                   (std::string(name) + ".m4s"));
+
         auto none = dec.next_segment();
         CHECK(!none.has_value(), "waits for the missing segment");
         CHECK(dec.playback_head() == head,
               "head does NOT advance past a gap (no silent skip)");
         CHECK(dec.stats().gaps_waited > 0, "gap recorded");
+    }
+
+    std::printf("== 9. Head never runs past the live edge ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTIIIIIIIIIIIIIIIIIII");
+        enc.publish_start();
+        for (int i = 0; i < 3; ++i) enc.publish_segment();   // seqs 0..2
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d9").string();
+        cfg.prebuffer_segments = 0;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        dec.pump_downloads(10);
+        dec.start();
+        int served = 0;
+        while (dec.next_segment().has_value() && served < 20) ++served;
+        CHECK(dec.playback_head() <= dec.live_edge() + 1,
+              "head stops at the live edge instead of running away");
+        CHECK(!dec.next_segment().has_value(),
+              "nothing served while waiting for the encoder to publish more");
+        for (int i = 0; i < 2; ++i) enc.publish_segment();
+        dec.poll(enc.clock_ms);
+        dec.pump_downloads(10);
+        CHECK(dec.next_segment().has_value(),
+              "resumes as soon as new segments appear");
     }
 
     fs::remove_all(base);

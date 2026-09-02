@@ -137,6 +137,9 @@ function go_live()
   obs.obs_data_set_int(vs, "bitrate", cfg.vbitrate)
   obs.obs_data_set_int(vs, "keyint_sec", math.floor(cfg.seg_dur + 0.5))
   obs.obs_data_set_string(vs, "rate_control", "CBR")
+  -- Disable scene-cut IDRs so keyframes land exactly on the segment interval;
+  -- otherwise x264 inserts extra keyframes and segment lengths vary.
+  obs.obs_data_set_string(vs, "x264opts", "scenecut=0")
   venc = obs.obs_video_encoder_create("obs_x264", "multisite_v", vs, nil)
   obs.obs_data_release(vs)
   obs.obs_encoder_set_video(venc, obs.obs_get_video())

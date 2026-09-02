@@ -124,9 +124,13 @@ bool DecoderSession::ensure_init() {
 bool DecoderSession::download_one(uint64_t seq) {
     auto r = m_tx.get(segment_key(seq));
     if (!r.success) {
-        m_stats.download_failures++;
-        m_last_error = "segment " + std::to_string(seq) + ": HTTP " +
-                       std::to_string(r.http_status) + " " + r.error;
+        // A 404 usually just means "not published yet" — expected at the live
+        // edge, so don't count it as a failure or overwrite the error string.
+        if (r.http_status != 404) {
+            m_stats.download_failures++;
+            m_last_error = "segment " + std::to_string(seq) + ": HTTP " +
+                           std::to_string(r.http_status) + " " + r.error;
+        }
         return false;
     }
     const std::string want = checksum_for(seq);
@@ -238,6 +242,11 @@ bool DecoderSession::seek(uint64_t seq) {
 std::optional<PlayableSegment> DecoderSession::next_segment() {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (m_play != PlayState::Playing || !m_head_set) return std::nullopt;
+
+    // Never serve past the live edge: the head must not run off the end of
+    // what the encoder has actually published, or playback strands itself
+    // waiting for a segment that doesn't exist yet.
+    if (m_head > m_latest_seq) return std::nullopt;
 
     if (!m_cache->has(m_head)) {
         // Waiting on a segment: hold position rather than skipping, so nothing

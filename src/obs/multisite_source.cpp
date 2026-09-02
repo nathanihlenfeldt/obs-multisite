@@ -67,6 +67,13 @@ struct SourceCtx {
     std::atomic<bool>     decoder_started{false};
     uint64_t              seen_discontinuity = 0;
 
+    // Realtime pacing. OBS's async buffer only holds a fraction of a second,
+    // so fragments must be fed at roughly the rate they play out — decoding
+    // as fast as the cache allows would hand OBS frames seconds into the
+    // future, which it drops (producing jumpy video).
+    uint64_t feed_start_ns = 0;      // wall clock when this decoder started
+    uint64_t pushed_media_ns = 0;    // media duration handed over so far
+
     // status for logging
     std::atomic<uint64_t> frames_out{0};
     RoomState last_room = RoomState::Unknown;
@@ -74,6 +81,23 @@ struct SourceCtx {
 };
 
 // ── Frame delivery ───────────────────────────────────────────────────────────
+// OBS's async buffer only holds a fraction of a second (its audio buffering
+// limit defaults to ~960 ms). Decoding a whole 6 s fragment produces 6 s of
+// frames almost instantly, so delivery — not fragment feeding — is what has to
+// be paced. Each frame is held until it is nearly due, which keeps OBS's queue
+// small and playback smooth.
+static constexpr uint64_t kMaxDeliveryLeadNs = 400000000ULL;   // 400 ms
+
+static void wait_until_due(SourceCtx* ctx, uint64_t target_ns) {
+    while (ctx->running.load()) {
+        const uint64_t now = os_gettime_ns();
+        if (target_ns <= now + kMaxDeliveryLeadNs) return;
+        uint64_t wait_ns = target_ns - now - kMaxDeliveryLeadNs;
+        if (wait_ns > 50000000ULL) wait_ns = 50000000ULL;   // 50 ms slices so
+        std::this_thread::sleep_for(                        // shutdown stays
+            std::chrono::nanoseconds(wait_ns));             // responsive
+    }
+}
 static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
     if (!ctx->running.load()) return;
 
@@ -108,6 +132,8 @@ static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
 
     ctx->width  = frame.width;
     ctx->height = frame.height;
+    wait_until_due(ctx, frame.timestamp);
+    if (!ctx->running.load()) return;
     obs_source_output_video(ctx->source, &frame);
     ctx->frames_out++;
 }
@@ -129,6 +155,8 @@ static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
     audio.samples_per_sec = (uint32_t)f.sample_rate;
     audio.timestamp      = ctx->playout_base_ns.load() +
                            (uint64_t)(f.pts_ns - first);
+    wait_until_due(ctx, audio.timestamp);
+    if (!ctx->running.load()) return;
     obs_source_output_audio(ctx->source, &audio);
 }
 
@@ -260,21 +288,27 @@ static void feed_loop(SourceCtx* ctx) {
                 continue;
             }
             ctx->decoder_started = true;
+            ctx->feed_start_ns = os_gettime_ns();
+            ctx->pushed_media_ns = 0;
             mlog_info("source: decoder started (init %zu bytes)",
                       seg->init.size());
         }
+
+        // Feed at playout rate, keeping a small lead so the decoder always has
+        // work but never runs seconds ahead of the wall clock.
+        static constexpr uint64_t kFeedLeadNs = 1500000000ULL;   // 1.5 s
+        while (ctx->running.load()) {
+            const uint64_t elapsed = os_gettime_ns() - ctx->feed_start_ns;
+            if (ctx->pushed_media_ns <= elapsed + kFeedLeadNs) break;
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+        }
+        if (!ctx->running.load()) break;
 
         {
             std::lock_guard<std::mutex> lk(ctx->mtx);
             if (ctx->decoder) ctx->decoder->push_fragment(seg->media);
         }
-
-        // Don't run the decoder miles ahead of playout: the decoder's queue
-        // back-pressures, but pace here too so memory stays bounded.
-        while (ctx->running.load() && ctx->decoder &&
-               ctx->decoder->queued_bytes() > 24u * 1024u * 1024u) {
-            std::this_thread::sleep_for(std::chrono::milliseconds(50));
-        }
+        ctx->pushed_media_ns += (uint64_t)(seg->duration_s * 1e9);
     }
     mlog_info("source: feed loop exiting");
 }
