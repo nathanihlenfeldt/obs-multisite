@@ -69,10 +69,15 @@ int main(int argc, char** argv) {
     CHECK(dec.start(init), "decoder started with the init segment");
     dec.push_fragment(seg);
 
-    // Give the decode thread time to drain the queue.
-    for (int i = 0; i < 200 && dec.queued_bytes() > 0; ++i)
+    // Fragments are dequeued immediately and decoded in place, so waiting on
+    // queued_bytes() would stop far too early. Wait until frame production
+    // stops instead.
+    int stable = 0, last = -1;
+    for (int i = 0; i < 400 && stable < 8; ++i) {
         std::this_thread::sleep_for(std::chrono::milliseconds(25));
-    std::this_thread::sleep_for(std::chrono::milliseconds(300));
+        int now = vframes.load() + aframes.load();
+        if (now == last) ++stable; else { stable = 0; last = now; }
+    }
     dec.stop();
 
     CHECK(dec.ok(), dec.ok() ? "decoder reported no error" : dec.error().c_str());

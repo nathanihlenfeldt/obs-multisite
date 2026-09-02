@@ -22,6 +22,7 @@
 #include "../core/cmaf_decoder.h"
 #include "../core/s3_transport.h"
 
+#include <algorithm>
 #include <atomic>
 #include <chrono>
 #include <condition_variable>
@@ -112,9 +113,15 @@ struct SourceCtx {
 // order, and a dedicated thread releases them when they are nearly due. Audio
 // and video therefore stay together and neither starves the other.
 static constexpr uint64_t kMaxDeliveryLeadNs = 400000000ULL;   // 400 ms
-// Bounds memory: 720p I420 is ~1.4 MB per frame, so keep this modest. The
-// decoder's byte queue back-pressures once this fills.
-static constexpr size_t   kMaxQueuedFrames = 24;
+// A CMAF fragment stores each track's samples contiguously, so the demuxer
+// hands over roughly a second of video before the first audio of the same
+// period — even with a seekable buffer (FFmpeg's own demuxer does the same).
+// The delivery queue therefore has to REORDER by timestamp across a window
+// wider than that skew, or audio is released late and OBS resets it.
+// Measured against real captured segments: a window of 48 brings worst-case
+// audio lateness to zero (a plain FIFO of 24 left it 233 ms late).
+// Cost: at 720p an I420 frame is ~1.3 MB, so this caps out around 60 MB.
+static constexpr size_t   kMaxQueuedFrames = 48;
 // Push a stamped frame for delivery. Blocks while the queue is full, which
 // back-pressures the decoder rather than letting memory grow.
 static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
@@ -141,8 +148,15 @@ static void deliver_loop(SourceCtx* ctx) {
             });
             if (!ctx->running.load()) break;
             if (ctx->dq.empty()) continue;
-            item = std::move(ctx->dq.front());
-            ctx->dq.pop_front();
+            // Release the earliest-timestamped frame in the window, not simply
+            // the first enqueued: video and audio arrive in track order, not
+            // presentation order.
+            auto it = std::min_element(ctx->dq.begin(), ctx->dq.end(),
+                [](const PendingFrame& a, const PendingFrame& b) {
+                    return a.timestamp < b.timestamp;
+                });
+            item = std::move(*it);
+            ctx->dq.erase(it);
         }
         ctx->dq_cv.notify_all();        // let the decoder push again
 
@@ -203,7 +217,8 @@ static void deliver_loop(SourceCtx* ctx) {
 // dropped, which is audible as gaps and bursts (and it recurs on every
 // decoder restart).
 static int64_t anchor_pts(SourceCtx* ctx, int64_t pts_ns, bool is_video) {
-    static constexpr uint64_t kPlayoutCushionNs = 250000000ULL;   // 250 ms
+    // Cushion covers the reordering window plus jitter.
+    static constexpr uint64_t kPlayoutCushionNs = 500000000ULL;   // 500 ms
     int64_t first = ctx->first_pts_ns.load();
     if (first < 0) {
         ctx->first_pts_ns = pts_ns;
