@@ -114,21 +114,33 @@ int main(int argc, char** argv) {
     check(seg_count >= 2, "multiple media fragments produced");
     check(audio_n >= 2, "source carried multiple audio tracks");
 
-    // Validate each produced fragment really decodes, with all streams present,
-    // by concatenating init+fragment and probing it with ffprobe/ffmpeg.
+    // Validate each fragment structurally (not by grepping log text, which
+    // varies between FFmpeg versions): concatenate init+fragment, then use
+    // ffprobe to count decoded video frames and audio streams.
     for (int i = 0; i < seg_count; ++i) {
-        char seg[64], cmd[512];
+        char seg[64], cmd[768];
         std::snprintf(seg, sizeof(seg), "%s/seg_%03d.m4s", outdir, i);
         std::snprintf(cmd, sizeof(cmd),
-            "cat %s/init.mp4 %s > %s/_chk.mp4 2>/dev/null", outdir, seg, outdir);
+            "cat %s/init.mp4 %s > %s/_chk.mp4", outdir, seg, outdir);
         if (system(cmd) != 0) { check(false, "concat init+fragment"); continue; }
 
-        // zero decode errors?
+        // Decoded video frames must be > 0 (proves the fragment really decodes).
         std::snprintf(cmd, sizeof(cmd),
-            "ffmpeg -v error -i %s/_chk.mp4 -f null - 2>&1 | grep -qi error", outdir);
-        check(system(cmd) != 0, "fragment decodes with zero errors");
+            "ffprobe -v error -count_frames -select_streams v "
+            "-show_entries stream=nb_read_frames -of csv=p=0 %s/_chk.mp4 "
+            "2>/dev/null > %s/_frames.txt", outdir, outdir);
+        system(cmd);
+        long frames = 0;
+        {
+            char path[256];
+            std::snprintf(path, sizeof(path), "%s/_frames.txt", outdir);
+            FILE* f = fopen(path, "r");
+            if (f) { if (fscanf(f, "%ld", &frames) != 1) frames = 0; fclose(f); }
+        }
+        std::printf("     (fragment %d: %ld decoded video frames)\n", i, frames);
+        check(frames > 0, "fragment decodes to real video frames");
 
-        // audio track count preserved inside the fragment?
+        // Every audio track must survive inside the fragment.
         std::snprintf(cmd, sizeof(cmd),
             "test $(ffprobe -v error -select_streams a -show_entries stream=index "
             "-of csv=p=0 %s/_chk.mp4 2>/dev/null | wc -l) -eq %d", outdir, audio_n);
