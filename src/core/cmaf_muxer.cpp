@@ -10,6 +10,13 @@ extern "C" {
 
 #include <cstring>
 #include <algorithm>
+// FFmpeg 7.0 (libavformat 61) made the AVIO write callback's buffer const.
+// Support both so the same source builds against FFmpeg 6.x and 7.x.
+#if LIBAVFORMAT_VERSION_MAJOR >= 61
+#  define MS_AVIO_WRITE_BUF const uint8_t*
+#else
+#  define MS_AVIO_WRITE_BUF uint8_t*
+#endif
 
 namespace multisite {
 
@@ -38,7 +45,7 @@ struct CmafMuxer::Impl {
     double   last_video_pts_s = 0.0;
     int      video_track = -1;
 
-    static int write_cb(void* opaque, uint8_t* data, int size) {
+    static int write_cb(void* opaque, MS_AVIO_WRITE_BUF data, int size) {
         auto* self = static_cast<Impl*>(opaque);
         self->buf.insert(self->buf.end(), data, data + size);
         return size;
