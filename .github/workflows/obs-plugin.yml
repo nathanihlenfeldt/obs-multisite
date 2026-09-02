@@ -128,7 +128,7 @@ jobs:
           echo "LIBOBS_BUILD=$env:GITHUB_WORKSPACE\obs-build" >> $env:GITHUB_ENV
           echo "LIBOBS_INCLUDE_DIR=$obs\libobs" >> $env:GITHUB_ENV
           echo "LIBOBS_LIBRARY=$($obslib.FullName)" >> $env:GITHUB_ENV
-         # obsconfig.h is generated during the libobs build — find its directory.
+          # obsconfig.h is generated during the libobs build — find its directory.
           $obscfg = Get-ChildItem -Recurse obs-build -Filter obsconfig.h -ErrorAction SilentlyContinue |
                     Select-Object -First 1
           if (-not $obscfg) { Write-Host "obsconfig.h not found in the OBS build tree"; exit 1 }
