@@ -173,7 +173,8 @@ if(BUILD_OBS_PLUGIN)
         set_target_properties(OBS::libobs PROPERTIES
             IMPORTED_LOCATION "${LIBOBS_LIBRARY}"
             INTERFACE_INCLUDE_DIRECTORIES "${_obs_includes}")
-        message(STATUS "libobs used explicitly: ${LIBOBS_LIBRARY}")    else()
+        message(STATUS "libobs used explicitly: ${LIBOBS_LIBRARY}")
+    else()
         if(NOT LIBOBS_MANUAL_SEARCH)
             find_package(libobs CONFIG QUIET)
             if(TARGET OBS::libobs)
