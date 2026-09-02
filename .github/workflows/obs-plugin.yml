@@ -6,10 +6,14 @@ on:
   pull_request:
   workflow_dispatch:
 
+env:
+  # Match the OBS version you actually run. The obs-deps version is read from
+  # this release's own buildspec.json, so FFmpeg/curl DLL versions line up with
+  # what your OBS ships — otherwise the plugin fails to load with error 126.
+  OBS_TAG: "32.2.2"
+
 jobs:
-  # Compiles the OBS plugin module against real libobs headers from the distro.
-  # This is the cheap, fast guard on our OBS API usage — it catches API
-  # mistakes without needing the full obs-deps toolchain.
+  # Fast guard on our OBS API usage, against distro libobs headers.
   linux:
     runs-on: ubuntu-latest
     steps:
@@ -42,72 +46,68 @@ jobs:
             echo "ok: $sym"
           done
 
-      - uses: actions/upload-artifact@v4
+      - uses: actions/upload-artifact@v5
         with:
           name: obs-multisite-linux
           path: build/obs-multisite.so
 
-  # Produces the actual installable Windows plugin. Builds libobs from the
-  # pinned OBS release plus prebuilt obs-deps, then builds the plugin against it.
+  # Produces the installable Windows plugin, built against the OBS release named
+  # in OBS_TAG and that release's matching obs-deps.
   windows:
     runs-on: windows-latest
     steps:
       - uses: actions/checkout@v5
 
-      # Don't hardcode a Visual Studio version: the runner image changes over
-      # time. Ask vswhere what's installed and map it to a CMake generator,
-      # falling back to CMake's own default.
       - name: Detect Visual Studio generator
         shell: pwsh
         run: |
           $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
           $gen = ""
           if (Test-Path $vswhere) {
-            Write-Host "--- Visual Studio installations ---"
-            & $vswhere -latest -products * -format value `
-              -property catalog_productDisplayVersion
             $line = & $vswhere -latest -products * -property catalog_productLineVersion
-            Write-Host "product line version: $line"
+            Write-Host "Visual Studio product line: $line"
             switch ("$line") {
               "2022" { $gen = "Visual Studio 17 2022" }
               "2026" { $gen = "Visual Studio 18 2026" }
               default { $gen = "" }
             }
-          } else {
-            Write-Host "vswhere not found at $vswhere"
           }
-          if ($gen -eq "") {
-            Write-Host "using CMake's default generator"
-          } else {
-            Write-Host "using generator: $gen"
-          }
+          if ($gen -eq "") { Write-Host "using CMake's default generator" }
+          else { Write-Host "using generator: $gen" }
           echo "CMAKE_GEN=$gen" >> $env:GITHUB_ENV
 
-      - name: Fetch obs-deps (prebuilt Windows dependencies)
+      - name: Fetch OBS sources and its matching obs-deps
         shell: pwsh
         run: |
           $ErrorActionPreference = "Stop"
-          $url = "https://github.com/obsproject/obs-deps/releases/download/2025-07-11/windows-deps-2025-07-11-x64.zip"
-          Write-Host "downloading $url"
-          Invoke-WebRequest -Uri $url -OutFile deps.zip
-          Expand-Archive deps.zip -DestinationPath "$env:GITHUB_WORKSPACE\obs-deps"
-          Write-Host "--- obs-deps top level ---"
-          Get-ChildItem "$env:GITHUB_WORKSPACE\obs-deps" | Select-Object -First 20 | Format-Table Name
-          echo "OBS_DEPS=$env:GITHUB_WORKSPACE\obs-deps" >> $env:GITHUB_ENV
-
-      - name: Fetch and build libobs from the pinned OBS release
-        shell: pwsh
-        run: |
-          $tag = "31.1.1"
+          $tag = $env:OBS_TAG
+          Write-Host "OBS tag: $tag"
           Invoke-WebRequest -Uri "https://github.com/obsproject/obs-studio/archive/refs/tags/$tag.zip" -OutFile obs.zip
           Expand-Archive obs.zip -DestinationPath obs-src
           $obs = (Get-ChildItem obs-src -Directory | Select-Object -First 1).FullName
           Write-Host "obs source dir: $obs"
-          # Configure only what libobs needs. Extra flags keep OBS's own
-          # plugin/UI/browser targets out of the build.
+
+          # Read the obs-deps version straight from this OBS release, so the
+          # FFmpeg/curl we link against are the ones OBS itself ships.
+          $spec = Get-Content "$obs\buildspec.json" -Raw | ConvertFrom-Json
+          $depsVer = $spec.dependencies.prebuilt.version
+          if (-not $depsVer) { Write-Host "could not read obs-deps version"; exit 1 }
+          Write-Host "obs-deps version from OBS buildspec: $depsVer"
+
+          $url = "https://github.com/obsproject/obs-deps/releases/download/$depsVer/windows-deps-$depsVer-x64.zip"
+          Write-Host "downloading $url"
+          Invoke-WebRequest -Uri $url -OutFile deps.zip
+          Expand-Archive deps.zip -DestinationPath "$env:GITHUB_WORKSPACE\obs-deps"
+
+          echo "OBS_SRC=$obs" >> $env:GITHUB_ENV
+          echo "OBS_DEPS=$env:GITHUB_WORKSPACE\obs-deps" >> $env:GITHUB_ENV
+
+      - name: Build libobs
+        shell: pwsh
+        run: |
           $genArgs = @()
           if ($env:CMAKE_GEN -ne "") { $genArgs += @("-G", $env:CMAKE_GEN, "-A", "x64") }
-          cmake -S $obs -B obs-build @genArgs `
+          cmake -S $env:OBS_SRC -B obs-build @genArgs `
             -DCMAKE_PREFIX_PATH="$env:OBS_DEPS" `
             -DENABLE_PLUGINS=OFF -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF `
             -DENABLE_BROWSER=OFF -DENABLE_WEBRTC=OFF -DENABLE_VLC=OFF `
@@ -116,23 +116,18 @@ jobs:
           if ($LASTEXITCODE -ne 0) { Write-Host "libobs CONFIGURE failed"; exit 1 }
           cmake --build obs-build --config Release --target libobs
           if ($LASTEXITCODE -ne 0) { Write-Host "libobs BUILD failed"; exit 1 }
-          Write-Host "--- built libobs artifacts ---"
-          Get-ChildItem -Recurse obs-build -Include obs.lib,obs.dll -ErrorAction SilentlyContinue |
-            Select-Object FullName | Format-Table -AutoSize
-          # Hand the plugin explicit paths: bypassing libobsConfig.cmake avoids
-          # its find_dependency(w32-pthreads), which a build tree doesn't export.
+
           $obslib = Get-ChildItem -Recurse obs-build -Filter obs.lib -ErrorAction SilentlyContinue |
                     Select-Object -First 1
           if (-not $obslib) { Write-Host "obs.lib not found after build"; exit 1 }
           Write-Host "obs.lib: $($obslib.FullName)"
-          echo "LIBOBS_BUILD=$env:GITHUB_WORKSPACE\obs-build" >> $env:GITHUB_ENV
-          echo "LIBOBS_INCLUDE_DIR=$obs\libobs" >> $env:GITHUB_ENV
-          echo "LIBOBS_LIBRARY=$($obslib.FullName)" >> $env:GITHUB_ENV
-          # obsconfig.h is generated during the libobs build — find its directory.
           $obscfg = Get-ChildItem -Recurse obs-build -Filter obsconfig.h -ErrorAction SilentlyContinue |
                     Select-Object -First 1
-          if (-not $obscfg) { Write-Host "obsconfig.h not found in the OBS build tree"; exit 1 }
+          if (-not $obscfg) { Write-Host "obsconfig.h not found"; exit 1 }
           Write-Host "obsconfig.h: $($obscfg.FullName)"
+
+          echo "LIBOBS_LIBRARY=$($obslib.FullName)" >> $env:GITHUB_ENV
+          echo "LIBOBS_INCLUDE_DIR=$env:OBS_SRC\libobs" >> $env:GITHUB_ENV
           echo "LIBOBS_CONFIG_INCLUDE_DIR=$($obscfg.Directory.FullName)" >> $env:GITHUB_ENV
 
       - name: Configure plugin
@@ -146,28 +141,60 @@ jobs:
             -DLIBOBS_INCLUDE_DIR="$env:LIBOBS_INCLUDE_DIR" `
             -DLIBOBS_LIBRARY="$env:LIBOBS_LIBRARY" `
             -DLIBOBS_CONFIG_INCLUDE_DIR="$env:LIBOBS_CONFIG_INCLUDE_DIR"
+
       - name: Build plugin
         run: cmake --build build --config Release
 
-      # Output location differs by generator: multi-config (Visual Studio) puts
-      # the DLL in build/Release, single-config in build/. Locate it and stage
-      # it so the artifact path is stable either way.
-      - name: Stage the built DLL
+      # Error 126 on load ("module could not be found") means a DEPENDENCY DLL is
+      # missing, not the plugin. List imports so we know exactly what OBS must
+      # provide at runtime.
+      - name: Report runtime DLL dependencies
         shell: pwsh
         run: |
-          $dll = Get-ChildItem -Recurse build -Filter obs-multisite.dll -ErrorAction SilentlyContinue |
+          $dll = Get-ChildItem -Recurse build -Filter obs-multisite.dll |
                  Select-Object -First 1
           if (-not $dll) {
             Write-Host "obs-multisite.dll not found under build/"
             Get-ChildItem -Recurse build -Filter *.dll | Select-Object FullName | Format-Table -AutoSize
             exit 1
           }
-          Write-Host "found: $($dll.FullName)"
-          New-Item -ItemType Directory -Force -Path dist | Out-Null
-          Copy-Item $dll.FullName dist/
-          Copy-Item -Recurse data dist/data -ErrorAction SilentlyContinue
+          Write-Host "built: $($dll.FullName)"
+          $vswhere = "${env:ProgramFiles(x86)}\Microsoft Visual Studio\Installer\vswhere.exe"
+          $vsroot = & $vswhere -latest -products * -property installationPath
+          $dumpbin = Get-ChildItem -Recurse "$vsroot\VC\Tools\MSVC" -Filter dumpbin.exe -ErrorAction SilentlyContinue |
+                     Where-Object { $_.FullName -match "Hostx64\\x64" } | Select-Object -First 1
+          if ($dumpbin) {
+            Write-Host "--- required DLLs (imports) ---"
+            & $dumpbin.FullName /dependents $dll.FullName
+          } else {
+            Write-Host "dumpbin not found; skipping import listing"
+          }
+          echo "PLUGIN_DLL=$($dll.FullName)" >> $env:GITHUB_ENV
 
-      - uses: actions/upload-artifact@v4
+      # Ship the FFmpeg/curl DLLs the plugin needs alongside it, so it loads even
+      # if OBS's own copies differ in version.
+      - name: Stage plugin with its dependencies
+        shell: pwsh
+        run: |
+          New-Item -ItemType Directory -Force -Path dist/obs-plugins/64bit | Out-Null
+          New-Item -ItemType Directory -Force -Path dist/data/obs-plugins/obs-multisite | Out-Null
+          Copy-Item $env:PLUGIN_DLL dist/obs-plugins/64bit/
+          Copy-Item -Recurse data/* dist/data/obs-plugins/obs-multisite/ -ErrorAction SilentlyContinue
+
+          # obs-deps runtime DLLs matching what we linked against.
+          $names = @("avcodec-*.dll","avformat-*.dll","avutil-*.dll",
+                     "swresample-*.dll","swscale-*.dll","libcurl.dll","zlib.dll")
+          foreach ($n in $names) {
+            Get-ChildItem -Recurse "$env:OBS_DEPS" -Filter $n -ErrorAction SilentlyContinue |
+              ForEach-Object {
+                Write-Host "bundling $($_.Name)"
+                Copy-Item $_.FullName dist/obs-plugins/64bit/ -Force
+              }
+          }
+          Write-Host "--- staged ---"
+          Get-ChildItem -Recurse dist | Select-Object FullName | Format-Table -AutoSize
+
+      - uses: actions/upload-artifact@v5
         if: success()
         with:
           name: obs-multisite-windows
