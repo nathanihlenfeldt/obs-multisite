@@ -247,6 +247,24 @@ if(BUILD_OBS_PLUGIN)
         else()
             find_library(_qt_frontend NAMES obs-frontend-api REQUIRED)
         endif()
+        # obs-frontend-api.h is NOT beside the libobs headers: it lives in
+        # OBS's own source tree (frontend/api in OBS 32, UI/obs-frontend-api in
+        # older releases). Passing only the .lib is not enough.
+        if(LIBOBS_FRONTEND_INCLUDE_DIR)
+            set(_fe_inc "${LIBOBS_FRONTEND_INCLUDE_DIR}")
+        else()
+            find_path(_fe_inc obs-frontend-api.h
+                      HINTS "${LIBOBS_INCLUDE_DIR}" "${LIBOBS_INCLUDE_DIR}/.."
+                      PATH_SUFFIXES obs frontend/api UI/obs-frontend-api)
+        endif()
+        if(NOT _fe_inc)
+            message(FATAL_ERROR
+                "ENABLE_QT=ON but obs-frontend-api.h was not found. Pass "
+                "-DLIBOBS_FRONTEND_INCLUDE_DIR=<obs-studio>/frontend/api")
+        endif()
+        message(STATUS "obs-frontend-api headers: ${_fe_inc}")
+        target_include_directories(obs-multisite PRIVATE "${_fe_inc}")
+
         target_sources(obs-multisite PRIVATE
             src/obs/ui/encoder_dock.cpp
             src/obs/ui/decoder_dock.cpp
