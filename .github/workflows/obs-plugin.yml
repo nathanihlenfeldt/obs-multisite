@@ -127,6 +127,55 @@ jobs:
           }
           Expand-Archive deps.zip -DestinationPath "$env:GITHUB_WORKSPACE\obs-deps"
 
+          # Qt6, needed for the operator docks and for obs-frontend-api to
+          # exist at all (OBS only builds it as part of its Qt UI).
+          $qtVer = $depsVer
+          if ($spec) {
+            try {
+              $json = Get-Content $spec.FullName -Raw | ConvertFrom-Json
+              if ($json.dependencies.qt6.version) { $qtVer = $json.dependencies.qt6.version }
+            } catch { }
+          }
+          # Windows Qt6 assets carry a build-config suffix, unlike the base
+          # deps zip — e.g. windows-deps-qt6-<ver>-x64-RelWithDebInfo.zip.
+          # Try the plausible names rather than assuming one.
+          $qtNames = @(
+            "windows-deps-qt6-$qtVer-x64-RelWithDebInfo.zip",
+            "windows-deps-qt6-$qtVer-x64.zip",
+            "windows-deps-qt6-$qtVer-x64-Release.zip"
+          )
+          $gotQt = $false
+          foreach ($n in $qtNames) {
+            $qtUrl = "https://github.com/obsproject/obs-deps/releases/download/$qtVer/$n"
+            Write-Host "trying $n"
+            try {
+              Invoke-WebRequest -Uri $qtUrl -OutFile qt6.zip -ErrorAction Stop
+              Expand-Archive qt6.zip -DestinationPath "$env:GITHUB_WORKSPACE\obs-deps" -Force
+              Write-Host "Qt6 deps unpacked from $n"
+              $gotQt = $true
+              break
+            } catch {
+              Write-Host "  not available"
+            }
+          }
+          if ($gotQt) {
+            # Confirm the Qt6 CMake package is actually present before relying on it.
+            $qtCmake = Get-ChildItem -Recurse "$env:GITHUB_WORKSPACE\obs-deps" `
+                         -Filter Qt6Config.cmake -ErrorAction SilentlyContinue |
+                       Select-Object -First 1
+            if ($qtCmake) {
+              Write-Host "Qt6Config.cmake: $($qtCmake.FullName)"
+              echo "HAVE_QT=1" >> $env:GITHUB_ENV
+            } else {
+              Write-Host "Qt6 zip unpacked but Qt6Config.cmake not found — building WITHOUT the docks"
+              echo "HAVE_QT=0" >> $env:GITHUB_ENV
+            }
+          } else {
+            Write-Host "no Qt6 deps asset matched for version '$qtVer' — building WITHOUT the docks"
+            Write-Host "check https://github.com/obsproject/obs-deps/releases/tag/$qtVer for the asset name"
+            echo "HAVE_QT=0" >> $env:GITHUB_ENV
+          }
+
           echo "OBS_SRC=$obs" >> $env:GITHUB_ENV
           echo "OBS_DEPS=$env:GITHUB_WORKSPACE\obs-deps" >> $env:GITHUB_ENV
 
@@ -135,15 +184,55 @@ jobs:
         run: |
           $genArgs = @()
           if ($env:CMAKE_GEN -ne "") { $genArgs += @("-G", $env:CMAKE_GEN, "-A", "x64") }
+          # obs-frontend-api lives in OBS's UI subproject, so the UI has to be
+          # CONFIGURED for it to exist — but only the libobs and
+          # obs-frontend-api targets are BUILT, not the whole OBS app.
+          # GITHUB_ENV only affects LATER steps, so track the decision locally
+          # within this step and publish it once at the end.
+          $haveQt = ($env:HAVE_QT -eq "1")
+          $uiFlag = if ($haveQt) { "-DENABLE_UI=ON" } else { "-DENABLE_UI=OFF" }
           cmake -S $env:OBS_SRC -B obs-build @genArgs `
             -DCMAKE_PREFIX_PATH="$env:OBS_DEPS" `
-            -DENABLE_PLUGINS=OFF -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF `
+            -DENABLE_PLUGINS=OFF $uiFlag -DENABLE_SCRIPTING=OFF `
             -DENABLE_BROWSER=OFF -DENABLE_WEBRTC=OFF -DENABLE_VLC=OFF `
             -DENABLE_VIRTUALCAM=OFF -DBUILD_TESTS=OFF `
             -DCMAKE_BUILD_TYPE=Release
-          if ($LASTEXITCODE -ne 0) { Write-Host "libobs CONFIGURE failed"; exit 1 }
+          if ($LASTEXITCODE -ne 0) {
+            Write-Host "libobs CONFIGURE failed (UI flag: $uiFlag)"
+            if ($haveQt) {
+              Write-Host "retrying without the UI — docks will be omitted"
+              $haveQt = $false
+              cmake -S $env:OBS_SRC -B obs-build @genArgs `
+                -DCMAKE_PREFIX_PATH="$env:OBS_DEPS" `
+                -DENABLE_PLUGINS=OFF -DENABLE_UI=OFF -DENABLE_SCRIPTING=OFF `
+                -DENABLE_BROWSER=OFF -DENABLE_WEBRTC=OFF -DENABLE_VLC=OFF `
+                -DENABLE_VIRTUALCAM=OFF -DBUILD_TESTS=OFF `
+                -DCMAKE_BUILD_TYPE=Release
+              if ($LASTEXITCODE -ne 0) { Write-Host "libobs CONFIGURE failed again"; exit 1 }
+            } else { exit 1 }
+          }
           cmake --build obs-build --config Release --target libobs
           if ($LASTEXITCODE -ne 0) { Write-Host "libobs BUILD failed"; exit 1 }
+
+          if ($haveQt) {
+            cmake --build obs-build --config Release --target obs-frontend-api
+            if ($LASTEXITCODE -ne 0) {
+              Write-Host "obs-frontend-api build failed — omitting the docks"
+              $haveQt = $false
+            } else {
+              $fe = Get-ChildItem -Recurse obs-build -Filter obs-frontend-api.lib -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+              if ($fe) {
+                Write-Host "obs-frontend-api.lib: $($fe.FullName)"
+                echo "LIBOBS_FRONTEND_LIBRARY=$($fe.FullName)" >> $env:GITHUB_ENV
+              } else {
+                Write-Host "obs-frontend-api.lib not found — omitting the docks"
+                $haveQt = $false
+              }
+            }
+          }
+          # Publish the final decision for the configure step.
+          echo "HAVE_QT=$(if ($haveQt) { '1' } else { '0' })" >> $env:GITHUB_ENV
 
           $obslib = Get-ChildItem -Recurse obs-build -Filter obs.lib -ErrorAction SilentlyContinue |
                     Select-Object -First 1
@@ -163,7 +252,15 @@ jobs:
         run: |
           $genArgs = @()
           if ($env:CMAKE_GEN -ne "") { $genArgs += @("-G", $env:CMAKE_GEN, "-A", "x64") }
-          cmake -S . -B build @genArgs `
+          $qtArgs = @()
+          if ($env:HAVE_QT -eq "1") {
+            $qtArgs += @("-DENABLE_QT=ON",
+                         "-DLIBOBS_FRONTEND_LIBRARY=$env:LIBOBS_FRONTEND_LIBRARY")
+            Write-Host "building WITH the operator docks"
+          } else {
+            Write-Host "building WITHOUT the docks (hotkeys still included)"
+          }
+          cmake -S . -B build @genArgs @qtArgs `
             -DBUILD_OBS_PLUGIN=ON `
             -DCMAKE_PREFIX_PATH="$env:OBS_DEPS" `
             -DLIBOBS_INCLUDE_DIR="$env:LIBOBS_INCLUDE_DIR" `
@@ -219,6 +316,20 @@ jobs:
                 Copy-Item $_.FullName dist/obs-plugins/64bit/ -Force
               }
           }
+          # Record which build this is, so a dockless fallback is obvious from
+          # the artifact rather than only from the log.
+          $mode = if ($env:HAVE_QT -eq "1") { "with operator docks (Qt)" }
+                  else { "hotkeys only (no Qt docks)" }
+          Set-Content -Path dist/BUILD-INFO.txt -Value @(
+            "obs-multisite build",
+            "OBS tag:    $env:OBS_TAG",
+            "UI mode:    $mode"
+          )
+          Write-Host "BUILD MODE: $mode"
+
+          # NOTE: Qt itself is NOT bundled. OBS ships its own Qt6 and a plugin
+          # must use the host's copy — shipping a second Qt would either be
+          # ignored or cause a version clash.
           Write-Host "--- staged ---"
           Get-ChildItem -Recurse dist | Select-Object FullName | Format-Table -AutoSize
 
