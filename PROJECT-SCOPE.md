@@ -110,7 +110,35 @@ events/{event_id}/                # event_id = ULID minted by the encoder at "Go
   and the muxer wrapper and decoder are codec-agnostic, so adding a codec is a
   capability change rather than a rewrite.
 
-### 4.3 Multi-track production audio
+### 4.3 Production audio: packed multi-channel (primary mode)
+
+The primary delivery mode for production audio is a **single multi-channel
+audio track** — one 8-channel AAC stream carrying main mix, mic ISOs and click
+in fixed channel positions.
+
+- **Sample-accurate by construction.** One stream, one clock, start to finish.
+  Nothing can drift between the click and the programme because they are
+  channels of the same track, not separate tracks with independent buffering.
+- **Channel order is the interface.** Channel 4 must be the click at both ends.
+  The mapping is therefore *published* in `event.json` and `manifest.json` as
+  `channel_labels`, so a satellite routes by name rather than guessing.
+  Positional meanings from the speaker layout (FL/FR/LFE/…) are deliberately
+  ignored — the layout is only a channel-count carrier.
+- **Prerequisite:** both encoder and satellite OBS must be set to **7.1** in
+  Settings → Audio → Channels. OBS resamples every source to its global layout,
+  so at a narrower setting the extra channels are downmixed and destroyed. Both
+  plugins detect this and log an explicit error rather than failing silently.
+- **Capacity:** 8 channels total, e.g. stereo main mix + 6 mono ISOs.
+- **Audio interfaces:** ASIO or Blackmagic DeckLink devices, which is where
+  multi-channel capture and playout actually come from in production. A
+  companion de-interleaver output plugin maps packed channels onto device output
+  channels at the satellite (later phase).
+
+The multi-track mode below remains supported for sites without a multi-channel
+interface, at the cost of per-track buffering (tens of milliseconds of possible
+drift between tracks) rather than sample-lock.
+
+### 4.3.1 Multi-track production audio (alternative mode)
 
 The audio system exists to move a full **production audio bus** to the far sites
 — **main mix, ISOs of specific mics, and a click track** — not to offer a

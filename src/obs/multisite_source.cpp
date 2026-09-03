@@ -86,6 +86,7 @@ struct SourceCtx {
     // future, which it drops (producing jumpy video).
     int64_t  last_video_pts_ns = 0;
     bool     logged_av_offset = false;
+    std::atomic<bool> checked_layout{false};
     // Wall clock when playback was paused, so the playout clock can be
     // advanced by the same amount on resume (see on_resume).
     std::atomic<uint64_t> pause_started_ns{0};
@@ -238,7 +239,7 @@ static void deliver_loop(SourceCtx* ctx) {
             struct obs_source_audio audio = {};
             audio.data[0] = reinterpret_cast<const uint8_t*>(f.interleaved.data());
             audio.frames  = f.frames;
-            audio.speakers = (f.channels >= 2) ? SPEAKERS_STEREO : SPEAKERS_MONO;
+            audio.speakers = ms_layout_for_channels(f.channels);
             audio.format   = AUDIO_FORMAT_FLOAT;      // interleaved float
             audio.samples_per_sec = (uint32_t)f.sample_rate;
             audio.timestamp = item.timestamp;
@@ -289,6 +290,32 @@ static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
     if (f.track_index != 0) return;
 
     const int64_t first = anchor_pts(ctx, f.pts_ns, false);
+
+    // Packed multi-channel guard. OBS resamples every source to its GLOBAL
+    // layout (Settings -> Audio -> Channels). If the stream carries more
+    // channels than that layout, OBS downmixes — which for packed audio means
+    // the ISOs and click are summed into the programme and silently destroyed.
+    // Say so loudly, once, rather than letting it pass.
+    if (!ctx->checked_layout.exchange(true)) {
+        struct obs_audio_info oai = {};
+        if (obs_get_audio_info(&oai)) {
+            const int global_ch = (int)get_audio_channels(oai.speakers);
+            if (f.channels > global_ch) {
+                mlog_error("stream carries %d audio channels but OBS is "
+                           "configured for %d — the extra channels will be "
+                           "DOWNMIXED and lost. Set Settings -> Audio -> "
+                           "Channels to 7.1 on this machine.",
+                           f.channels, global_ch);
+            } else {
+                mlog_info("audio: %d channel(s), OBS global layout %d channel(s)",
+                          f.channels, global_ch);
+            }
+        }
+        if (ms_layout_for_channels(f.channels) == SPEAKERS_UNKNOWN)
+            mlog_error("audio has %d channels, which has no OBS speaker "
+                       "layout — 1,2,3,4,5,6 or 8 are supported",
+                       f.channels);
+    }
 
     PendingFrame item;
     item.is_video  = false;

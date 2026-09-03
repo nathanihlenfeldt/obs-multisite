@@ -18,9 +18,12 @@ static VideoInfo video_from_json(const json& j) {
 }
 static json tracks_to_json(const std::vector<AudioTrack>& ts) {
     json a = json::array();
-    for (const auto& t : ts)
-        a.push_back({ {"idx", t.idx}, {"label", t.label}, {"codec", t.codec},
-                      {"channels", t.channels}, {"sample_rate", t.sample_rate} });
+    for (const auto& t : ts) {
+        json e = { {"idx", t.idx}, {"label", t.label}, {"codec", t.codec},
+                   {"channels", t.channels}, {"sample_rate", t.sample_rate} };
+        if (!t.channel_labels.empty()) e["channel_labels"] = t.channel_labels;
+        a.push_back(e);
+    }
     return a;
 }
 static std::vector<AudioTrack> tracks_from_json(const json& j) {
@@ -33,6 +36,9 @@ static std::vector<AudioTrack> tracks_from_json(const json& j) {
         a.codec      = t.value("codec", "aac");
         a.channels   = t.value("channels", 2);
         a.sample_rate= t.value("sample_rate", 48000);
+        if (t.contains("channel_labels") && t["channel_labels"].is_array())
+            for (const auto& cl : t["channel_labels"])
+                a.channel_labels.push_back(cl.get<std::string>());
         out.push_back(a);
     }
     return out;

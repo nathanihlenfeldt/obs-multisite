@@ -176,12 +176,14 @@ repository's **Actions** tab. For a public repository this is free.
 
 ## Known gaps
 
-- **Only audio track 0 is played at the satellite.** The encoder delivers every
-  enabled OBS track (main mix, ISOs, click) and they are all present in the
-  segments, but `multisite_source` currently outputs the first one and ignores
-  the rest. Multi-track output — companion audio-only sources sharing one cache,
-  or multi-track output from a single source — is the next substantial piece of
-  work.
+- **Multi-track (not packed) mode plays only track 0 at the satellite.** The
+  primary mode is packed multi-channel — one 8-channel track, which now carries
+  end to end with its channel map. If an encoder is configured with several
+  separate audio tracks instead, the satellite still plays only the first;
+  companion audio-only sources for the rest are not implemented.
+- **De-interleaver not built yet.** Packed channels arrive as one 8-channel
+  stream. Routing individual channels to ASIO/DeckLink outputs needs the
+  companion output plugin (next phase).
 - **Markers are authored but not consumed.** `Session::add_marker` publishes
   `markers.json`; the decoder does not yet read it or offer jump-to-marker.
 - **No Qt UI yet.** Timeslipping is driven from buttons in the source

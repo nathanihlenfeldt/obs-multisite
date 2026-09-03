@@ -25,6 +25,12 @@ struct AudioTrack {
     std::string codec = "aac";
     int         channels = 2;
     int         sample_rate = 48000;
+    // Packed multi-channel mode: channel ORDER is the interface between the
+    // encoder and the satellite (channel 3 must be the click at both ends), so
+    // the mapping is published rather than inferred. Positional names from the
+    // speaker layout (FL/FR/LFE/...) are meaningless here and are ignored.
+    // Empty for ordinary stereo tracks.
+    std::vector<std::string> channel_labels;
 };
 
 struct VideoInfo {

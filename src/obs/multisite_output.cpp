@@ -42,6 +42,7 @@ static constexpr char S_ROOM[]      = "room_id";
 static constexpr char S_SEGDUR[]    = "segment_duration_s";
 static constexpr char S_TRACKLBL[]  = "track_labels";   // comma-separated
 static constexpr char S_TAGS[]      = "use_object_tags";
+static constexpr char S_CHANLBL[]   = "channel_labels";
 
 // A finished fragment on its way from the muxer to the durable spool.
 struct PendingFragment {
@@ -103,7 +104,8 @@ static std::string trim(const std::string& s) {
 // Build muxer track configs from the OBS encoders actually attached.
 static bool build_tracks(OutputCtx* ctx, std::vector<CmafTrack>& tracks,
                          VideoInfo& vinfo, std::vector<AudioTrack>& ainfo,
-                         const std::string& label_csv) {
+                         const std::string& label_csv,
+                         const std::string& channel_label_csv) {
     for (int i = 0; i < MAX_AUDIO_MIXES; ++i) ctx->audio_track_for[i] = -1;
 
     obs_encoder_t* venc = obs_output_get_video_encoder(ctx->output);
@@ -183,12 +185,46 @@ static bool build_tracks(OutputCtx* ctx, std::vector<CmafTrack>& tracks,
         meta.codec = "aac";
         meta.channels = at.channels;
         meta.sample_rate = at.sample_rate;
+
+        // Packed multi-channel mode: publish what each channel carries, so the
+        // satellite (and its de-interleaver) can route by name instead of
+        // guessing. Only meaningful beyond stereo.
+        if (at.channels > 2) {
+            auto cl = split_csv(channel_label_csv);
+            for (int c = 0; c < at.channels; ++c) {
+                std::string name = (c < (int)cl.size() && !trim(cl[c]).empty())
+                                     ? trim(cl[c])
+                                     : ("Channel " + std::to_string(c + 1));
+                meta.channel_labels.push_back(name);
+            }
+            mlog_info("audio track %d is PACKED: %d channels", i, at.channels);
+            for (int c = 0; c < at.channels; ++c)
+                mlog_info("  channel %d -> %s", c + 1,
+                          meta.channel_labels[(size_t)c].c_str());
+        }
         ainfo.push_back(meta);
 
         tracks.push_back(at);
         ++audio_n;
     }
     mlog_info("configured %d video + %d audio track(s)", 1, audio_n);
+
+    // If the operator has named more than two channels but OBS is running in a
+    // narrower layout, the extra content never reaches the encoder at all.
+    {
+        auto cl = split_csv(channel_label_csv);
+        size_t named = 0;
+        for (auto& c : cl) if (!trim(c).empty()) ++named;
+        struct obs_audio_info oai = {};
+        if (named > 2 && obs_get_audio_info(&oai)) {
+            const int global_ch = (int)get_audio_channels(oai.speakers);
+            if (global_ch <= 2)
+                mlog_warn("%zu channels are named but OBS is set to %d "
+                          "channel(s) — set Settings -> Audio -> Channels to "
+                          "7.1 to send packed multi-channel audio",
+                          named, global_ch);
+        }
+    }
     return true;
 }
 
@@ -207,6 +243,8 @@ static void out_defaults(obs_data_t* s) {
     obs_data_set_default_string(s, S_REGION, "auto");
     obs_data_set_default_double(s, S_SEGDUR, 6.0);
     obs_data_set_default_string(s, S_TRACKLBL, "Main mix,Sermon ISO,Click");
+    obs_data_set_default_string(s, S_CHANLBL,
+        "Main L,Main R,Sermon ISO,Click,Spare 5,Spare 6,Spare 7,Spare 8");
     obs_data_set_default_bool(s, S_TAGS, false);
 }
 
@@ -221,6 +259,8 @@ static obs_properties_t* out_props(void*) {
     obs_properties_add_text(p, S_ROOM,     obs_module_text("RoomID"),       OBS_TEXT_DEFAULT);
     obs_properties_add_float_slider(p, S_SEGDUR, obs_module_text("SegmentDuration"), 2.0, 15.0, 0.5);
     obs_properties_add_text(p, S_TRACKLBL, obs_module_text("TrackLabels"), OBS_TEXT_DEFAULT);
+    // Packed multi-channel mode: what each channel of the audio track carries.
+    obs_properties_add_text(p, S_CHANLBL, obs_module_text("ChannelLabels"), OBS_TEXT_DEFAULT);
     // R2 rejects x-amz-tagging; leave off unless the store supports tagging.
     obs_properties_add_bool(p, S_TAGS, obs_module_text("UseObjectTags"));
     return p;
@@ -282,8 +322,9 @@ static bool out_start(void* data) {
     SessionConfig sc;
     sc.room_id            = obs_data_get_string(s, S_ROOM);
     sc.segment_duration_s = obs_data_get_double(s, S_SEGDUR);
-    std::string labels    = obs_data_get_string(s, S_TRACKLBL);
-    sc.use_object_tags    = obs_data_get_bool(s, S_TAGS);
+    std::string labels     = obs_data_get_string(s, S_TRACKLBL);
+    std::string chan_labels = obs_data_get_string(s, S_CHANLBL);
+    sc.use_object_tags     = obs_data_get_bool(s, S_TAGS);
     obs_data_release(s);
 
     if (s3.bucket.empty() ||
@@ -303,7 +344,7 @@ static bool out_start(void* data) {
     std::vector<CmafTrack> tracks;
     VideoInfo vinfo;
     std::vector<AudioTrack> ainfo;
-    if (!build_tracks(ctx, tracks, vinfo, ainfo, labels)) return false;
+    if (!build_tracks(ctx, tracks, vinfo, ainfo, labels, chan_labels)) return false;
 
     ctx->muxer = std::make_unique<CmafMuxer>(tracks, sc.segment_duration_s);
     if (!ctx->muxer->ok()) {

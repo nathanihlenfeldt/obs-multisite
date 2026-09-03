@@ -269,7 +269,43 @@ int main() {
               "error names the HTTP status");
     }
 
-    std::printf("== 7. A store that lies about success is caught ==\n");
+    std::printf("== 7. Packed multi-channel audio round-trips ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg; cfg.spool_dir = (base / "s7p").string();
+        Session ses(cfg, store);
+
+        VideoInfo pv{ "h264", 1920, 1080, 30.0 };
+        // One 8-channel track, the packed production feed.
+        std::vector<AudioTrack> packed = { {
+            0, "Production", "aac", 8, 48000,
+            { "Main L", "Main R", "Sermon ISO", "Click",
+              "Choir ISO", "Ambient L", "Ambient R", "Spare" }
+        } };
+        CHECK(ses.start_new(blob(0, 1400), pv, packed),
+              "session starts with a packed 8-channel track");
+
+        EventInfo ev = EventInfo::from_json(
+            store.text("events/" + ses.event_id() + "/event.json"));
+        CHECK(ev.audio_tracks.size() == 1, "one audio track published");
+        CHECK(ev.audio_tracks[0].channels == 8, "8 channels recorded");
+        CHECK(ev.audio_tracks[0].channel_labels.size() == 8,
+              "all 8 channel labels published");
+        CHECK(ev.audio_tracks[0].channel_labels[3] == "Click",
+              "channel ORDER is preserved (channel 4 is the click)");
+
+        Manifest m = Manifest::from_json(
+            store.text("events/" + ses.event_id() + "/manifest.json"));
+        CHECK(!m.audio_tracks.empty() &&
+              m.audio_tracks[0].channel_labels.size() == 8,
+              "channel map also reaches the manifest the decoder polls");
+        std::printf("     (channel 4 = %s, channel 8 = %s)\n",
+                    m.audio_tracks[0].channel_labels[3].c_str(),
+                    m.audio_tracks[0].channel_labels[7].c_str());
+        ses.end();
+    }
+
+    std::printf("== 8. A store that lies about success is caught ==\n");
     {
         MemStore store;
         SessionConfig cfg; cfg.spool_dir = (base / "s7v").string();
@@ -287,7 +323,7 @@ int main() {
         ses.end();
     }
 
-    std::printf("== 8. Clean end marks the event ended ==\n");
+    std::printf("== 9. Clean end marks the event ended ==\n");
     {
         MemStore store;
         SessionConfig cfg; cfg.spool_dir = (base / "s5").string();
