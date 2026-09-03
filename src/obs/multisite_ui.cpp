@@ -1,0 +1,202 @@
+// multisite_ui.cpp — operator controls via OBS's frontend API and hotkeys.
+//
+// Deliberately Qt-free. `obs_frontend_add_tools_menu_item` takes a plain C
+// callback, and hotkeys need no UI toolkit at all — only docks require a
+// QWidget. For a live service, hotkeys are also the better interface: an
+// operator holding for their own welcome wants a keypress, not a properties
+// dialog. A Qt dock (scrub bar, behind-live readout) can be layered on later
+// without changing any of this.
+//
+// Registered controls:
+//   Encoder  — Drop marker (x4 configurable labels)
+//   Decoder  — Pause / Resume / Toggle, Jump to live, Log status
+//
+#include <obs-module.h>
+
+// Tools-menu items come from obs-frontend-api, which is part of OBS's UI
+// subproject and is not built when libobs is compiled with ENABLE_UI=OFF (as
+// our CI does, to avoid pulling in Qt). Hotkeys, by contrast, live in libobs
+// itself — so they are always available and are the primary interface for a
+// live operator anyway. The menu items are therefore optional.
+#ifdef MULTISITE_HAVE_FRONTEND_API
+#include <obs-frontend-api.h>
+#endif
+
+#include "plugin_log.h"
+#include "multisite_ui.h"
+
+#include <mutex>
+#include <string>
+#include <vector>
+
+namespace multisite_obs {
+
+// ── Registry of live components ──────────────────────────────────────────────
+// Hotkeys and menu items are global, but the things they act on come and go as
+// sources are created and outputs start. Rather than holding raw pointers, the
+// encoder and decoder register themselves here and unregister on teardown.
+namespace {
+
+std::mutex g_mtx;
+EncoderControls* g_encoder = nullptr;
+std::vector<DecoderControls*> g_decoders;
+
+// Hotkey ids, so they can be unregistered on unload.
+std::vector<obs_hotkey_id> g_hotkeys;
+
+std::vector<std::string> split_csv(const std::string& s) {
+    std::vector<std::string> out;
+    std::string cur;
+    for (char c : s) { if (c == ',') { out.push_back(cur); cur.clear(); } else cur += c; }
+    if (!cur.empty()) out.push_back(cur);
+    return out;
+}
+
+} // namespace
+
+void register_encoder_controls(EncoderControls* e) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_encoder = e;
+}
+void unregister_encoder_controls(EncoderControls* e) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (g_encoder == e) g_encoder = nullptr;
+}
+void register_decoder_controls(DecoderControls* d) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    g_decoders.push_back(d);
+}
+void unregister_decoder_controls(DecoderControls* d) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (size_t i = 0; i < g_decoders.size(); ++i)
+        if (g_decoders[i] == d) { g_decoders.erase(g_decoders.begin() + i); break; }
+}
+
+// ── Encoder: drop a marker ───────────────────────────────────────────────────
+static void drop_marker(const std::string& label) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (!g_encoder) {
+        mlog_warn("marker '%s' ignored — not broadcasting", label.c_str());
+        return;
+    }
+    g_encoder->drop_marker(label);
+}
+
+struct MarkerSlot { int index; };
+static MarkerSlot g_slots[4] = { {0}, {1}, {2}, {3} };
+
+static std::string marker_label_for(int index) {
+    // Labels come from the encoder's own settings so they match what the
+    // satellite will display.
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (g_encoder) {
+        auto labels = split_csv(g_encoder->marker_labels());
+        if (index < (int)labels.size() && !labels[index].empty())
+            return labels[index];
+    }
+    return "Marker " + std::to_string(index + 1);
+}
+
+static void hotkey_marker(void* data, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
+    if (!pressed) return;
+    auto* slot = static_cast<MarkerSlot*>(data);
+    drop_marker(marker_label_for(slot->index));
+}
+
+static void menu_marker(void* data) {
+    auto* slot = static_cast<MarkerSlot*>(data);
+    drop_marker(marker_label_for(slot->index));
+}
+
+// ── Decoder: timeslipping controls ───────────────────────────────────────────
+// These act on every multisite source present, which is what an operator
+// expects: one keypress holds the feed, however many sources are showing it.
+static void for_each_decoder(void (*fn)(DecoderControls*)) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (g_decoders.empty()) {
+        mlog_warn("no multisite source is active");
+        return;
+    }
+    for (auto* d : g_decoders) fn(d);
+}
+
+static void hotkey_pause(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
+    if (pressed) for_each_decoder([](DecoderControls* d) { d->pause(); });
+}
+static void hotkey_resume(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
+    if (pressed) for_each_decoder([](DecoderControls* d) { d->resume(); });
+}
+static void hotkey_toggle(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
+    if (pressed) for_each_decoder([](DecoderControls* d) { d->toggle_pause(); });
+}
+static void hotkey_live(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
+    if (pressed) for_each_decoder([](DecoderControls* d) { d->jump_to_live(); });
+}
+static void hotkey_status(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
+    if (pressed) {
+        for_each_decoder([](DecoderControls* d) { d->log_status(); });
+        std::lock_guard<std::mutex> lk(g_mtx);
+        if (g_encoder) g_encoder->log_status();
+    }
+}
+
+static void menu_pause(void*)  { for_each_decoder([](DecoderControls* d) { d->toggle_pause(); }); }
+static void menu_live(void*)   { for_each_decoder([](DecoderControls* d) { d->jump_to_live(); }); }
+static void menu_status(void*) { hotkey_status(nullptr, 0, nullptr, true); }
+
+// ── Registration ─────────────────────────────────────────────────────────────
+void register_ui() {
+    // Hotkeys: the primary live interface. Unbound by default — the operator
+    // assigns keys in Settings -> Hotkeys.
+    g_hotkeys.push_back(obs_hotkey_register_frontend(
+        "multisite.pause", obs_module_text("Hotkey.Pause"),
+        hotkey_pause, nullptr));
+    g_hotkeys.push_back(obs_hotkey_register_frontend(
+        "multisite.resume", obs_module_text("Hotkey.Resume"),
+        hotkey_resume, nullptr));
+    g_hotkeys.push_back(obs_hotkey_register_frontend(
+        "multisite.toggle", obs_module_text("Hotkey.Toggle"),
+        hotkey_toggle, nullptr));
+    g_hotkeys.push_back(obs_hotkey_register_frontend(
+        "multisite.jump_live", obs_module_text("Hotkey.JumpLive"),
+        hotkey_live, nullptr));
+    g_hotkeys.push_back(obs_hotkey_register_frontend(
+        "multisite.status", obs_module_text("Hotkey.Status"),
+        hotkey_status, nullptr));
+
+    for (int i = 0; i < 4; ++i) {
+        std::string name = "multisite.marker" + std::to_string(i + 1);
+        std::string desc = std::string(obs_module_text("Hotkey.Marker")) + " " +
+                           std::to_string(i + 1);
+        g_hotkeys.push_back(obs_hotkey_register_frontend(
+            name.c_str(), desc.c_str(), hotkey_marker, &g_slots[i]));
+    }
+
+#ifdef MULTISITE_HAVE_FRONTEND_API
+    // Tools menu: discoverable equivalents for anyone who hasn't set hotkeys.
+    obs_frontend_add_tools_menu_item(obs_module_text("Menu.Marker1"),
+                                     menu_marker, &g_slots[0]);
+    obs_frontend_add_tools_menu_item(obs_module_text("Menu.Marker2"),
+                                     menu_marker, &g_slots[1]);
+    obs_frontend_add_tools_menu_item(obs_module_text("Menu.TogglePause"),
+                                     menu_pause, nullptr);
+    obs_frontend_add_tools_menu_item(obs_module_text("Menu.JumpLive"),
+                                     menu_live, nullptr);
+    obs_frontend_add_tools_menu_item(obs_module_text("Menu.Status"),
+                                     menu_status, nullptr);
+    mlog_info("registered %zu hotkeys and 5 Tools menu items",
+              g_hotkeys.size());
+#else
+    (void)&menu_marker; (void)&menu_pause; (void)&menu_live; (void)&menu_status;
+    mlog_info("registered %zu hotkeys (assign keys in Settings -> Hotkeys); "
+              "Tools-menu items need a build with the OBS frontend API",
+              g_hotkeys.size());
+#endif
+}
+
+void unregister_ui() {
+    for (obs_hotkey_id id : g_hotkeys) obs_hotkey_unregister(id);
+    g_hotkeys.clear();
+}
+
+} // namespace multisite_obs

@@ -9,6 +9,7 @@
 //
 #include <obs-module.h>
 #include "plugin_log.h"
+#include "multisite_ui.h"
 
 #include "../core/session.h"
 #include "../core/cmaf_muxer.h"
@@ -43,6 +44,7 @@ static constexpr char S_SEGDUR[]    = "segment_duration_s";
 static constexpr char S_TRACKLBL[]  = "track_labels";   // comma-separated
 static constexpr char S_TAGS[]      = "use_object_tags";
 static constexpr char S_CHANLBL[]   = "channel_labels";
+static constexpr char S_MARKERS[]   = "marker_labels";
 
 // A finished fragment on its way from the muxer to the durable spool.
 struct PendingFragment {
@@ -51,8 +53,10 @@ struct PendingFragment {
     double pts_offset_s = 0.0;
 };
 
-struct OutputCtx {
+// Exposes marker drops to the hotkeys and Tools menu while broadcasting.
+struct OutputCtx : EncoderControls {
     obs_output_t* output = nullptr;
+    std::string marker_label_csv;
     std::unique_ptr<S3Transport> transport;
     std::unique_ptr<Session>     session;
     std::unique_ptr<CmafMuxer>   muxer;
@@ -88,6 +92,11 @@ struct OutputCtx {
     uint64_t last_logged_seq = 0;
     int64_t  last_log_ms = 0;
     LinkHealth last_health = LinkHealth::Healthy;
+
+    // EncoderControls — driven by hotkeys and the Tools menu.
+    void drop_marker(const std::string& label) override;
+    std::string marker_labels() const override;
+    void log_status() override;
 };
 
 static std::vector<std::string> split_csv(const std::string& s) {
@@ -228,6 +237,29 @@ static bool build_tracks(OutputCtx* ctx, std::vector<CmafTrack>& tracks,
     return true;
 }
 
+// ── EncoderControls (hotkeys / Tools menu) ───────────────────────────────────
+void OutputCtx::drop_marker(const std::string& label) {
+    std::lock_guard<std::mutex> lk(mtx);
+    if (!session) { mlog_warn("marker '%s' ignored — not live", label.c_str()); return; }
+    session->add_marker(label);
+    mlog_info("marker dropped: '%s' at segment %llu", label.c_str(),
+              (unsigned long long)session->status().last_enqueued + 1);
+}
+
+std::string OutputCtx::marker_labels() const { return marker_label_csv; }
+
+void OutputCtx::log_status() {
+    std::lock_guard<std::mutex> lk(mtx);
+    if (!session) { mlog_info("encoder: idle"); return; }
+    auto st = session->status();
+    mlog_info("encoder: event=%s confirmed=%llu pending=%zu retries=%llu "
+              "%.1f MB uploaded",
+              st.event_id.c_str(),
+              (unsigned long long)st.confirmed_total, st.pending,
+              (unsigned long long)st.retries,
+              (double)st.bytes_uploaded / (1024.0 * 1024.0));
+}
+
 // ── OBS callbacks ─────────────────────────────────────────────────────────────
 static const char* out_name(void*) { return obs_module_text("Multisite.Output"); }
 
@@ -246,6 +278,8 @@ static void out_defaults(obs_data_t* s) {
     obs_data_set_default_string(s, S_CHANLBL,
         "Main L,Main R,Sermon ISO,Click,Spare 5,Spare 6,Spare 7,Spare 8");
     obs_data_set_default_bool(s, S_TAGS, false);
+    obs_data_set_default_string(s, S_MARKERS,
+        "Sermon Start,Offering,Go to local,Dismissal");
 }
 
 static obs_properties_t* out_props(void*) {
@@ -263,6 +297,8 @@ static obs_properties_t* out_props(void*) {
     obs_properties_add_text(p, S_CHANLBL, obs_module_text("ChannelLabels"), OBS_TEXT_DEFAULT);
     // R2 rejects x-amz-tagging; leave off unless the store supports tagging.
     obs_properties_add_bool(p, S_TAGS, obs_module_text("UseObjectTags"));
+    obs_properties_add_text(p, S_MARKERS, obs_module_text("MarkerLabels"),
+                            OBS_TEXT_DEFAULT);
     return p;
 }
 
@@ -325,6 +361,7 @@ static bool out_start(void* data) {
     std::string labels     = obs_data_get_string(s, S_TRACKLBL);
     std::string chan_labels = obs_data_get_string(s, S_CHANLBL);
     sc.use_object_tags     = obs_data_get_bool(s, S_TAGS);
+    ctx->marker_label_csv  = obs_data_get_string(s, S_MARKERS);
     obs_data_release(s);
 
     if (s3.bucket.empty() ||
@@ -454,6 +491,7 @@ static bool out_start(void* data) {
     }
     ctx->started = true;
     ctx->accepting = true;      // packets may now enter the muxer
+    register_encoder_controls(ctx);   // hotkeys can now drop markers
     mlog_info("multisite output started — room=%s event=%s",
               sc.room_id.c_str(), ctx->session->event_id().c_str());
     return true;
@@ -492,6 +530,7 @@ static void out_stop(void* data, uint64_t) {
                       "encoder's keyframe interval is <= the segment duration");
         ctx->session->end();                    // drains spool, marks ended
     }
+    unregister_encoder_controls(ctx);
     ctx->started = false;
     ctx->session.reset(); ctx->muxer.reset(); ctx->transport.reset();
 }

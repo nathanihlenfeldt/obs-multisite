@@ -118,6 +118,19 @@ struct FakeEncoder {
         store.put("rooms/" + room + "/live.json",
                   std::vector<uint8_t>(j.begin(), j.end()), "", {});
     }
+    MarkerList markers;
+    void drop_marker(const std::string& label) {
+        Marker mk;
+        mk.seq = next_seq;                 // applies at the current live edge
+        mk.at_ms = clock_ms;
+        mk.type = "cue";
+        mk.label = label;
+        mk.id = label + "-id";
+        markers.markers.push_back(mk);
+        auto j = markers.to_json();
+        store.put("events/" + event + "/markers.json",
+                  std::vector<uint8_t>(j.begin(), j.end()), "", {});
+    }
     void end() {
         manifest.status = "ended";
         publish_manifest();
@@ -359,7 +372,56 @@ int main() {
         CHECK(dec.stats().gaps_waited > 0, "gap recorded");
     }
 
-    std::printf("== 9. Head never runs past the live edge ==\n");
+    std::printf("== 9. Markers are read and can be jumped to ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTMMMMMMMMMMMMMMMMMMM");
+        enc.publish_start();
+        for (int i = 0; i < 4; ++i) enc.publish_segment();
+        enc.drop_marker("Sermon Start");          // at seq 4
+        for (int i = 0; i < 6; ++i) enc.publish_segment();
+        enc.drop_marker("Offering");              // at seq 10
+        for (int i = 0; i < 3; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d10").string();
+        cfg.prebuffer_segments = 0; cfg.download_ahead_segments = 40;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+
+        auto mks = dec.markers();
+        CHECK(mks.size() == 2, "both markers read from markers.json");
+        CHECK(mks.size() == 2 && mks[0].label == "Sermon Start",
+              "marker labels preserved");
+        CHECK(mks.size() == 2 && mks[0].seq == 4,
+              "marker carries the sequence it was dropped at");
+
+        for (int i = 0; i < 8; ++i) dec.pump_downloads(10);
+        dec.start();
+        CHECK(dec.jump_to_marker("Sermon Start-id"), "jumped to a marker");
+        CHECK(dec.playback_head() == 4, "head moved to the marker's segment");
+
+        auto cur = dec.current_marker();
+        CHECK(cur && cur->label == "Sermon Start",
+              "current_marker reports where we are in the service");
+
+        CHECK(dec.jump_to_marker("Offering-id"), "jumped to the later marker");
+        CHECK(dec.playback_head() == 10, "head moved to segment 10");
+        cur = dec.current_marker();
+        CHECK(cur && cur->label == "Offering", "current marker updated");
+
+        CHECK(!dec.jump_to_marker("does-not-exist"),
+              "unknown marker id is rejected");
+
+        // Markers must not survive an event change.
+        FakeEncoder enc2(store, "r", "01EVENTNNNNNNNNNNNNNNNNNNN");
+        enc2.publish_start();
+        for (int i = 0; i < 3; ++i) enc2.publish_segment();
+        dec.poll(enc2.clock_ms);
+        CHECK(dec.markers().empty(), "markers cleared when the event changes");
+    }
+
+    std::printf("== 10. Head never runs past the live edge ==\n");
     {
         FakeStore store;
         FakeEncoder enc(store, "r", "01EVENTIIIIIIIIIIIIIIIIIII");

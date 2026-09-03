@@ -17,6 +17,7 @@
 #include <util/platform.h>
 
 #include "plugin_log.h"
+#include "multisite_ui.h"
 
 #include "../core/decoder_session.h"
 #include "../core/cmaf_decoder.h"
@@ -58,7 +59,8 @@ struct PendingFrame {
     DecodedAudioFrame audio;
 };
 
-struct SourceCtx {
+// Exposes timeslipping to hotkeys and the Tools menu.
+struct SourceCtx : DecoderControls {
     obs_source_t* source = nullptr;
 
     std::unique_ptr<S3Transport>    transport;
@@ -87,6 +89,16 @@ struct SourceCtx {
     int64_t  last_video_pts_ns = 0;
     bool     logged_av_offset = false;
     std::atomic<bool> checked_layout{false};
+
+    // DecoderControls — driven by hotkeys and the Tools menu.
+    void pause() override;
+    void resume() override;
+    void toggle_pause() override;
+    void jump_to_live() override;
+    void log_status() override;
+
+    // Marker chosen in the properties dialog, acted on by the Jump button.
+    std::string pending_marker_id;
     // Wall clock when playback was paused, so the playout clock can be
     // advanced by the same amount on resume (see on_resume).
     std::atomic<uint64_t> pause_started_ns{0};
@@ -527,6 +539,7 @@ static void stop_workers(SourceCtx* ctx) {
 
 static void src_update(void* data, obs_data_t* s) {
     auto* ctx = static_cast<SourceCtx*>(data);
+    unregister_decoder_controls(ctx);
     stop_workers(ctx);
 
     S3Config s3;
@@ -560,6 +573,7 @@ static void src_update(void* data, obs_data_t* s) {
         ctx->session   = std::make_unique<DecoderSession>(dc, *ctx->transport);
     }
 
+    register_decoder_controls(ctx);      // hotkeys act on this source
     ctx->running = true;
     ctx->deliver_thread = std::thread(deliver_loop, ctx);
     ctx->poll_thread    = std::thread(poll_loop, ctx);
@@ -577,6 +591,7 @@ static void* src_create(obs_data_t* settings, obs_source_t* source) {
 
 static void src_destroy(void* data) {
     auto* ctx = static_cast<SourceCtx*>(data);
+    unregister_decoder_controls(ctx);
     stop_workers(ctx);
     {
         std::lock_guard<std::mutex> lk(ctx->mtx);
@@ -594,92 +609,138 @@ static void src_defaults(obs_data_t* s) {
     obs_data_set_default_int(s, S_KEEP, 200);
 }
 
-// Timeslipping buttons. Returning false means "properties layout unchanged".
-static bool on_pause(obs_properties_t*, obs_property_t*, void* data) {
-    auto* ctx = static_cast<SourceCtx*>(data);
-    std::lock_guard<std::mutex> lk(ctx->mtx);
-    if (ctx->session) {
-        // Stop delivery immediately, then stop pulling new segments.
-        ctx->paused = true;
-        ctx->pause_started_ns = os_gettime_ns();
-        ctx->session->pause();
-        mlog_info("source: PAUSED at segment %llu — cache keeps filling",
-                  (unsigned long long)ctx->session->playback_head());
-    }
-    return false;
+// ── DecoderControls: one implementation, shared by buttons and hotkeys ───────
+void SourceCtx::pause() {
+    std::lock_guard<std::mutex> lk(mtx);
+    if (!session) return;
+    // Stop delivery immediately, then stop pulling new segments.
+    paused = true;
+    pause_started_ns = os_gettime_ns();
+    session->pause();
+    mlog_info("source: PAUSED at segment %llu — cache keeps filling",
+              (unsigned long long)session->playback_head());
 }
-static bool on_resume(obs_properties_t*, obs_property_t*, void* data) {
-    auto* ctx = static_cast<SourceCtx*>(data);
-    std::lock_guard<std::mutex> lk(ctx->mtx);
-    if (!ctx->session) return false;
 
-    // The playout clock maps media time to wall time via playout_base_ns.
-    // While paused, wall time keeps running but media time does not, so on
-    // resume every frame's due time would already be in the past — they'd all
-    // be dumped out at once and OBS would report audio lagging by the length
-    // of the pause. Advance the base by the paused duration instead.
-    const uint64_t paused_at = ctx->pause_started_ns.exchange(0);
+void SourceCtx::resume() {
+    std::lock_guard<std::mutex> lk(mtx);
+    if (!session) return;
+
+    // The playout clock maps media time to wall time. While paused, wall time
+    // keeps running but media time does not, so without this every frame would
+    // be past due on resume and OBS would report audio lagging by the length
+    // of the hold.
+    const uint64_t paused_at = pause_started_ns.exchange(0);
     if (paused_at != 0) {
         const uint64_t paused_for = os_gettime_ns() - paused_at;
-        ctx->playout_base_ns += paused_for;
+        playout_base_ns += paused_for;
         // Shift the frames held during the pause onto the new clock rather
-        // than discarding them: they are the content the operator paused on,
-        // so playback must continue from exactly there.
+        // than discarding them: that is the content the operator paused on.
         {
-            std::lock_guard<std::mutex> qlk(ctx->dq_mtx);
-            for (auto& q : ctx->dq) q.timestamp += paused_for;
+            std::lock_guard<std::mutex> qlk(dq_mtx);
+            for (auto& q : dq) q.timestamp += paused_for;
         }
-        ctx->dq_cv.notify_all();
+        dq_cv.notify_all();
         mlog_info("source: playout clock advanced %.1fs to cover the pause",
                   (double)paused_for / 1e9);
     }
 
-    ctx->paused = false;          // delivery resumes at once
-    ctx->session->resume();
+    paused = false;               // delivery resumes at once
+    session->resume();
     mlog_info("source: RESUMED from segment %llu (%.0fs behind live)",
-              (unsigned long long)ctx->session->playback_head(),
-              ctx->session->behind_live_s());
-    return false;
+              (unsigned long long)session->playback_head(),
+              session->behind_live_s());
 }
-static bool on_jump_live(obs_properties_t*, obs_property_t*, void* data) {
-    auto* ctx = static_cast<SourceCtx*>(data);
-    std::lock_guard<std::mutex> lk(ctx->mtx);
-    if (ctx->session) {
+
+void SourceCtx::toggle_pause() {
+    const bool was = paused.load();
+    if (was) resume(); else pause();
+}
+
+void SourceCtx::jump_to_live() {
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        if (!session) return;
         // A jump restarts the decoder and re-anchors the clock, so any pending
         // pause offset is irrelevant — and the operator expects picture back.
-        ctx->pause_started_ns = 0;
-        ctx->paused = false;
-        ctx->session->jump_to_live();
+        pause_started_ns = 0;
+        session->jump_to_live();
         mlog_info("source: JUMPED TO LIVE (segment %llu)",
+                  (unsigned long long)session->playback_head());
+    }
+    paused = false;
+}
+
+void SourceCtx::log_status() {
+    std::lock_guard<std::mutex> lk(mtx);
+    if (!session) { mlog_info("source: not configured"); return; }
+    auto& st = session->stats();
+    auto cur = session->current_marker();
+    mlog_info("source status: room=%d head=%llu live=%llu behind=%.0fs "
+              "buffered=%.0fs cached=%zu downloaded=%llu dl_fail=%llu "
+              "checksum_fail=%llu served=%llu frames_out=%llu%s%s",
+              (int)session->room_state(),
+              (unsigned long long)session->playback_head(),
+              (unsigned long long)session->live_edge(),
+              session->behind_live_s(),
+              session->buffered_ahead_s(),
+              session->cache().count(),
+              (unsigned long long)st.downloaded,
+              (unsigned long long)st.download_failures,
+              (unsigned long long)st.checksum_failures,
+              (unsigned long long)st.served,
+              (unsigned long long)frames_out.load(),
+              cur ? " marker=" : "",
+              cur ? cur->label.c_str() : "");
+    if (!session->last_error().empty())
+        mlog_info("source last error: %s", session->last_error().c_str());
+}
+
+// Property buttons delegate to the same methods the hotkeys use.
+static bool on_pause(obs_properties_t*, obs_property_t*, void* data) {
+    static_cast<SourceCtx*>(data)->pause();  return false;
+}
+static bool on_resume(obs_properties_t*, obs_property_t*, void* data) {
+    static_cast<SourceCtx*>(data)->resume(); return false;
+}
+static bool on_jump_live(obs_properties_t*, obs_property_t*, void* data) {
+    static_cast<SourceCtx*>(data)->jump_to_live(); return false;
+}
+static bool on_status(obs_properties_t*, obs_property_t*, void* data) {
+    static_cast<SourceCtx*>(data)->log_status(); return false;
+}
+
+// Jump to a marker published by the main site. The list is rebuilt whenever the
+// properties dialog is opened, so it reflects whatever cues have been dropped.
+static bool on_jump_marker(obs_properties_t*, obs_property_t* prop, void* data) {
+    auto* ctx = static_cast<SourceCtx*>(data);
+    (void)prop;
+    std::lock_guard<std::mutex> lk(ctx->mtx);
+    if (!ctx->session) return false;
+    if (ctx->pending_marker_id.empty()) {
+        mlog_info("source: pick a marker first");
+        return false;
+    }
+    if (ctx->session->jump_to_marker(ctx->pending_marker_id)) {
+        ctx->paused = false;
+        ctx->pause_started_ns = 0;
+        mlog_info("source: jumped to marker '%s' (segment %llu)",
+                  ctx->pending_marker_id.c_str(),
                   (unsigned long long)ctx->session->playback_head());
+    } else {
+        mlog_warn("source: could not jump to marker '%s' — it may no longer "
+                  "be retained", ctx->pending_marker_id.c_str());
     }
     return false;
 }
-static bool on_status(obs_properties_t*, obs_property_t*, void* data) {
+
+static bool on_marker_selected(void* data, obs_properties_t*,
+                               obs_property_t*, obs_data_t* settings) {
     auto* ctx = static_cast<SourceCtx*>(data);
-    std::lock_guard<std::mutex> lk(ctx->mtx);
-    if (!ctx->session) { mlog_info("source: not configured"); return false; }
-    auto& s = ctx->session->stats();
-    mlog_info("source status: room=%d head=%llu live=%llu behind=%.0fs "
-              "buffered=%.0fs cached=%zu downloaded=%llu dl_fail=%llu "
-              "checksum_fail=%llu served=%llu frames_out=%llu",
-              (int)ctx->session->room_state(),
-              (unsigned long long)ctx->session->playback_head(),
-              (unsigned long long)ctx->session->live_edge(),
-              ctx->session->behind_live_s(),
-              ctx->session->buffered_ahead_s(),
-              ctx->session->cache().count(),
-              (unsigned long long)s.downloaded,
-              (unsigned long long)s.download_failures,
-              (unsigned long long)s.checksum_failures,
-              (unsigned long long)s.served,
-              (unsigned long long)ctx->frames_out.load());
-    if (!ctx->session->last_error().empty())
-        mlog_info("source last error: %s", ctx->session->last_error().c_str());
+    ctx->pending_marker_id = obs_data_get_string(settings, "marker_id");
     return false;
 }
 
-static obs_properties_t* src_props(void*) {
+static obs_properties_t* src_props(void* data) {
     obs_properties_t* p = obs_properties_create();
     obs_properties_add_text(p, S_ENDPOINT, obs_module_text("EndpointHost"), OBS_TEXT_DEFAULT);
     obs_properties_add_text(p, S_ACCOUNT,  obs_module_text("R2AccountID"),  OBS_TEXT_DEFAULT);
@@ -696,6 +757,27 @@ static obs_properties_t* src_props(void*) {
     obs_properties_add_button(p, "btn_resume", obs_module_text("Resume"),     on_resume);
     obs_properties_add_button(p, "btn_live",   obs_module_text("JumpToLive"), on_jump_live);
     obs_properties_add_button(p, "btn_status", obs_module_text("LogStatus"),  on_status);
+
+    // Markers published by the main site. Populated from the manifest the
+    // decoder is already polling, so it lists the operator's own cue names.
+    obs_property_t* mk = obs_properties_add_list(
+        p, "marker_id", obs_module_text("JumpToMarker"),
+        OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+    if (data) {
+        auto* ctx = static_cast<SourceCtx*>(data);
+        std::lock_guard<std::mutex> lk(ctx->mtx);
+        if (ctx->session) {
+            for (const auto& m : ctx->session->markers()) {
+                std::string label = m.label + "  (segment " +
+                                    std::to_string(m.seq) + ")";
+                obs_property_list_add_string(mk, label.c_str(), m.id.c_str());
+            }
+        }
+    }
+    obs_property_set_modified_callback2(mk, on_marker_selected, data);
+    obs_properties_add_button(p, "btn_jump_marker",
+                              obs_module_text("JumpToMarkerButton"),
+                              on_jump_marker);
     return p;
 }
 

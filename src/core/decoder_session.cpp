@@ -63,6 +63,8 @@ RoomState DecoderSession::poll(int64_t now_override) {
     // and sequence space.
     if (live.event_id != m_event_id) {
         m_event_id = live.event_id;
+        m_markers = MarkerList{};        // markers belong to an event
+        m_markers_checked_ms = 0;
         m_cache->set_event(m_event_id);
         m_head_set = false;
         m_init_sent = false;
@@ -93,7 +95,22 @@ RoomState DecoderSession::poll(int64_t now_override) {
     if (m_manifest.stream_duration_hint() > 0.1)
         m_segment_duration_s = m_manifest.stream_duration_hint();
 
-    // 3. Stale detection: an encoder that died leaves live.json pointing at an
+    // 3. Markers. Small file, but no need to re-fetch on every poll.
+    if (now - m_markers_checked_ms > 5000) {
+        m_markers_checked_ms = now;
+        auto mk = m_tx.get(event_prefix() + "markers.json");
+        if (mk.success) {
+            try {
+                m_markers = MarkerList::from_json(
+                    std::string(mk.body.begin(), mk.body.end()));
+            } catch (...) {
+                // A malformed markers file must not disturb playback.
+            }
+        }
+        // A 404 simply means no markers have been dropped yet.
+    }
+
+    // 4. Stale detection: an encoder that died leaves live.json pointing at an
     // event whose manifest stops advancing. Don't poll a corpse forever.
     const int64_t age = now - m_manifest_updated_ms;
     if (m_manifest.status == "ended") {
@@ -274,6 +291,31 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
     ++m_head;
     m_stats.served++;
     return out;
+}
+
+std::vector<Marker> DecoderSession::markers() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_markers.markers;
+}
+
+bool DecoderSession::jump_to_marker(const std::string& marker_id) {
+    uint64_t target = 0;
+    bool found = false;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        for (const auto& mk : m_markers.markers)
+            if (mk.id == marker_id) { target = mk.seq; found = true; break; }
+    }
+    if (!found) return false;
+    return seek(target);          // seek() bounds-checks and raises a jump
+}
+
+std::optional<Marker> DecoderSession::current_marker() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    std::optional<Marker> best;
+    for (const auto& mk : m_markers.markers)
+        if (mk.seq <= m_head && (!best || mk.seq >= best->seq)) best = mk;
+    return best;
 }
 
 uint64_t DecoderSession::discontinuity_id() const {

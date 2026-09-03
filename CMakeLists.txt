@@ -219,13 +219,40 @@ if(BUILD_OBS_PLUGIN)
         endif()
     endif()
 
+    # The Tools-menu items need obs-frontend-api, which OBS only builds as part
+    # of its UI (and which pulls in Qt). Hotkeys live in libobs itself, so the
+    # plugin is fully usable without this; enable it if you have the library.
+    option(ENABLE_FRONTEND_API "Build Tools-menu items (needs obs-frontend-api)" OFF)
+
     add_library(obs-multisite MODULE
         src/obs/plugin-main.cpp
         src/obs/multisite_output.cpp
-        src/obs/multisite_source.cpp)
+        src/obs/multisite_source.cpp
+        src/obs/multisite_ui.cpp)
     target_include_directories(obs-multisite PRIVATE src src/core)
     target_compile_definitions(obs-multisite PRIVATE
         PLUGIN_VERSION="${PROJECT_VERSION}")
+
+    if(ENABLE_FRONTEND_API)
+        if(LIBOBS_FRONTEND_LIBRARY)
+            set(_frontend_lib "${LIBOBS_FRONTEND_LIBRARY}")
+        else()
+            find_library(_frontend_lib NAMES obs-frontend-api)
+        endif()
+        if(_frontend_lib)
+            target_link_libraries(obs-multisite PRIVATE "${_frontend_lib}")
+            target_compile_definitions(obs-multisite PRIVATE
+                MULTISITE_HAVE_FRONTEND_API)
+            message(STATUS "obs-frontend-api: ${_frontend_lib} (Tools menu on)")
+        else()
+            message(WARNING
+                "ENABLE_FRONTEND_API=ON but obs-frontend-api was not found; "
+                "building without Tools-menu items (hotkeys still work)")
+        endif()
+    else()
+        message(STATUS "Tools menu disabled (hotkeys only) — "
+                       "set -DENABLE_FRONTEND_API=ON to include it")
+    endif()
     target_link_libraries(obs-multisite PRIVATE
         OBS::libobs multisite_core multisite_s3 multisite_cmaf)
     # FFmpeg comes through multisite_cmaf's INTERFACE link (ffmpeg_iface).

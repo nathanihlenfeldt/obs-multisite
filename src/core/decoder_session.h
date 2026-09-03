@@ -89,6 +89,18 @@ public:
     uint64_t   live_edge()    const { return m_latest_seq; }
     uint64_t   earliest_available() const { return m_first_available_seq; }
 
+    // ── Markers ──────────────────────────────────────────────────────────────
+    // Cues published by the main site (markers.json), refreshed on poll.
+    std::vector<Marker> markers() const;
+
+    // Move playback to a marker. Returns false if the marker is unknown or its
+    // segment is no longer retained.
+    bool jump_to_marker(const std::string& marker_id);
+
+    // The marker at or before the playback head — i.e. "where are we in the
+    // service", for display.
+    std::optional<Marker> current_marker() const;
+
     // Increments whenever playback jumps (seek, jump-to-live, event change).
     // The host must tear down and restart its decoder when this changes: the
     // next fragment will carry an unrelated baseMediaDecodeTime, which would
@@ -122,7 +134,9 @@ private:
     PlayState   m_play = PlayState::Stopped;
     std::string m_last_error;
 
-    Manifest m_manifest;
+    Manifest   m_manifest;
+    MarkerList m_markers;
+    int64_t    m_markers_checked_ms = 0;
     uint64_t m_latest_seq = 0;
     uint64_t m_first_available_seq = 0;
     double   m_segment_duration_s = 6.0;

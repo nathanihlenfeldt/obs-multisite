@@ -140,6 +140,19 @@ source tears the decoder down and restarts it from the re-sent init segment —
 feeding fragments across a jump would otherwise decode as out-of-order
 timestamps and a glitched picture.
 
+### Markers and operator controls
+
+The main site drops cues (`markers.json`); satellites read them and can jump to
+one. `src/obs/multisite_ui.cpp` registers **hotkeys** — pause, resume, toggle,
+jump-to-live, log status, and four marker drops — which work on whatever is
+currently live via a small registry, so keys keep working as sources and
+broadcasts come and go. Marker labels come from the encoder's own settings, so
+a satellite's marker list shows the operator's cue names.
+
+`tests/test_decoder.cpp` covers reading `markers.json`, jumping to a marker,
+reporting the current marker, rejecting unknown ids, and clearing markers when
+the event changes.
+
 ### What's proven
 
 `tests/test_reliability.cpp` runs on every push (Linux and Windows) and checks:
@@ -186,8 +199,13 @@ repository's **Actions** tab. For a public repository this is free.
   companion output plugin (next phase).
 - **Markers are authored but not consumed.** `Session::add_marker` publishes
   `markers.json`; the decoder does not yet read it or offer jump-to-marker.
-- **No Qt UI yet.** Timeslipping is driven from buttons in the source
-  properties; the scrub bar, behind-live indicator and dock come in Phase 5.
+- **No Qt dock yet.** Operator control is via **hotkeys** (Settings → Hotkeys)
+  plus buttons in the source/output properties. A Qt dock with a scrub bar and
+  behind-live readout is optional polish; hotkeys are the primary interface for
+  a live operator and need no Qt.
+- **Tools-menu items are opt-in.** They need `obs-frontend-api`, which OBS only
+  builds as part of its Qt UI. Build with `-DENABLE_FRONTEND_API=ON` if you have
+  that library; hotkeys work either way.
 
 ## Roadmap
 
