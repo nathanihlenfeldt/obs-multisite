@@ -330,7 +330,25 @@ jobs:
               }
           }
           # Record which build this is, so a dockless fallback is obvious from
-          # the artifact rather than only from the log.
-          $mode = if ($env:HAVE_QT -eq "1") { "with operator docks (Qt)" }
-                  else { "hotkeys only (no Qt docks)" }
-          Set-Content -Path dist/BUILD-INFO.txt
+          # the artifact rather than only from the log. Kept to simple
+          # single-line statements: a multi-line if-expression breaks the
+          # PowerShell parser here and silently drops the next argument.
+          $mode = "hotkeys only (no Qt docks)"
+          if ($env:HAVE_QT -eq "1") { $mode = "with operator docks (Qt)" }
+          $info = "obs-multisite build" + [Environment]::NewLine +
+                  "OBS tag:  $env:OBS_TAG" + [Environment]::NewLine +
+                  "UI mode:  $mode"
+          Set-Content -Path dist/BUILD-INFO.txt -Value $info
+          Write-Host "BUILD MODE: $mode"
+
+          # NOTE: Qt itself is NOT bundled. OBS ships its own Qt6 and a plugin
+          # must use the host's copy — shipping a second Qt would either be
+          # ignored or cause a version clash.
+          Write-Host "--- staged ---"
+          Get-ChildItem -Recurse dist | Select-Object FullName | Format-Table -AutoSize
+
+      - uses: actions/upload-artifact@v5
+        if: success()
+        with:
+          name: obs-multisite-windows
+          path: dist/
