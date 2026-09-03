@@ -140,6 +140,24 @@ source tears the decoder down and restarts it from the re-sent init segment —
 feeding fragments across a jump would otherwise decode as out-of-order
 timestamps and a glitched picture.
 
+### Operator docks (`src/obs/ui/`)
+
+Two Qt docks OBS remembers the position of:
+
+- **Multisite Encoder** — storage settings (saved as they are edited, so
+  credentials are never retyped), Go Live / End, marker buttons, and the
+  reliability readout that matters mid-service: segments sent, queue depth,
+  retries and link health. Failures are shown in the dock rather than left in
+  the log. This replaces the Lua control script.
+- **Multisite Decoder** — room state, a large "behind live" readout, and a
+  timeline showing the retained window, buffered content, playhead, live edge
+  and marker ticks. Click the timeline to scrub. Pause / Resume / Jump-to-live,
+  plus a marker list to jump to a cue.
+
+`src/obs/broadcast_controller.cpp` owns output and encoder creation and is
+Qt-free, so the docks stay thin views over it and the same controller is
+reachable from hotkeys.
+
 ### Markers and operator controls
 
 The main site drops cues (`markers.json`); satellites read them and can jump to
@@ -199,13 +217,10 @@ repository's **Actions** tab. For a public repository this is free.
   companion output plugin (next phase).
 - **Markers are authored but not consumed.** `Session::add_marker` publishes
   `markers.json`; the decoder does not yet read it or offer jump-to-marker.
-- **No Qt dock yet.** Operator control is via **hotkeys** (Settings → Hotkeys)
-  plus buttons in the source/output properties. A Qt dock with a scrub bar and
-  behind-live readout is optional polish; hotkeys are the primary interface for
-  a live operator and need no Qt.
-- **Tools-menu items are opt-in.** They need `obs-frontend-api`, which OBS only
-  builds as part of its Qt UI. Build with `-DENABLE_FRONTEND_API=ON` if you have
-  that library; hotkeys work either way.
+- **Docks need a Qt build.** `-DENABLE_QT=ON` builds the operator docks; the
+  plugin is fully functional without them (hotkeys plus source/output
+  properties). CI enables them when Qt6 and `obs-frontend-api` are available and
+  falls back gracefully when they are not.
 
 ## Roadmap
 

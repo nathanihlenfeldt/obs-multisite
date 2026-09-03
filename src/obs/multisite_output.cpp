@@ -97,6 +97,7 @@ struct OutputCtx : EncoderControls {
     void drop_marker(const std::string& label) override;
     std::string marker_labels() const override;
     void log_status() override;
+    EncoderStats stats() const override;
 };
 
 static std::vector<std::string> split_csv(const std::string& s) {
@@ -258,6 +259,22 @@ void OutputCtx::log_status() {
               (unsigned long long)st.confirmed_total, st.pending,
               (unsigned long long)st.retries,
               (double)st.bytes_uploaded / (1024.0 * 1024.0));
+}
+
+EncoderStats OutputCtx::stats() const {
+    EncoderStats es;
+    std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(mtx));
+    if (!session) return es;
+    auto st = session->status();
+    es.event_id  = st.event_id;
+    es.confirmed = st.confirmed_total;
+    es.pending   = (unsigned long long)st.pending;
+    es.retries   = st.retries;
+    es.bytes     = st.bytes_uploaded;
+    es.link_health = st.health == LinkHealth::Healthy  ? 0
+                   : st.health == LinkHealth::Degraded ? 1 : 2;
+    es.last_error = session->last_error();
+    return es;
 }
 
 // ── OBS callbacks ─────────────────────────────────────────────────────────────

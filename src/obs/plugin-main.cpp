@@ -9,6 +9,9 @@ void register_output();
 void register_source();
 void register_ui();
 void unregister_ui();
+#ifdef MULTISITE_HAVE_QT
+void register_docks();
+#endif
 }
 
 MODULE_EXPORT const char* obs_module_description(void) {
@@ -22,6 +25,9 @@ bool obs_module_load(void) {
     multisite_obs::register_output();   // main campus: sends
     multisite_obs::register_source();   // satellite: receives
     multisite_obs::register_ui();       // hotkeys + Tools menu (no Qt needed)
+#ifdef MULTISITE_HAVE_QT
+    multisite_obs::register_docks();    // encoder + decoder operator panels
+#endif
     return true;
 }
 void obs_module_unload(void) {

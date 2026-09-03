@@ -223,17 +223,42 @@ if(BUILD_OBS_PLUGIN)
     # of its UI (and which pulls in Qt). Hotkeys live in libobs itself, so the
     # plugin is fully usable without this; enable it if you have the library.
     option(ENABLE_FRONTEND_API "Build Tools-menu items (needs obs-frontend-api)" OFF)
+    # The operator docks need Qt6 and obs-frontend-api. OBS only builds
+    # obs-frontend-api as part of its Qt UI, so a CI build must configure OBS
+    # with ENABLE_UI=ON (building just the libobs and obs-frontend-api targets
+    # is enough — the whole OBS app is not needed).
+    option(ENABLE_QT "Build the operator docks (needs Qt6 + obs-frontend-api)" OFF)
 
     add_library(obs-multisite MODULE
         src/obs/plugin-main.cpp
         src/obs/multisite_output.cpp
         src/obs/multisite_source.cpp
-        src/obs/multisite_ui.cpp)
+        src/obs/multisite_ui.cpp
+        src/obs/broadcast_controller.cpp)
     target_include_directories(obs-multisite PRIVATE src src/core)
     target_compile_definitions(obs-multisite PRIVATE
         PLUGIN_VERSION="${PROJECT_VERSION}")
 
-    if(ENABLE_FRONTEND_API)
+    if(ENABLE_QT)
+        set(CMAKE_AUTOMOC ON)
+        find_package(Qt6 REQUIRED COMPONENTS Widgets)
+        if(LIBOBS_FRONTEND_LIBRARY)
+            set(_qt_frontend "${LIBOBS_FRONTEND_LIBRARY}")
+        else()
+            find_library(_qt_frontend NAMES obs-frontend-api REQUIRED)
+        endif()
+        target_sources(obs-multisite PRIVATE
+            src/obs/ui/encoder_dock.cpp
+            src/obs/ui/decoder_dock.cpp
+            src/obs/ui/dock_register.cpp)
+        set_target_properties(obs-multisite PROPERTIES AUTOMOC ON)
+        target_link_libraries(obs-multisite PRIVATE Qt6::Widgets "${_qt_frontend}")
+        target_compile_definitions(obs-multisite PRIVATE
+            MULTISITE_HAVE_QT MULTISITE_HAVE_FRONTEND_API)
+        message(STATUS "Qt docks enabled (Qt6 ${Qt6_VERSION}, frontend ${_qt_frontend})")
+    endif()
+
+    if(ENABLE_FRONTEND_API AND NOT ENABLE_QT)
         if(LIBOBS_FRONTEND_LIBRARY)
             set(_frontend_lib "${LIBOBS_FRONTEND_LIBRARY}")
         else()

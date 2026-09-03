@@ -96,9 +96,14 @@ struct SourceCtx : DecoderControls {
     void toggle_pause() override;
     void jump_to_live() override;
     void log_status() override;
+    void snapshot(DecoderSnapshot& out) const override;
+    void jump_to_marker(const std::string& id) override;
+    void seek(unsigned long long seq) override;
 
     // Marker chosen in the properties dialog, acted on by the Jump button.
     std::string pending_marker_id;
+    std::string room_id_for_display;
+    std::atomic<int> audio_channels{0};
     // Wall clock when playback was paused, so the playout clock can be
     // advanced by the same amount on resume (see on_resume).
     std::atomic<uint64_t> pause_started_ns{0};
@@ -322,6 +327,7 @@ static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
                 mlog_info("audio: %d channel(s), OBS global layout %d channel(s)",
                           f.channels, global_ch);
             }
+            ctx->audio_channels = f.channels;
         }
         if (ms_layout_for_channels(f.channels) == SPEAKERS_UNKNOWN)
             mlog_error("audio has %d channels, which has no OBS speaker "
@@ -578,6 +584,7 @@ static void src_update(void* data, obs_data_t* s) {
     ctx->deliver_thread = std::thread(deliver_loop, ctx);
     ctx->poll_thread    = std::thread(poll_loop, ctx);
     ctx->feed_thread    = std::thread(feed_loop, ctx);
+    ctx->room_id_for_display = dc.room_id;
     mlog_info("source: watching room '%s' (prebuffer %d segments, poll %dms)",
               dc.room_id.c_str(), dc.prebuffer_segments, ctx->poll_interval_ms);
 }
@@ -695,6 +702,57 @@ void SourceCtx::log_status() {
         mlog_info("source last error: %s", session->last_error().c_str());
 }
 
+void SourceCtx::snapshot(DecoderSnapshot& out) const {
+    std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(mtx));
+    out.room_id = room_id_for_display;
+    out.paused  = paused.load();
+    out.audio_channels = audio_channels.load();
+    if (!session) return;
+    out.room_state       = (int)session->room_state();
+    out.head             = session->playback_head();
+    out.live_edge        = session->live_edge();
+    out.first_available  = session->earliest_available();
+    out.behind_live_s    = session->behind_live_s();
+    out.buffered_ahead_s = session->buffered_ahead_s();
+    out.cached           = session->cache().count();
+    out.last_error       = session->last_error();
+    if (auto cur = session->current_marker()) out.current_marker = cur->label;
+    for (const auto& m : session->markers())
+        out.markers.emplace_back(m.label + "  (segment " +
+                                 std::to_string(m.seq) + ")", m.id);
+}
+
+void SourceCtx::jump_to_marker(const std::string& id) {
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        if (!session) return;
+        if (!session->jump_to_marker(id)) {
+            mlog_warn("source: could not jump to marker '%s' — it may no "
+                      "longer be retained", id.c_str());
+            return;
+        }
+        mlog_info("source: jumped to marker (segment %llu)",
+                  (unsigned long long)session->playback_head());
+    }
+    pause_started_ns = 0;
+    paused = false;
+}
+
+void SourceCtx::seek(unsigned long long seq) {
+    {
+        std::lock_guard<std::mutex> lk(mtx);
+        if (!session) return;
+        if (!session->seek((uint64_t)seq)) {
+            mlog_warn("source: cannot seek to segment %llu (outside the "
+                      "retained window)", seq);
+            return;
+        }
+        mlog_info("source: seeked to segment %llu", seq);
+    }
+    pause_started_ns = 0;
+    paused = false;
+}
+
 // Property buttons delegate to the same methods the hotkeys use.
 static bool on_pause(obs_properties_t*, obs_property_t*, void* data) {
     static_cast<SourceCtx*>(data)->pause();  return false;
@@ -714,22 +772,19 @@ static bool on_status(obs_properties_t*, obs_property_t*, void* data) {
 static bool on_jump_marker(obs_properties_t*, obs_property_t* prop, void* data) {
     auto* ctx = static_cast<SourceCtx*>(data);
     (void)prop;
-    std::lock_guard<std::mutex> lk(ctx->mtx);
-    if (!ctx->session) return false;
-    if (ctx->pending_marker_id.empty()) {
+    // Read the selection under the lock, then release it: jump_to_marker takes
+    // the same lock itself.
+    std::string id;
+    {
+        std::lock_guard<std::mutex> lk(ctx->mtx);
+        if (!ctx->session) return false;
+        id = ctx->pending_marker_id;
+    }
+    if (id.empty()) {
         mlog_info("source: pick a marker first");
         return false;
     }
-    if (ctx->session->jump_to_marker(ctx->pending_marker_id)) {
-        ctx->paused = false;
-        ctx->pause_started_ns = 0;
-        mlog_info("source: jumped to marker '%s' (segment %llu)",
-                  ctx->pending_marker_id.c_str(),
-                  (unsigned long long)ctx->session->playback_head());
-    } else {
-        mlog_warn("source: could not jump to marker '%s' — it may no longer "
-                  "be retained", ctx->pending_marker_id.c_str());
-    }
+    ctx->jump_to_marker(id);
     return false;
 }
 

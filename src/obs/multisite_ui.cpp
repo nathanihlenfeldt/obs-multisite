@@ -72,6 +72,52 @@ void unregister_decoder_controls(DecoderControls* d) {
         if (g_decoders[i] == d) { g_decoders.erase(g_decoders.begin() + i); break; }
 }
 
+bool encoder_stats(EncoderStats& out) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (!g_encoder) return false;
+    out = g_encoder->stats();
+    return true;
+}
+
+void forward_marker_to_encoder(const std::string& label) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (!g_encoder) {
+        mlog_warn("marker '%s' ignored — not broadcasting", label.c_str());
+        return;
+    }
+    g_encoder->drop_marker(label);
+}
+
+bool decoder_snapshot(DecoderSnapshot& out) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (g_decoders.empty()) return false;
+    g_decoders.front()->snapshot(out);     // the dock follows the first source
+    return true;
+}
+
+void decoder_pause_all() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* d : g_decoders) d->pause();
+}
+void decoder_resume_all() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* d : g_decoders) d->resume();
+}
+void decoder_jump_live_all() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* d : g_decoders) d->jump_to_live();
+}
+
+void decoder_jump_to_marker(const std::string& id) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* d : g_decoders) d->jump_to_marker(id);
+}
+
+void decoder_seek(unsigned long long seq) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* d : g_decoders) d->seek(seq);
+}
+
 // ── Encoder: drop a marker ───────────────────────────────────────────────────
 static void drop_marker(const std::string& label) {
     std::lock_guard<std::mutex> lk(g_mtx);
