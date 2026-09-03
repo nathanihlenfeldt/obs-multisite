@@ -225,6 +225,18 @@ jobs:
               if ($fe) {
                 Write-Host "obs-frontend-api.lib: $($fe.FullName)"
                 echo "LIBOBS_FRONTEND_LIBRARY=$($fe.FullName)" >> $env:GITHUB_ENV
+                # The header is in the OBS SOURCE tree, not with the libobs
+                # headers — find it rather than assuming its location, since
+                # OBS moved it (UI/obs-frontend-api -> frontend/api).
+                $feh = Get-ChildItem -Recurse $env:OBS_SRC -Filter obs-frontend-api.h -ErrorAction SilentlyContinue |
+                       Select-Object -First 1
+                if ($feh) {
+                  Write-Host "obs-frontend-api.h: $($feh.FullName)"
+                  echo "LIBOBS_FRONTEND_INCLUDE_DIR=$($feh.Directory.FullName)" >> $env:GITHUB_ENV
+                } else {
+                  Write-Host "obs-frontend-api.h not found — omitting the docks"
+                  $haveQt = $false
+                }
               } else {
                 Write-Host "obs-frontend-api.lib not found — omitting the docks"
                 $haveQt = $false
@@ -255,7 +267,8 @@ jobs:
           $qtArgs = @()
           if ($env:HAVE_QT -eq "1") {
             $qtArgs += @("-DENABLE_QT=ON",
-                         "-DLIBOBS_FRONTEND_LIBRARY=$env:LIBOBS_FRONTEND_LIBRARY")
+                         "-DLIBOBS_FRONTEND_LIBRARY=$env:LIBOBS_FRONTEND_LIBRARY",
+                         "-DLIBOBS_FRONTEND_INCLUDE_DIR=$env:LIBOBS_FRONTEND_INCLUDE_DIR")
             Write-Host "building WITH the operator docks"
           } else {
             Write-Host "building WITHOUT the docks (hotkeys still included)"
@@ -320,21 +333,4 @@ jobs:
           # the artifact rather than only from the log.
           $mode = if ($env:HAVE_QT -eq "1") { "with operator docks (Qt)" }
                   else { "hotkeys only (no Qt docks)" }
-          Set-Content -Path dist/BUILD-INFO.txt -Value @(
-            "obs-multisite build",
-            "OBS tag:    $env:OBS_TAG",
-            "UI mode:    $mode"
-          )
-          Write-Host "BUILD MODE: $mode"
-
-          # NOTE: Qt itself is NOT bundled. OBS ships its own Qt6 and a plugin
-          # must use the host's copy — shipping a second Qt would either be
-          # ignored or cause a version clash.
-          Write-Host "--- staged ---"
-          Get-ChildItem -Recurse dist | Select-Object FullName | Format-Table -AutoSize
-
-      - uses: actions/upload-artifact@v5
-        if: success()
-        with:
-          name: obs-multisite-windows
-          path: dist/
+          Set-Content -Path dist/BUILD-INFO.txt
