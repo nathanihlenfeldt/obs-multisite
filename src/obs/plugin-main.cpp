@@ -21,7 +21,12 @@ MODULE_EXPORT const char* obs_module_description(void) {
 MODULE_EXPORT const char* obs_module_name(void) { return "Multisite"; }
 
 bool obs_module_load(void) {
-    mlog_info("loading obs-multisite %s", PLUGIN_VERSION);
+#ifdef MULTISITE_HAVE_QT
+    mlog_info("loading obs-multisite %s (with operator docks)", PLUGIN_VERSION);
+#else
+    mlog_info("loading obs-multisite %s (hotkeys only — this build has no "
+              "operator docks)", PLUGIN_VERSION);
+#endif
     multisite_obs::register_output();   // main campus: sends
     multisite_obs::register_source();   // satellite: receives
     multisite_obs::register_ui();       // hotkeys + Tools menu (no Qt needed)
