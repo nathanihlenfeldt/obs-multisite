@@ -9,6 +9,7 @@
 #include <map>
 #include <mutex>
 #include <thread>
+#include <vector>
 namespace fs = std::filesystem;
 using namespace multisite;
 
@@ -74,9 +75,18 @@ int main(){
     DecoderSession dec(cfg, store);
     dec.poll(m.updated_at_ms);
 
-    // Downloading continuously in the background, as the poll loop does.
+    // Downloading continuously in the background, as the poll loop does, AND
+    // polling. Windows mutexes favour the thread already running, so a tight
+    // loop here starved the UI thread for seconds even once the network calls
+    // were outside the lock. Reproducing that needs real contention, not a
+    // single well-behaved worker.
     std::atomic<bool> run{true};
-    std::thread worker([&]{ while (run.load()) dec.pump_downloads(8); });
+    std::vector<std::thread> workers;
+    for (int i = 0; i < 3; ++i)
+        workers.emplace_back([&]{ while (run.load()) dec.pump_downloads(8); });
+    workers.emplace_back([&]{
+        while (run.load()) dec.poll(m.updated_at_ms);
+    });
     std::this_thread::sleep_for(std::chrono::milliseconds(300));
 
     // Now time the calls the UI makes every refresh, plus a timeline click.
@@ -97,7 +107,8 @@ int main(){
         worst = std::max(worst, time_call("timeline click: seek_to_wall_ms",
             [&]{ dec.seek_to_wall_ms(start_ms + 60000 + i * 1000); }));
     }
-    run = false; worker.join();
+    run = false;
+    for (auto& t : workers) t.join();
     fs::remove_all(base);
 
     std::printf("\n  worst UI call while downloading: %.1f ms\n", worst);
