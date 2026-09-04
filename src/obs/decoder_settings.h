@@ -21,6 +21,9 @@ struct DecoderSettings {
     std::string secret_access_key;
     std::string region = "auto";
     std::string room_id = "main-auditorium";
+    // Kept above zero on purpose: at zero the playhead sits at the live edge,
+    // so a hold-and-resume has nothing new to play and the picture appears
+    // frozen for up to a segment. A small reserve also absorbs network jitter.
     int    prebuffer_segments = 2;
     int    poll_interval_ms = 3000;
     int    keep_behind_segments = 200;

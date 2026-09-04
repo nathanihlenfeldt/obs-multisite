@@ -20,6 +20,7 @@
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QDateTime>
+#include <QStringList>
 #include <QDialog>
 #include <QDialogButtonBox>
 
@@ -372,7 +373,12 @@ void DecoderDock::refresh() {
     // Lead with the clock time being shown — the thing an operator can match
     // against what is happening in the room — and express the offset in plain
     // language rather than as a signed number.
-    if (s.behind_live_s < 1.0) {
+    if (s.head > s.live_edge && s.live_edge > 0) {
+        // Caught right up: nothing new has been published yet. This is normal
+        // and must not look like a fault.
+        m_behind->setText(tr_("Dock.WaitingForMain"));
+        m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #8fd3b4;");
+    } else if (s.behind_live_s < 1.0) {
         m_behind->setText(tr_("Dock.ShowingNow"));
         m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #8fd3b4;");
     } else {
@@ -419,9 +425,30 @@ void DecoderDock::refresh() {
     m_marker->setText(s.current_marker.empty()
                         ? QString("—")
                         : QString::fromStdString(s.current_marker));
-    m_audio->setText(s.audio_channels > 0
-                        ? tr_("Dock.Channels").arg(s.audio_channels)
-                        : QString("—"));
+    // Show what the audio actually contains, using the names the main site
+    // published — otherwise those names are write-only and the channel count
+    // means nothing to the person watching.
+    if (s.audio_channels <= 0) {
+        m_audio->setText(QString("—"));
+        m_audio->setToolTip(QString());
+    } else if (!s.channel_labels.empty()) {
+        QStringList names;
+        for (const auto& c : s.channel_labels)
+            names << QString::fromStdString(c);
+        m_audio->setText(tr_("Dock.Channels").arg(s.audio_channels));
+        m_audio->setToolTip(names.join(", "));
+        // First few inline so it is visible without hovering.
+        const int show = qMin(3, names.size());
+        m_audio->setText(tr_("Dock.Channels").arg(s.audio_channels) + "  (" +
+                         QStringList(names.mid(0, show)).join(", ") +
+                         (names.size() > show ? "…" : "") + ")");
+    } else {
+        m_audio->setText(tr_("Dock.Channels").arg(s.audio_channels) +
+                         (s.audio_track_label.empty()
+                            ? QString()
+                            : "  " + QString::fromStdString(s.audio_track_label)));
+        m_audio->setToolTip(QString());
+    }
 
     if (!s.last_error.empty()) {
         m_error->setText(QString::fromStdString(s.last_error));

@@ -43,6 +43,14 @@ add_executable(test_reliability tests/test_reliability.cpp)
 target_link_libraries(test_reliability PRIVATE multisite_core)
 add_test(NAME reliability COMMAND test_reliability)
 
+# The core is shared with the planned headless appliance, which links neither
+# OBS nor Qt. Enforce that boundary rather than trusting convention.
+if(UNIX)
+    add_test(NAME core_portable
+             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_core_portable.sh
+                     ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+endif()
+
 add_executable(test_session tests/test_session.cpp)
 target_link_libraries(test_session PRIVATE multisite_core)
 add_test(NAME session COMMAND test_session)

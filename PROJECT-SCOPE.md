@@ -48,6 +48,11 @@ This ranking is the tie-breaker for every design choice.
   last frame and resume seamlessly when the feed returns.
 - **Bring-your-own storage.** Works with any S3-compatible endpoint — Cloudflare
   R2, AWS S3, Backblaze B2, Wasabi, or self-hosted MinIO. Cost is just storage.
+- **Satellites can be appliances.** A campus that only needs to *receive* runs a
+  headless Linux decoder box driving SDI/HDMI out, controlled from a phone or
+  tablet over the local network. No OBS to learn, nothing to misconfigure, and
+  it starts on power-up. Campuses that also mix local cameras or graphics run
+  the OBS source plugin instead; both share the same core.
 
 ---
 
@@ -65,6 +70,11 @@ This ranking is the tie-breaker for every design choice.
 └─────────────────────┘                                              └─────────────────────┘
 ```
 
+- **Two kinds of satellite, one core.** The receive logic (discovery, cache,
+  timeslipping, decode) is a library with no dependency on OBS or Qt. It is
+  driven either by the **OBS source plugin** (for campuses that mix locally) or
+  by a **headless appliance** (for campuses that just play the feed out). The
+  appliance is the expected deployment for most sites.
 - **Decentralized.** No control plane. The media path and the signaling path are
   the same path: objects in a bucket.
 - **Read-only decoders.** Satellites need only `GetObject` + `ListBucket`.
@@ -295,6 +305,51 @@ Backed by durable object storage, this is "pause live TV," per campus.
 
 ---
 
+## 8.1 Satellite appliance (headless decoder)
+
+The primary satellite deployment: a small Linux box at the campus that receives,
+decodes and plays out, with no operator-facing desktop software.
+
+**Why an appliance rather than a workstation.** A receive-only campus gains
+nothing from a full OBS install and loses a great deal: scene collections to
+corrupt, updates that change the UI, a desktop that can be left in the wrong
+state, and a volunteer expected to understand a production tool. An appliance
+boots into its job, restarts itself on failure, and presents one simple screen.
+
+**Shape**
+
+- **Hardware:** an inexpensive mini-PC with a Blackmagic DeckLink card for
+  SDI/HDMI output; or HDMI direct from the machine for a projector-only site.
+- **Output:** DeckLink (video plus embedded multichannel audio, which suits the
+  packed channel layout), or DRM/KMS for direct display. Audio to ALSA/JACK or
+  embedded in SDI, with the channel de-interleaver applied on the way out.
+- **Control:** a small built-in web server. Operators use a phone, tablet or any
+  browser on the church network — hold, resume, catch up to now, jump to a
+  moment, and see what is playing and how far behind. No app to install.
+- **Operation:** starts on power-up (systemd), restarts on failure, keeps its
+  local cache across reboots so a restart mid-service resumes rather than
+  restarting.
+
+**What it reuses.** Everything in the receive path: room and event discovery,
+the durable segment cache, checksum verification, timeslipping (the playback
+head, pause/resume, catch-up, scrub), markers, and the CMAF decoder. These are
+already free of OBS and Qt and are covered by the existing tests, so the
+appliance is a new *output and control* layer rather than a second
+implementation.
+
+**Web UI.** The decoder dock is already a thin view over a status snapshot; the
+same snapshot serialises to JSON, so the browser UI is that view rendered in
+HTML with a WebSocket for live updates. It should carry the same plain language
+— clock times, "hold picture", "catch up to now" — and never mention segments.
+
+**Open questions to settle before building**
+
+- Which output path first: DeckLink SDI, or HDMI/DRM for the simplest sites?
+- Does the appliance need a local slate or holding image when the feed is
+  offline, and should it fall back to one automatically?
+- Distribution: a disk image for supported hardware, or a package plus an
+  install script on a stock distro?
+
 ## 9. Capability overview
 
 | Capability | Commercial multisite platforms | This project |
@@ -305,6 +360,7 @@ Backed by durable object storage, this is "pause live TV," per campus.
 | Pause & hold at a campus | yes | yes (timeslipping) |
 | Per-campus independent DVR position | partial | yes |
 | Multi-track production audio (main/ISOs/click) | partial | yes, up to 6 tracks |
+| Dedicated receive appliance | yes (hardware decoder) | planned (Phase 6) |
 | Self-hosted / own your storage | no (SaaS) | yes |
 | Open protocol, no vendor lock-in | no | yes |
 | Web/mobile simulcast from same files | yes | planned (CMAF makes it feasible) |
@@ -335,7 +391,11 @@ Each phase leaves the project in a testable, usable state.
   automation hooks.
 - **Phase 5 — User interface.** Encoder Tools-menu and status panel; decoder Qt
   control dock.
-- **Phase 6 — Extensions.** Web/mobile simulcast, scheduling, redundancy, and
+- **Phase 6 — Satellite appliance.** Headless Linux decoder with SDI/HDMI
+  output and a browser-based operator UI (section 8.1). Reuses the existing
+  receive core; adds the output layer, the channel de-interleaver, the web
+  control surface, and the boot/restart behaviour that makes it an appliance.
+- **Phase 7 — Extensions.** Web/mobile simulcast, scheduling, redundancy, and
   local insertion.
 
 ---

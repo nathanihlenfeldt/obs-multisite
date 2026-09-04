@@ -220,13 +220,24 @@ bool DecoderSession::start() {
 void DecoderSession::pause() {
     std::lock_guard<std::mutex> lk(m_mtx);
     // The head stays exactly where it is; pump_downloads keeps filling ahead,
-    // so resuming loses nothing.
-    if (m_play == PlayState::Playing) m_play = PlayState::Paused;
+    // so resuming loses nothing. Pausing from Stopped is also honoured: the
+    // operator's intent is "hold", and it must not silently no-op just
+    // because playback had not begun yet.
+    m_play = PlayState::Paused;
 }
 
 void DecoderSession::resume() {
     std::lock_guard<std::mutex> lk(m_mtx);
-    if (m_play == PlayState::Paused) m_play = PlayState::Playing;
+    // Resume from ANY state, not only from Paused. Requiring an exact prior
+    // state made resume a silent no-op whenever the state had moved on for
+    // some other reason, which left the picture frozen with nothing in the log.
+    if (m_head_set) {
+        m_play = PlayState::Playing;
+    } else {
+        // Never started: leave it Stopped so the host's start() path runs and
+        // establishes the head properly.
+        m_play = PlayState::Stopped;
+    }
 }
 
 void DecoderSession::jump_to_live() {
@@ -321,6 +332,11 @@ std::optional<Marker> DecoderSession::current_marker() const {
 uint64_t DecoderSession::discontinuity_id() const {
     std::lock_guard<std::mutex> lk(m_mtx);
     return m_discontinuity;
+}
+
+std::vector<AudioTrack> DecoderSession::audio_layout() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_manifest.audio_tracks;
 }
 
 // Exact where known, estimated otherwise: segments outside the rolling

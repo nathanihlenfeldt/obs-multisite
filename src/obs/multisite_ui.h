@@ -79,6 +79,10 @@ struct DecoderSnapshot {
     // label, id, and the clock time the marker refers to
     struct MarkerEntry { std::string label; std::string id; long long at_ms; };
     std::vector<MarkerEntry> markers;
+    // What the main site says each audio channel carries, when it publishes a
+    // packed multi-channel feed.
+    std::vector<std::string> channel_labels;
+    std::string audio_track_label;
 };
 bool decoder_snapshot(DecoderSnapshot& out);
 void decoder_pause_all();

@@ -99,6 +99,13 @@ struct SourceCtx : DecoderControls {
     bool     logged_av_offset = false;
     std::atomic<bool> checked_layout{false};
 
+    // Resume watchdog: if no frames reach OBS shortly after a resume, dump
+    // enough state to explain why instead of leaving a frozen picture and no
+    // clue in the log.
+    std::atomic<uint64_t> resumed_at_ns{0};
+    std::atomic<uint64_t> frames_at_resume{0};
+    std::atomic<bool>     resume_checked{false};
+
     // DecoderControls — driven by hotkeys and the Tools menu.
     void pause() override;
     void resume() override;
@@ -408,6 +415,49 @@ static void poll_loop(SourceCtx* ctx) {
             if (sess) fetched = sess->pump_downloads(4);
         }
 
+        // Resume watchdog. A frozen picture after Resume is the failure that
+        // is hardest to diagnose from a log, so say plainly whether frames
+        // started flowing and, if not, what the state was.
+        {
+            const uint64_t r = ctx->resumed_at_ns.load();
+            if (r != 0 && !ctx->resume_checked.load() &&
+                os_gettime_ns() - r > 2000000000ULL) {
+                ctx->resume_checked = true;
+                const uint64_t delivered =
+                    ctx->frames_out.load() - ctx->frames_at_resume.load();
+                auto sw = get_session(ctx);
+                size_t qdepth = 0;
+                { std::lock_guard<std::mutex> qlk(ctx->dq_mtx); qdepth = ctx->dq.size(); }
+                const bool at_edge = sw && sw->playback_head() > sw->live_edge();
+                if (delivered == 0 && at_edge) {
+                    // Not a fault: playback had caught right up, so there is
+                    // simply nothing new yet. Say so plainly.
+                    mlog_info("source: resumed at the live edge — waiting for "
+                              "the main site to publish more (head=%llu "
+                              "live=%llu)",
+                              (unsigned long long)sw->playback_head(),
+                              (unsigned long long)sw->live_edge());
+                } else if (delivered == 0) {
+                    mlog_error("source: RESUME FAILED — no frames delivered in "
+                               "2s. paused=%d play_state=%d head=%llu live=%llu "
+                               "queue=%zu buffered=%.1fs decoder=%d",
+                               (int)ctx->paused.load(),
+                               sw ? (int)sw->play_state() : -1,
+                               sw ? (unsigned long long)sw->playback_head() : 0ULL,
+                               sw ? (unsigned long long)sw->live_edge() : 0ULL,
+                               qdepth,
+                               sw ? sw->buffered_ahead_s() : 0.0,
+                               (int)ctx->decoder_started.load());
+                    if (sw && !sw->last_error().empty())
+                        mlog_error("source: last error: %s",
+                                   sw->last_error().c_str());
+                } else {
+                    mlog_info("source: resume delivered %llu frames in 2s — "
+                              "playing", (unsigned long long)delivered);
+                }
+            }
+        }
+
         // Periodic status so an operator can see it working.
         if (now - ctx->last_status_log_ms > 30000) {
             ctx->last_status_log_ms = now;
@@ -684,32 +734,43 @@ void SourceCtx::pause() {
 
 void SourceCtx::resume() {
     auto sess = get_session(this);
-    if (!sess) return;
+    if (!sess) { mlog_warn("source: resume ignored — no session"); return; }
 
-    // The playout clock maps media time to wall time. While paused, wall time
-    // keeps running but media time does not, so without this every frame would
-    // be past due on resume and OBS would report audio lagging by the length
-    // of the hold.
-    const uint64_t paused_at = pause_started_ns.exchange(0);
-    if (paused_at != 0) {
-        const uint64_t paused_for = os_gettime_ns() - paused_at;
-        playout_base_ns += paused_for;
-        // Shift the frames held during the pause onto the new clock rather
-        // than discarding them: that is the content the operator paused on.
-        {
-            std::lock_guard<std::mutex> qlk(dq_mtx);
-            for (auto& q : dq) q.timestamp += paused_for;
-        }
-        dq_cv.notify_all();
-        mlog_info("source: playout clock advanced %.1fs to cover the pause",
-                  (double)paused_for / 1e9);
+    // Re-anchor rather than shift.
+    //
+    // The previous approach advanced the playout clock by the paused duration
+    // and rewrote the timestamps of frames already queued. That has several
+    // ways to fail quietly — if the pause timestamp was already consumed, if
+    // the session was not actually in the Paused state, or if the stall
+    // resync fired in between — and any of them leaves frames that never
+    // become due, so the picture stays frozen.
+    //
+    // Jump-to-live works reliably because it treats the position change as a
+    // discontinuity: drop what is queued and let the next decoded frame
+    // re-anchor the clock. Resume now does the same. The cost is the handful
+    // of already-decoded frames still in the queue (under half a second);
+    // playback continues from the same point in the programme because the
+    // decoder itself is not restarted.
+    pause_started_ns = 0;
+
+    size_t dropped = 0;
+    {
+        std::lock_guard<std::mutex> qlk(dq_mtx);
+        dropped = dq.size();
+        dq.clear();
     }
+    first_pts_ns = -1;             // next frame re-anchors the playout clock
+    dq_cv.notify_all();            // release the decoder if it was blocked
 
-    paused = false;               // delivery and feeding resume at once
+    paused = false;                // delivery and feeding resume at once
     sess->resume();
-    mlog_info("source: RESUMED from segment %llu (%.0fs behind live)",
-              (unsigned long long)sess->playback_head(),
-              sess->behind_live_s());
+
+    resumed_at_ns = os_gettime_ns();
+    frames_at_resume = frames_out.load();
+
+    mlog_info("source: RESUMED at %.0fs behind live (state=%d, dropped %zu "
+              "queued frames, clock re-anchoring)",
+              sess->behind_live_s(), (int)sess->play_state(), dropped);
 }
 
 void SourceCtx::toggle_pause() {
@@ -766,6 +827,13 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     out.buffered_ahead_s = sess->buffered_ahead_s();
     out.cached           = sess->cache().count();
     out.last_error       = sess->last_error();
+    {
+        auto layout = sess->audio_layout();
+        if (!layout.empty()) {
+            out.audio_track_label = layout.front().label;
+            out.channel_labels    = layout.front().channel_labels;
+        }
+    }
     out.playhead_ms = sess->playhead_wall_ms();
     out.live_ms     = sess->live_wall_ms();
     out.earliest_ms = sess->earliest_wall_ms();

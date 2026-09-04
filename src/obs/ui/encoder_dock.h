@@ -30,6 +30,7 @@ private slots:
     void onEnd();
     void onSaveSettings();
     void onMarker(int index);
+    void updateAudioFields();
     void refresh();
 
 private:
@@ -54,6 +55,11 @@ private:
     QLineEdit* m_trackLabels = nullptr;
     QLineEdit* m_channelLabels = nullptr;
     QLineEdit* m_markerLabels = nullptr;
+    // These only apply in particular audio setups, so they are shown
+    // conditionally rather than confusing everyone else.
+    QWidget* m_trackLabelRow = nullptr;
+    QWidget* m_channelLabelRow = nullptr;
+    QLabel*  m_audioNote = nullptr;
 
     // controls + status
     QPushButton* m_goLive = nullptr;

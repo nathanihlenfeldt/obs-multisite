@@ -460,7 +460,117 @@ int main() {
               "positions outside the manifest window are still estimated");
     }
 
-    std::printf("== 11. Head never runs past the live edge ==\n");
+    std::printf("== 11. Audio names published by the main site reach the satellite ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTAUDIOAUDIOAUDIOAUD");
+        // A packed multi-channel feed, as the encoder publishes it.
+        enc.manifest.audio_tracks = { {
+            0, "Production", "aac", 8, 48000,
+            { "Main L", "Main R", "Sermon ISO", "Click",
+              "Choir ISO", "Ambient L", "Ambient R", "Spare" }
+        } };
+        enc.publish_start();
+        for (int i = 0; i < 3; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d12").string();
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+
+        auto layout = dec.audio_layout();
+        CHECK(layout.size() == 1, "audio layout received");
+        CHECK(!layout.empty() && layout[0].channels == 8, "8 channels reported");
+        CHECK(!layout.empty() && layout[0].channel_labels.size() == 8,
+              "all channel names received");
+        CHECK(!layout.empty() && layout[0].channel_labels[3] == "Click",
+              "channel names keep their order (channel 4 is the click)");
+        std::printf("     (channel 3 = %s, channel 4 = %s)\n",
+                    layout[0].channel_labels[2].c_str(),
+                    layout[0].channel_labels[3].c_str());
+    }
+
+    std::printf("== 12. Pause and resume survive any prior state ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTPAUSEPAUSEPAUSEPAU");
+        enc.publish_start();
+        for (int i = 0; i < 8 ; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d13").string();
+        // A realistic prebuffer: playback sits behind live, which is the
+        // normal case and the one where resume must continue immediately.
+        cfg.prebuffer_segments = 3; cfg.download_ahead_segments = 40;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        for (int i = 0; i < 6; ++i) dec.pump_downloads(10);
+
+        // Pausing before playback has begun must still register as "held".
+        dec.pause();
+        CHECK(dec.play_state() == PlayState::Paused,
+              "pause before playback still holds");
+
+        CHECK(dec.start(), "start after a pre-emptive pause");
+        dec.resume();
+        CHECK(dec.play_state() == PlayState::Playing, "resume starts playback");
+
+        auto a = dec.next_segment();
+        CHECK(a.has_value(), "serves a segment after resume");
+
+        // Now the real sequence: play, hold, resume, and it must serve again.
+        dec.pause();
+        CHECK(dec.play_state() == PlayState::Paused, "held while playing");
+        CHECK(!dec.next_segment().has_value(), "nothing served while held");
+        const uint64_t held_at = dec.playback_head();
+
+        dec.resume();
+        CHECK(dec.play_state() == PlayState::Playing, "resumed");
+        auto b = dec.next_segment();
+        CHECK(b.has_value(), "SERVES AGAIN AFTER RESUME");
+        CHECK(b && b->seq == held_at,
+              "continues from exactly where it was held");
+
+        // Resume when already playing must be harmless, not disruptive.
+        dec.resume();
+        CHECK(dec.play_state() == PlayState::Playing,
+              "resume while already playing is harmless");
+        CHECK(dec.next_segment().has_value(), "still serving");
+    }
+
+    std::printf("== 13. Resuming at the live edge waits for new content ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTEDGEEDGEEDGEEDGEED");
+        enc.publish_start();
+        for (int i = 0; i < 4; ++i) enc.publish_segment();      // 0..3
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d14").string();
+        cfg.prebuffer_segments = 0;      // deliberately AT the live edge
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        for (int i = 0; i < 6; ++i) dec.pump_downloads(10);
+        dec.start();
+        while (dec.next_segment().has_value()) {}               // catch right up
+
+        CHECK(dec.playback_head() > dec.live_edge(),
+              "playhead has caught up past the newest segment");
+        dec.pause();
+        dec.resume();
+        CHECK(!dec.next_segment().has_value(),
+              "resuming with nothing new serves nothing — correct, but the UI "
+              "must explain it rather than look broken");
+
+        // As soon as the main site publishes more, playback continues.
+        enc.publish_segment();
+        dec.poll(enc.clock_ms);
+        dec.pump_downloads(10);
+        CHECK(dec.next_segment().has_value(),
+              "continues the moment new content arrives");
+    }
+
+    std::printf("== 14. Head never runs past the live edge ==\n");
     {
         FakeStore store;
         FakeEncoder enc(store, "r", "01EVENTIIIIIIIIIIIIIIIIIII");

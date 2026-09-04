@@ -205,6 +205,15 @@ Push to GitHub and the workflow in `.github/workflows/core-tests.yml` builds and
 runs the test suite on both Ubuntu and Windows automatically. Watch it under the
 repository's **Actions** tab. For a public repository this is free.
 
+## Keeping the core portable
+
+`src/core/` must stay free of OBS and Qt. It is the shared receive/send engine
+behind both the OBS plugin and the planned headless appliance (scope §8.1), and
+every piece of it is testable without either. `src/obs/` is the only place that
+may include `obs-module.h`, and `src/obs/ui/` the only place that may include
+Qt. The tests build and run without OBS present, which is what keeps this
+honest.
+
 ## Known gaps
 
 - **Multi-track (not packed) mode plays only track 0 at the satellite.** The

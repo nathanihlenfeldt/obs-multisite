@@ -9,6 +9,7 @@
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
+#include <media-io/audio-io.h>
 #include <QGridLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -159,8 +160,19 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     mform->addRow(tr_("Dock.VideoBitrate"), m_vBitrate);
     mform->addRow(tr_("Dock.AudioBitrate"), m_aBitrate);
     mform->addRow(tr_("Dock.AudioTracks"), m_tracks);
+    // "Audio names" label OBS mixer TRACKS and only matter when sending more
+    // than one. "Channel names" label channels INSIDE a multi-channel track and
+    // only matter when OBS is running a surround layout. Showing both to
+    // everyone invited exactly the question "what are these for?", so each is
+    // shown only when it applies.
     mform->addRow(tr_("TrackLabels"), m_trackLabels);
+    m_trackLabelRow = m_trackLabels;
     mform->addRow(tr_("ChannelLabels"), m_channelLabels);
+    m_channelLabelRow = m_channelLabels;
+    m_audioNote = new QLabel(tr_("Dock.AudioNote"), mediaBox);
+    m_audioNote->setWordWrap(true);
+    m_audioNote->setStyleSheet("color: palette(text); opacity: 0.75;");
+    mform->addRow(QString(), m_audioNote);
     mform->addRow(tr_("MarkerLabels"), m_markerLabels);
     dlgRoot->addWidget(mediaBox);
 
@@ -186,6 +198,9 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
                 &EncoderDock::onSaveSettings);
 
     loadIntoFields();
+    updateAudioFields();
+    connect(m_tracks, &QSpinBox::valueChanged, this,
+            &EncoderDock::updateAudioFields);
 
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, &EncoderDock::refresh);
@@ -193,8 +208,34 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     refresh();
 }
 
+// Show each audio-naming field only in the setup where it does something.
+void EncoderDock::updateAudioFields() {
+    const bool multiTrack = m_tracks && m_tracks->value() > 1;
+
+    // Channel names only matter beyond stereo, which depends on OBS's global
+    // audio layout rather than on anything in this dock.
+    int globalCh = 2;
+    struct obs_audio_info oai = {};
+    if (obs_get_audio_info(&oai)) globalCh = (int)get_audio_channels(oai.speakers);
+    const bool multiChannel = globalCh > 2;
+
+    if (auto* form = qobject_cast<QFormLayout*>(m_trackLabels->parentWidget()->layout())) {
+        form->setRowVisible(m_trackLabels, multiTrack);
+        form->setRowVisible(m_channelLabels, multiChannel);
+    }
+    if (m_audioNote) {
+        if (multiChannel)
+            m_audioNote->setText(tr_("Dock.AudioNoteChannels").arg(globalCh));
+        else if (multiTrack)
+            m_audioNote->setText(tr_("Dock.AudioNoteTracks"));
+        else
+            m_audioNote->setText(tr_("Dock.AudioNote"));
+    }
+}
+
 void EncoderDock::onOpenSettings() {
     if (!m_settings) return;
+    updateAudioFields();       // OBS's audio layout may have changed
     m_settings->exec();
     onSaveSettings();      // persist whatever was changed
 }

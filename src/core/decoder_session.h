@@ -107,6 +107,11 @@ public:
     // otherwise decode as out-of-order timestamps and a glitched picture.
     uint64_t discontinuity_id() const;
 
+    // What the main site says its audio contains: track labels and, for a
+    // packed multi-channel feed, what each channel carries. Without this the
+    // names the encoder operator typed would never be seen by anyone.
+    std::vector<AudioTrack> audio_layout() const;
+
     // Wall-clock time of a position in the programme. Uses the exact time
     // recorded for a segment when it is still in the manifest window, and
     // estimates from the event start otherwise. 0 if unknown.
