@@ -75,6 +75,11 @@ struct SourceCtx : DecoderControls {
     std::shared_ptr<DecoderSession> session;
     std::shared_ptr<CmafDecoder>    decoder;
     mutable std::mutex              obj_mtx;
+    // Serialises src_update / src_destroy. OBS can apply settings from more
+    // than one thread, and two overlapping updates could leave two sets of
+    // worker threads running — which showed up as every log line appearing
+    // twice and as clock adjustments being applied twice.
+    std::mutex                      lifecycle_mtx;
 
     std::thread poll_thread, feed_thread;
     std::atomic<bool> running{false};
@@ -123,6 +128,12 @@ struct SourceCtx : DecoderControls {
     std::atomic<bool> playing{false};
     // Guards against accidental clicks mid-service.
     std::atomic<bool> controls_locked{false};
+    // Set while the queue is being torn down (seek, stop, decoder restart) so
+    // the decoder's callbacks return immediately instead of waiting for space
+    // that will never come.
+    std::atomic<bool> flushing{false};
+    std::atomic<uint64_t> frames_dropped{0};
+    std::atomic<uint64_t> last_resync_log_ns{0};
 
     // DecoderControls — driven by hotkeys and the Tools menu.
     void pause() override;
@@ -209,10 +220,25 @@ static std::shared_ptr<CmafDecoder> get_decoder(SourceCtx* ctx) {
 // back-pressures the decoder rather than letting memory grow.
 static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
     std::unique_lock<std::mutex> lk(ctx->dq_mtx);
-    ctx->dq_cv.wait(lk, [ctx] {
-        return ctx->dq.size() < kMaxQueuedFrames || !ctx->running.load();
-    });
-    if (!ctx->running.load()) return;
+    // Bounded wait. This used to wait indefinitely for space, which meant the
+    // decoder's worker thread could block inside this callback whenever
+    // delivery stopped draining — after Stop, or while a seek tore the decoder
+    // down. CmafDecoder::stop() then joined a thread that could never finish,
+    // and because stop runs on the UI thread, OBS froze solid.
+    //
+    // Dropping a frame is vastly preferable to hanging the application: the
+    // decoder always makes progress, so join always returns.
+    const bool space = ctx->dq_cv.wait_for(
+        lk, std::chrono::milliseconds(250), [ctx] {
+            return ctx->dq.size() < kMaxQueuedFrames || !ctx->running.load() ||
+                   ctx->flushing.load();
+        });
+    if (!ctx->running.load() || ctx->flushing.load()) return;
+    if (!space) {
+        // Delivery is not keeping up (or is stopped). Drop this frame.
+        ctx->frames_dropped++;
+        return;
+    }
     ctx->dq.push_back(std::move(item));
     lk.unlock();
     ctx->dq_cv.notify_all();
@@ -258,15 +284,37 @@ static void deliver_loop(SourceCtx* ctx) {
         {
             const uint64_t now = os_gettime_ns();
             if (item.timestamp + kClockResyncThresholdNs < now) {
+                // Re-anchor by ASSIGNING the clock, never by accumulating on
+                // to it. The previous version did `base += behind`, so if two
+                // deliveries resynced for the same stall the clock jumped
+                // twice — pushing every frame seconds into the future and
+                // stalling playback outright (seen as frames_out frozen while
+                // "behind live" kept growing). Assignment is idempotent: a
+                // second resync for the same stall is a no-op.
+                const long long first = ctx->first_pts_ns.load();
+                const long long pts = item.is_video ? item.video.pts_ns
+                                                    : item.audio.pts_ns;
                 const uint64_t behind = now - item.timestamp;
-                ctx->playout_base_ns += behind;
-                item.timestamp += behind;
+                const uint64_t new_base =
+                    now - (uint64_t)(pts - first) + kMaxDeliveryLeadNs;
+                ctx->playout_base_ns = new_base;
+                item.timestamp = new_base + (uint64_t)(pts - first);
                 {
                     std::lock_guard<std::mutex> qlk(ctx->dq_mtx);
-                    for (auto& q : ctx->dq) q.timestamp += behind;
+                    for (auto& q : ctx->dq) {
+                        const long long qp = q.is_video ? q.video.pts_ns
+                                                        : q.audio.pts_ns;
+                        q.timestamp = new_base + (uint64_t)(qp - first);
+                    }
                 }
-                mlog_warn("source: playout clock fell %.1fs behind (stall?) — "
-                          "re-anchored", (double)behind / 1e9);
+                // Rate-limit the message: a stall should be reported once, not
+                // once per frame.
+                const uint64_t last = ctx->last_resync_log_ns.load();
+                if (now - last > 5000000000ULL) {
+                    ctx->last_resync_log_ns = now;
+                    mlog_warn("source: playout clock fell %.1fs behind "
+                              "(stall?) — re-anchored", (double)behind / 1e9);
+                }
             }
         }
 
@@ -464,7 +512,9 @@ static void poll_loop(SourceCtx* ctx) {
         {
             auto sess = get_session(ctx);
             // Downloads block on the network — again, no lock held.
-            if (sess) fetched = sess->pump_downloads(4);
+            // A larger batch is safe now that downloads do not hold the
+            // state lock: it fills the buffer faster without affecting the UI.
+            if (sess) fetched = sess->pump_downloads(8);
         }
 
         // Resume watchdog. A frozen picture after Resume is the failure that
@@ -529,8 +579,12 @@ static void poll_loop(SourceCtx* ctx) {
             }
         }
 
-        if (fetched == 0)
-            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        // Always yield briefly, even when there is more to fetch. A tight
+        // download loop starves the UI on Windows, where the running thread
+        // is favoured for a contended lock; a few milliseconds costs nothing
+        // against a segment download but guarantees the interface stays live.
+        std::this_thread::sleep_for(
+            std::chrono::milliseconds(fetched == 0 ? 100 : 5));
     }
     mlog_info("source: poll loop exiting");
 }
@@ -659,7 +713,8 @@ static uint32_t src_height(void* data) {
 }
 
 static void stop_workers(SourceCtx* ctx) {
-    if (!ctx->running.exchange(false)) return;
+    ctx->flushing = true;             // release any blocked decoder callback
+    if (!ctx->running.exchange(false)) { ctx->flushing = false; return; }
     ctx->dq_cv.notify_all();      // release anyone blocked on the queue
     if (ctx->poll_thread.joinable())    ctx->poll_thread.join();
     if (ctx->feed_thread.joinable())    ctx->feed_thread.join();
@@ -676,10 +731,12 @@ static void stop_workers(SourceCtx* ctx) {
     }
     ctx->decoder_started = false;
     ctx->first_pts_ns = -1;
+    ctx->flushing = false;
 }
 
 static void src_update(void* data, obs_data_t* s) {
     auto* ctx = static_cast<SourceCtx*>(data);
+    std::lock_guard<std::mutex> life(ctx->lifecycle_mtx);
     unregister_decoder_controls(ctx);
     stop_workers(ctx);
 
@@ -764,8 +821,11 @@ static void* src_create(obs_data_t* settings, obs_source_t* source) {
 
 static void src_destroy(void* data) {
     auto* ctx = static_cast<SourceCtx*>(data);
-    unregister_decoder_controls(ctx);
-    stop_workers(ctx);
+    {
+        std::lock_guard<std::mutex> life(ctx->lifecycle_mtx);
+        unregister_decoder_controls(ctx);
+        stop_workers(ctx);
+    }
     {
         std::lock_guard<std::mutex> lk(ctx->obj_mtx);
         ctx->session.reset();
@@ -953,10 +1013,12 @@ void SourceCtx::stop_playback() {
     playing = false;
     paused = false;
     pause_started_ns = 0;
+    flushing = true;
     {
         std::lock_guard<std::mutex> qlk(dq_mtx);
         dq.clear();
     }
+    flushing = false;
     first_pts_ns = -1;
     dq_cv.notify_all();
     mlog_info("source: STOPPED (still downloading, ready to play again)");
@@ -970,11 +1032,16 @@ void SourceCtx::seek_to_time(long long wall_ms) {
         mlog_warn("source: that moment is no longer available in storage");
         return;
     }
-    // Treat as a discontinuity: drop what is queued and re-anchor.
+    // Treat as a discontinuity: drop what is queued and re-anchor. `flushing`
+    // releases the decoder if it is waiting for queue space, so the restart
+    // that follows can never block.
+    flushing = true;
     {
         std::lock_guard<std::mutex> qlk(dq_mtx);
         dq.clear();
     }
+    dq_cv.notify_all();
+    flushing = false;
     first_pts_ns = -1;
     pause_started_ns = 0;
     paused = false;

@@ -2,6 +2,7 @@
 #include "checksum.h"
 
 #include <algorithm>
+#include <vector>
 #include <cstdio>
 #include <filesystem>
 #include <fstream>
@@ -19,6 +20,22 @@ static std::string seq_name(uint64_t seq) {
 SegmentCache::SegmentCache(std::string dir, std::string event_id)
     : m_dir(std::move(dir)), m_event_id(std::move(event_id)) {
     ensure_dir();
+    std::lock_guard<std::mutex> lk(m_mtx);
+    build_index_locked();
+}
+
+// One directory scan per event; everything after that is answered from memory.
+void SegmentCache::build_index_locked() {
+    m_index.clear();
+    std::error_code ec;
+    if (fs::exists(event_dir(), ec)) {
+        for (auto& e : fs::directory_iterator(event_dir(), ec)) {
+            if (e.path().extension() != ".m4s") continue;
+            try { m_index.insert(std::stoull(e.path().stem().string())); }
+            catch (...) {}
+        }
+    }
+    m_index_ready = true;
 }
 
 std::string SegmentCache::event_dir() const {
@@ -44,6 +61,7 @@ void SegmentCache::set_event(const std::string& event_id) {
     fs::remove_all(event_dir(), ec);
     m_event_id = event_id;
     ensure_dir();
+    build_index_locked();
 }
 
 static bool write_atomic(const std::string& path,
@@ -63,14 +81,15 @@ static bool write_atomic(const std::string& path,
 }
 
 bool SegmentCache::store_init(const std::vector<uint8_t>& bytes) {
-    std::lock_guard<std::mutex> lk(m_mtx);
-    ensure_dir();
-    return write_atomic(init_path(), bytes);
+    std::string path;
+    { std::lock_guard<std::mutex> lk(m_mtx); ensure_dir(); path = init_path(); }
+    return write_atomic(path, bytes);
 }
 
 std::optional<std::vector<uint8_t>> SegmentCache::load_init() const {
-    std::lock_guard<std::mutex> lk(m_mtx);
-    std::ifstream f(init_path(), std::ios::binary);
+    std::string path;
+    { std::lock_guard<std::mutex> lk(m_mtx); path = init_path(); }
+    std::ifstream f(path, std::ios::binary);
     if (!f) return std::nullopt;
     return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), {});
 }
@@ -88,56 +107,70 @@ bool SegmentCache::store(uint64_t seq, const std::vector<uint8_t>& bytes,
         !verify_sha256(bytes, expected_checksum)) {
         return false;
     }
+    // The lock protects the INDEX only, never the file write. A segment is
+    // several megabytes and a write can take a while on Windows (antivirus
+    // scanning included); holding the lock across it blocked every other
+    // query, including the ones the UI makes when the operator clicks the
+    // timeline.
+    std::string path;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        ensure_dir();
+        path = seg_path(seq);
+    }
+    if (!write_atomic(path, bytes)) return false;
     std::lock_guard<std::mutex> lk(m_mtx);
-    ensure_dir();
-    return write_atomic(seg_path(seq), bytes);
+    m_index.insert(seq);
+    return true;
 }
 
 std::optional<std::vector<uint8_t>> SegmentCache::load(uint64_t seq) const {
-    std::lock_guard<std::mutex> lk(m_mtx);
-    std::ifstream f(seg_path(seq), std::ios::binary);
+    // Path under the lock; the multi-megabyte read outside it.
+    std::string path;
+    { std::lock_guard<std::mutex> lk(m_mtx); path = seg_path(seq); }
+    std::ifstream f(path, std::ios::binary);
     if (!f) return std::nullopt;
     return std::vector<uint8_t>((std::istreambuf_iterator<char>(f)), {});
 }
 
 bool SegmentCache::has(uint64_t seq) const {
     std::lock_guard<std::mutex> lk(m_mtx);
-    std::error_code ec;
-    return fs::exists(seg_path(seq), ec);
+    return m_index.count(seq) > 0;      // memory, not a filesystem call
 }
 
 std::set<uint64_t> SegmentCache::cached_seqs() const {
     std::lock_guard<std::mutex> lk(m_mtx);
-    std::set<uint64_t> out;
-    std::error_code ec;
-    if (!fs::exists(event_dir(), ec)) return out;
-    for (auto& e : fs::directory_iterator(event_dir(), ec)) {
-        if (e.path().extension() != ".m4s") continue;
-        try { out.insert(std::stoull(e.path().stem().string())); }
-        catch (...) {}
-    }
-    return out;
+    return m_index;
 }
 
-size_t   SegmentCache::count() const { return cached_seqs().size(); }
+size_t SegmentCache::count() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_index.size();
+}
 uint64_t SegmentCache::lowest_seq() const {
-    auto s = cached_seqs();
-    return s.empty() ? 0 : *s.begin();
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_index.empty() ? 0 : *m_index.begin();
 }
 uint64_t SegmentCache::highest_seq() const {
-    auto s = cached_seqs();
-    return s.empty() ? 0 : *s.rbegin();
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_index.empty() ? 0 : *m_index.rbegin();
 }
 
 size_t SegmentCache::prune_below(uint64_t keep_from) {
-    auto seqs = cached_seqs();
-    size_t removed = 0;
-    std::lock_guard<std::mutex> lk(m_mtx);
-    std::error_code ec;
-    for (uint64_t s : seqs) {
-        if (s >= keep_from) break;
-        if (fs::remove(seg_path(s), ec)) ++removed;
+    // Take the list and update the index under the lock; delete the files
+    // afterwards, so a slow filesystem cannot stall other queries.
+    std::vector<std::string> paths;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        for (auto it = m_index.begin(); it != m_index.end(); ) {
+            if (*it >= keep_from) break;
+            paths.push_back(seg_path(*it));
+            it = m_index.erase(it);
+        }
     }
+    size_t removed = 0;
+    std::error_code ec;
+    for (const auto& p : paths) if (fs::remove(p, ec)) ++removed;
     return removed;
 }
 
@@ -146,6 +179,7 @@ void SegmentCache::clear() {
     std::error_code ec;
     fs::remove_all(event_dir(), ec);
     ensure_dir();
+    m_index.clear();
 }
 
 } // namespace multisite

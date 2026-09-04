@@ -56,7 +56,16 @@ public:
 private:
     std::string m_dir;
     std::string m_event_id;
+    // In-memory index of what is cached. Queries (count, ranges, has) are
+    // called from the UI several times a second; scanning the directory for
+    // each one meant thousands of filesystem calls on the UI thread and made
+    // the interface sluggish. The index is built once per event and maintained
+    // on store/prune.
+    std::set<uint64_t> m_index;
+    bool m_index_ready = false;
     mutable std::mutex m_mtx;
+
+    void build_index_locked();
 
     std::string event_dir() const;
     std::string seg_path(uint64_t seq) const;

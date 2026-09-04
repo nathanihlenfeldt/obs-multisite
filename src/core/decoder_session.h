@@ -15,6 +15,7 @@
 #include "segment_cache.h"
 #include "transport.h"
 
+#include <atomic>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -79,9 +80,11 @@ public:
     // `now_ms_override` exists for deterministic tests.
     RoomState poll(int64_t now_ms_override = 0);
 
-    RoomState room_state() const { return m_room; }
+    RoomState room_state() const { return m_room.load(); }
     const std::string& event_id() const { return m_event_id; }
-    const std::string& last_error() const { return m_last_error; }
+    // Why the last operation failed. Returned by value under its own small
+    // lock, so it never contends with the download path.
+    std::string last_error() const;
 
     // ── Downloading ──────────────────────────────────────────────────────────
     // Fetch up to `max` missing segments in the download-ahead window.
@@ -99,10 +102,10 @@ public:
     // Hand the next segment to the decoder, if one is due and cached.
     std::optional<PlayableSegment> next_segment();
 
-    PlayState  play_state()  const { return m_play; }
-    uint64_t   playback_head() const { return m_head; }
-    uint64_t   live_edge()    const { return m_latest_seq; }
-    uint64_t   earliest_available() const { return m_first_available_seq; }
+    PlayState  play_state()  const { return m_play.load(); }
+    uint64_t   playback_head() const { return m_head.load(); }
+    uint64_t   live_edge()    const { return m_latest_seq.load(); }
+    uint64_t   earliest_available() const { return m_first_available_seq.load(); }
 
     // ── Markers ──────────────────────────────────────────────────────────────
     // Cues published by the main site (markers.json), refreshed on poll.
@@ -170,22 +173,33 @@ private:
     std::unique_ptr<SegmentCache> m_cache;
 
     std::string m_event_id;
-    RoomState   m_room = RoomState::Unknown;
-    PlayState   m_play = PlayState::Stopped;
+    std::atomic<RoomState> m_room{RoomState::Unknown};
+    std::atomic<PlayState> m_play{PlayState::Stopped};
     std::string m_last_error;
+    mutable std::mutex m_err_mtx;      // guards m_last_error only
 
     Manifest   m_manifest;
     MarkerList m_markers;
     int64_t    m_markers_checked_ms = 0;
-    uint64_t m_latest_seq = 0;
-    uint64_t m_first_available_seq = 0;
-    double   m_segment_duration_s = 6.0;
-    int64_t  m_manifest_updated_ms = 0;
+    int64_t    m_manifest_updated_ms = 0;
 
-    uint64_t m_head = 0;
-    bool     m_head_set = false;
+    // The values the UI reads many times a second are atomics, not
+    // mutex-protected fields.
+    //
+    // Keeping the lock off the network path was not enough on Windows: the
+    // download thread acquires the lock in a tight loop, and Windows mutexes
+    // favour the thread already running, so the UI thread was starved for
+    // seconds at a time (measured at 12.6 s). Reads that only need a scalar
+    // now take no lock at all, which removes the contention rather than
+    // hoping to win the race for it.
+    std::atomic<uint64_t> m_latest_seq{0};
+    std::atomic<uint64_t> m_first_available_seq{0};
+    std::atomic<double>   m_segment_duration_s{6.0};
+    std::atomic<int64_t>  m_started_at_ms{0};
+    std::atomic<uint64_t> m_head{0};
+    std::atomic<bool>     m_head_set{false};
     bool     m_init_sent = false;
-    uint64_t m_discontinuity = 0;
+    std::atomic<uint64_t> m_discontinuity{0};
     int64_t  m_pending_skip_ms = 0;   // applied to the next served segment
 
     Stats m_stats;
@@ -194,9 +208,7 @@ private:
     std::string event_prefix() const;
     std::string segment_key(uint64_t seq) const;
     std::string checksum_for(uint64_t seq) const;
-    bool ensure_init();
-    void ensure_started_at();
-    bool download_one(uint64_t seq);
+
 };
 
 } // namespace multisite

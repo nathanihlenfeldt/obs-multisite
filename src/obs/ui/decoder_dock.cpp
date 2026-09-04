@@ -104,19 +104,30 @@ void TimelineBar::paintEvent(QPaintEvent*) {
 
     if (m_live <= m_earliest) return;
 
-    // What is downloaded here — drawn from the real cached ranges, so an
-    // operator can see the buffer growing rather than trusting a number.
-    p.setBrush(QColor(0x2f, 0x6f, 0x57));
+    // Three states, three distinct colours — and no translucent overlays.
+    // Layering a see-through "played" band over the downloaded band produced
+    // a second greenish shade that meant nothing, which is exactly the kind of
+    // thing an operator should never have to decode mid-service.
+    //
+    //   grey  = exists in storage, not downloaded here
+    //   blue  = downloaded and already played
+    //   green = downloaded and ready to play  ← the safety buffer
+    const int headX = (int)(fraction(m_head) * w);
     for (const auto& sp : m_downloaded) {
         const int x1 = (int)(fraction(sp.first) * w);
         const int x2 = (int)(fraction(sp.second) * w);
-        if (x2 >= x1) p.drawRect(QRect(x1, y, std::max(1, x2 - x1), h));
+        if (x2 < x1) continue;
+        // Split each downloaded span at the playhead.
+        const int mid = std::min(std::max(headX, x1), x2);
+        if (mid > x1) {
+            p.setBrush(QColor(0x35, 0x5a, 0x7a));          // played
+            p.drawRect(QRect(x1, y, mid - x1, h));
+        }
+        if (x2 > mid) {
+            p.setBrush(QColor(0x35, 0xc4, 0x89));          // ready to play
+            p.drawRect(QRect(mid, y, std::max(1, x2 - mid), h));
+        }
     }
-
-    // Already played, up to the playhead.
-    const int headX = (int)(fraction(m_head) * w);
-    p.setBrush(QColor(0x3b, 0x82, 0xc4, 90));
-    p.drawRect(QRect(0, y, headX, h));
 
     // Clock scale: a few labelled ticks so positions mean something.
     p.setPen(QPen(QColor(0x7f, 0x86, 0x8e)));
@@ -216,6 +227,32 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     root->addWidget(m_timeline);
     connect(m_timeline, &TimelineBar::seekRequested,
             this, &DecoderDock::onSeek);
+
+    // Legend: three colours, stated once, so nobody has to guess what the
+    // bar is telling them.
+    {
+        auto* leg = new QHBoxLayout();
+        leg->setSpacing(10);
+        struct { const char* key; const char* colour; } items[] = {
+            { "Dock.LegendReady",  "#35c489" },
+            { "Dock.LegendPlayed", "#355a7a" },
+            { "Dock.LegendStored", "#363b41" },
+        };
+        for (auto& it : items) {
+            auto* sw = new QLabel(this);
+            sw->setFixedSize(10, 10);
+            sw->setStyleSheet(QString("background:%1; border-radius:2px;")
+                                .arg(it.colour));
+            auto* tx = new QLabel(tr_(it.key), this);
+            tx->setStyleSheet("color: palette(text); opacity: 0.75;");
+            QFont f = tx->font(); f.setPointSizeF(f.pointSizeF() - 1.0);
+            tx->setFont(f);
+            leg->addWidget(sw);
+            leg->addWidget(tx);
+        }
+        leg->addStretch(1);
+        root->addLayout(leg);
+    }
 
     // Load, then play. Loading fills the buffer; Play puts it to air. Keeping
     // these separate is how an operator prepares before a service rather than

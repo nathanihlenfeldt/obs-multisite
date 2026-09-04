@@ -25,6 +25,7 @@
 #include "plugin_log.h"
 #include "multisite_ui.h"
 
+#include <algorithm>
 #include <mutex>
 #include <string>
 #include <vector>
@@ -64,12 +65,18 @@ void unregister_encoder_controls(EncoderControls* e) {
 }
 void register_decoder_controls(DecoderControls* d) {
     std::lock_guard<std::mutex> lk(g_mtx);
+    // Idempotent. OBS can call a source's update more than once, and a
+    // duplicate entry made every control fire twice and every reconfigure
+    // restart the worker threads twice.
+    for (auto* e : g_decoders) if (e == d) return;
     g_decoders.push_back(d);
 }
 void unregister_decoder_controls(DecoderControls* d) {
     std::lock_guard<std::mutex> lk(g_mtx);
-    for (size_t i = 0; i < g_decoders.size(); ++i)
-        if (g_decoders[i] == d) { g_decoders.erase(g_decoders.begin() + i); break; }
+    // Remove ALL matches, not just the first: a stale duplicate would
+    // otherwise survive and keep acting on a source that had gone.
+    g_decoders.erase(std::remove(g_decoders.begin(), g_decoders.end(), d),
+                     g_decoders.end());
 }
 
 bool encoder_stats(EncoderStats& out) {
