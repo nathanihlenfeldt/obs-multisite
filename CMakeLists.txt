@@ -63,6 +63,13 @@ add_executable(test_decoder tests/test_decoder.cpp)
 target_link_libraries(test_decoder PRIVATE multisite_core)
 add_test(NAME decoder COMMAND test_decoder)
 
+# Guards the property that matters in live production: UI queries must stay
+# fast while the decoder is downloading. Holding the state lock across network
+# I/O once made a timeline click appear to lock OBS up entirely.
+add_executable(test_responsive tests/test_responsive.cpp)
+target_link_libraries(test_responsive PRIVATE multisite_core)
+add_test(NAME responsive COMMAND test_responsive)
+
 # ── Optional: S3 transport (needs libcurl) ────────────────────────────────────
 find_package(CURL QUIET)
 if(CURL_FOUND)
