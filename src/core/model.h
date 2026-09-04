@@ -57,6 +57,11 @@ struct ManifestSegment {
     uint64_t    seq = 0;
     double      duration_s = 6.0;
     std::string checksum;            // sha256 hex of the segment
+    // Wall-clock time of the CONTENT in this segment (event start plus its
+    // offset in the programme), not the time it happened to be uploaded.
+    // Operators think in clock time — "just after 10:42" — never in sequence
+    // numbers, so this is what the UI shows.
+    int64_t     at_ms = 0;
 };
 
 // events/{event_id}/manifest.json — rolling live-edge window.
@@ -64,6 +69,9 @@ struct Manifest {
     std::string event_id;
     std::string status = "live";
     int64_t     updated_at_ms = 0;
+    // When this event started, so a satellite can convert any position to a
+    // clock time even for segments outside the rolling window.
+    int64_t     started_at_ms = 0;
     uint64_t    first_available_seq = 0;  // oldest still-retained (timeslip floor)
     uint64_t    window_start_seq = 0;     // oldest listed here
     uint64_t    latest_seq = 0;           // live edge

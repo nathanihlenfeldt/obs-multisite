@@ -5,21 +5,37 @@
 #include <obs-module.h>
 #include <obs-frontend-api.h>
 
+#include <QScrollArea>
+#include <QWidget>
+
 #include "encoder_dock.h"
 #include "decoder_dock.h"
 #include "../plugin_log.h"
 
 namespace multisite_obs {
 
+// OBS docks share vertical space with the mixer, transitions and controls, so
+// a dock can end up much shorter than its content. Wrapping in a scroll area
+// means nothing becomes unreachable on a small screen.
+static QWidget* scrollable(QWidget* inner) {
+    auto* area = new QScrollArea();
+    area->setWidget(inner);
+    area->setWidgetResizable(true);
+    area->setFrameShape(QFrame::NoFrame);
+    // Let the dock get narrow without forcing a horizontal scrollbar.
+    area->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    return area;
+}
+
 void register_docks() {
     // add_dock_by_id takes ownership of the widget and remembers its geometry
     // and visibility between sessions, so an operator's layout persists.
     obs_frontend_add_dock_by_id("multisite_encoder",
                                 obs_module_text("Dock.Encoder"),
-                                new EncoderDock());
+                                scrollable(new EncoderDock()));
     obs_frontend_add_dock_by_id("multisite_decoder",
                                 obs_module_text("Dock.Decoder"),
-                                new DecoderDock());
+                                scrollable(new DecoderDock()));
     mlog_info("registered encoder and decoder docks");
 }
 

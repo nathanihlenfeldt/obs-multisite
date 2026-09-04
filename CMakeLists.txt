@@ -60,6 +60,12 @@ if(CURL_FOUND)
     target_link_libraries(multisite_s3 PUBLIC multisite_core CURL::libcurl)
     set_target_properties(multisite_s3 PROPERTIES POSITION_INDEPENDENT_CODE ON)
     message(STATUS "libcurl found — building S3 transport")
+
+    # Endpoint/bucket values are pasted by operators, so the URL builder has to
+    # tolerate schemes, trailing slashes and whitespace.
+    add_executable(test_s3_url tests/test_s3_url.cpp)
+    target_link_libraries(test_s3_url PRIVATE multisite_s3)
+    add_test(NAME s3_url COMMAND test_s3_url)
 else()
     message(STATUS "libcurl not found — skipping S3 transport")
 endif()
@@ -234,7 +240,8 @@ if(BUILD_OBS_PLUGIN)
         src/obs/multisite_output.cpp
         src/obs/multisite_source.cpp
         src/obs/multisite_ui.cpp
-        src/obs/broadcast_controller.cpp)
+        src/obs/broadcast_controller.cpp
+        src/obs/decoder_settings.cpp)
     target_include_directories(obs-multisite PRIVATE src src/core)
     target_compile_definitions(obs-multisite PRIVATE
         PLUGIN_VERSION="${PROJECT_VERSION}")

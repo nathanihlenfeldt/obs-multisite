@@ -45,6 +45,10 @@ struct DecoderControls {
     virtual void snapshot(DecoderSnapshot& out) const = 0;
     virtual void jump_to_marker(const std::string& id) = 0;
     virtual void seek(unsigned long long seq) = 0;
+    // Re-read settings (including the machine-wide storage config) and
+    // restart. Needed when credentials are entered in the dock after a source
+    // already exists.
+    virtual void reconfigure() = 0;
 };
 
 void register_encoder_controls(EncoderControls* e);
@@ -70,12 +74,17 @@ struct DecoderSnapshot {
     std::string current_marker;
     std::string last_error;
     int         audio_channels = 0;
-    std::vector<std::pair<std::string, std::string>> markers;  // label, id
+    // Wall-clock times, so the UI never has to mention sequence numbers.
+    long long   playhead_ms = 0, live_ms = 0, earliest_ms = 0, started_ms = 0;
+    // label, id, and the clock time the marker refers to
+    struct MarkerEntry { std::string label; std::string id; long long at_ms; };
+    std::vector<MarkerEntry> markers;
 };
 bool decoder_snapshot(DecoderSnapshot& out);
 void decoder_pause_all();
 void decoder_resume_all();
 void decoder_jump_live_all();
+void decoder_reconfigure_all();
 void decoder_jump_to_marker(const std::string& id);
 void decoder_seek(unsigned long long seq);
 

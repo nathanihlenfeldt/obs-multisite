@@ -46,6 +46,9 @@ public:
 
     std::string host() const;
 
+    // The resolved base URL (scheme + host + bucket), for logging. No secrets.
+    std::string base_url() const;
+
 private:
     struct Impl;
     std::unique_ptr<Impl> d;

@@ -32,16 +32,55 @@ static size_t read_from_buf(void* dest, size_t sz, size_t nm, void* ud) {
     return n;
 }
 
+// Operators paste values from dashboards, so a field may arrive with a scheme,
+// a trailing slash or stray whitespace. Left as-is these produce URLs like
+// "https://https://acct.r2.cloudflarestorage.com/..." and curl rejects them
+// with "URL using bad/illegal format" — an error that says nothing about the
+// cause. Normalise instead of failing.
+static std::string clean_host(std::string v) {
+    // trim whitespace
+    const char* ws = " \t\r\n";
+    size_t a = v.find_first_not_of(ws);
+    if (a == std::string::npos) return "";
+    size_t b = v.find_last_not_of(ws);
+    v = v.substr(a, b - a + 1);
+    // strip a scheme
+    for (const char* p : { "https://", "http://" }) {
+        const size_t n = std::strlen(p);
+        if (v.size() > n && v.compare(0, n, p) == 0) { v = v.substr(n); break; }
+    }
+    // strip any path or trailing slashes
+    const size_t slash = v.find('/');
+    if (slash != std::string::npos) v = v.substr(0, slash);
+    return v;
+}
+
+static std::string clean_segment(std::string v) {
+    const char* ws = " \t\r\n/";
+    size_t a = v.find_first_not_of(ws);
+    if (a == std::string::npos) return "";
+    size_t b = v.find_last_not_of(ws);
+    return v.substr(a, b - a + 1);
+}
+
 struct S3Transport::Impl {
     S3Config cfg;
 
     std::string host() const {
-        if (!cfg.endpoint_host.empty()) return cfg.endpoint_host;
-        return cfg.r2_account_id + ".r2.cloudflarestorage.com";
+        const std::string ep = clean_host(cfg.endpoint_host);
+        if (!ep.empty()) return ep;
+
+        // The account-id field often receives a pasted hostname or full URL
+        // rather than the bare id. If it already looks like a hostname, use it
+        // as the endpoint instead of appending the R2 suffix to it.
+        const std::string acct = clean_host(cfg.r2_account_id);
+        if (acct.empty()) return "";      // caller reports this properly
+        if (acct.find('.') != std::string::npos) return acct;
+        return acct + ".r2.cloudflarestorage.com";
     }
     std::string url_for(const std::string& key) const {
         return std::string(cfg.use_https ? "https://" : "http://") +
-               host() + "/" + cfg.bucket + "/" + key;
+               host() + "/" + clean_segment(cfg.bucket) + "/" + key;
     }
 
     // x-amz-tagging value: url-encoded key=value pairs joined by &
@@ -154,6 +193,14 @@ struct S3Transport::Impl {
 
 S3Transport::S3Transport(S3Config cfg) : d(std::make_unique<Impl>()) {
     d->cfg = std::move(cfg);
+}
+
+// The base URL actually in use, for logging. Contains no credentials.
+std::string S3Transport::base_url() const {
+    const std::string h = d->host();
+    if (h.empty()) return "<no endpoint configured>";
+    return std::string(d->cfg.use_https ? "https://" : "http://") + h + "/" +
+           clean_segment(d->cfg.bucket);
 }
 S3Transport::~S3Transport() = default;
 

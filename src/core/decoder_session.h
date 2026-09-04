@@ -107,6 +107,15 @@ public:
     // otherwise decode as out-of-order timestamps and a glitched picture.
     uint64_t discontinuity_id() const;
 
+    // Wall-clock time of a position in the programme. Uses the exact time
+    // recorded for a segment when it is still in the manifest window, and
+    // estimates from the event start otherwise. 0 if unknown.
+    int64_t wall_clock_ms(uint64_t seq) const;
+    int64_t playhead_wall_ms() const;
+    int64_t live_wall_ms() const;
+    int64_t earliest_wall_ms() const;
+    int64_t event_started_ms() const;
+
     // How far behind live the campus currently is, in seconds.
     double behind_live_s() const;
 

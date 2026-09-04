@@ -108,6 +108,11 @@ void decoder_jump_live_all() {
     for (auto* d : g_decoders) d->jump_to_live();
 }
 
+void decoder_reconfigure_all() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* d : g_decoders) d->reconfigure();
+}
+
 void decoder_jump_to_marker(const std::string& id) {
     std::lock_guard<std::mutex> lk(g_mtx);
     for (auto* d : g_decoders) d->jump_to_marker(id);

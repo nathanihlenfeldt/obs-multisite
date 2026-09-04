@@ -323,6 +323,37 @@ uint64_t DecoderSession::discontinuity_id() const {
     return m_discontinuity;
 }
 
+// Exact where known, estimated otherwise: segments outside the rolling
+// manifest window are still seekable, so their times have to be derived.
+int64_t DecoderSession::wall_clock_ms(uint64_t seq) const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    for (const auto& s : m_manifest.segments)
+        if (s.seq == seq && s.at_ms > 0) return s.at_ms;
+    if (m_manifest.started_at_ms <= 0) return 0;
+    return m_manifest.started_at_ms +
+           (int64_t)((double)seq * m_segment_duration_s * 1000.0);
+}
+
+int64_t DecoderSession::playhead_wall_ms() const {
+    uint64_t h;
+    { std::lock_guard<std::mutex> lk(m_mtx); if (!m_head_set) return 0; h = m_head; }
+    return wall_clock_ms(h);
+}
+int64_t DecoderSession::live_wall_ms() const {
+    uint64_t l;
+    { std::lock_guard<std::mutex> lk(m_mtx); l = m_latest_seq; }
+    return wall_clock_ms(l);
+}
+int64_t DecoderSession::earliest_wall_ms() const {
+    uint64_t f;
+    { std::lock_guard<std::mutex> lk(m_mtx); f = m_first_available_seq; }
+    return wall_clock_ms(f);
+}
+int64_t DecoderSession::event_started_ms() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_manifest.started_at_ms;
+}
+
 double DecoderSession::behind_live_s() const {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (!m_head_set || m_latest_seq < m_head) return 0.0;

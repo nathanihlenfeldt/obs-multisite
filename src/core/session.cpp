@@ -116,6 +116,7 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
         m_manifest.video               = video;
         m_manifest.audio_tracks        = tracks;
         m_manifest.first_available_seq = m_next_seq;
+        m_manifest.started_at_ms       = ev.started_at_ms;
         m_manifest.updated_at_ms       = now_ms();
         publish_manifest_locked();
     }
@@ -168,6 +169,10 @@ void Session::on_confirmed(const SpooledSegment& seg) {
     ms.seq        = seg.seq;
     ms.duration_s = seg.duration_s;
     ms.checksum   = seg.checksum;
+    // Content time, not upload time: event start plus this segment's offset in
+    // the programme. Upload time would drift with network delays.
+    ms.at_ms      = m_manifest.started_at_ms +
+                    (int64_t)(seg.pts_offset_s * 1000.0);
     m_manifest.push(ms, m_cfg.manifest_window);
     m_manifest.updated_at_ms = now_ms();
     publish_manifest_locked();

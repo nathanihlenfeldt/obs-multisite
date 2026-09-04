@@ -18,6 +18,7 @@
 
 #include "plugin_log.h"
 #include "multisite_ui.h"
+#include "decoder_settings.h"
 
 #include "../core/decoder_session.h"
 #include "../core/cmaf_decoder.h"
@@ -26,6 +27,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <ctime>
 #include <condition_variable>
 #include <deque>
 #include <memory>
@@ -63,9 +65,16 @@ struct PendingFrame {
 struct SourceCtx : DecoderControls {
     obs_source_t* source = nullptr;
 
-    std::unique_ptr<S3Transport>    transport;
-    std::unique_ptr<DecoderSession> session;
-    std::unique_ptr<CmafDecoder>    decoder;
+    // Held as shared_ptr behind a short-lived lock. The worker threads and the
+    // UI both need these, and some calls block (network polls, and pushing a
+    // fragment when the decoder is full). Holding a mutex across a blocking
+    // call deadlocked Resume against the feed loop, so callers now take a
+    // reference under `obj_mtx` and release it before doing any work — the
+    // session and decoder are internally thread-safe.
+    std::shared_ptr<S3Transport>    transport;
+    std::shared_ptr<DecoderSession> session;
+    std::shared_ptr<CmafDecoder>    decoder;
+    mutable std::mutex              obj_mtx;
 
     std::thread poll_thread, feed_thread;
     std::atomic<bool> running{false};
@@ -99,6 +108,7 @@ struct SourceCtx : DecoderControls {
     void snapshot(DecoderSnapshot& out) const override;
     void jump_to_marker(const std::string& id) override;
     void seek(unsigned long long seq) override;
+    void reconfigure() override;
 
     // Marker chosen in the properties dialog, acted on by the Jump button.
     std::string pending_marker_id;
@@ -150,6 +160,18 @@ static constexpr size_t   kMaxQueuedFrames = 16;
 // If frames fall further behind wall time than this, the playout clock is
 // re-anchored rather than dumping a backlog into OBS.
 static constexpr uint64_t kClockResyncThresholdNs = 2000000000ULL;   // 2 s
+// Take a reference under the short lock; never call through it while holding
+// `obj_mtx`. This is what keeps blocking work (network polls, pushing a
+// fragment to a full decoder) off the critical section that Pause/Resume need.
+static std::shared_ptr<DecoderSession> get_session(SourceCtx* ctx) {
+    std::lock_guard<std::mutex> lk(ctx->obj_mtx);
+    return ctx->session;
+}
+static std::shared_ptr<CmafDecoder> get_decoder(SourceCtx* ctx) {
+    std::lock_guard<std::mutex> lk(ctx->obj_mtx);
+    return ctx->decoder;
+}
+
 // Push a stamped frame for delivery. Blocks while the queue is full, which
 // back-pressures the decoder rather than letting memory grow.
 static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
@@ -359,12 +381,10 @@ static void poll_loop(SourceCtx* ctx) {
 
         if (now >= next_poll) {
             next_poll = now + ctx->poll_interval_ms;
-            RoomState st;
-            {
-                std::lock_guard<std::mutex> lk(ctx->mtx);
-                if (!ctx->session) break;
-                st = ctx->session->poll();
-            }
+            auto sess = get_session(ctx);
+            if (!sess) break;
+            // poll() does network I/O and can take seconds; never under a lock.
+            RoomState st = sess->poll();
             if (st != ctx->last_room) {
                 ctx->last_room = st;
                 const char* name = st == RoomState::Live    ? "LIVE"
@@ -373,11 +393,9 @@ static void poll_loop(SourceCtx* ctx) {
                                                             : "unknown";
                 mlog_info("source: room is %s%s", name,
                           st == RoomState::Offline ? " (encoder stopped or unreachable)" : "");
-                if (st == RoomState::Offline || st == RoomState::Ended) {
-                    std::lock_guard<std::mutex> lk(ctx->mtx);
-                    if (ctx->session && !ctx->session->last_error().empty())
-                        mlog_warn("source: %s", ctx->session->last_error().c_str());
-                }
+                if ((st == RoomState::Offline || st == RoomState::Ended) &&
+                    !sess->last_error().empty())
+                    mlog_warn("source: %s", sess->last_error().c_str());
             }
         }
 
@@ -385,24 +403,25 @@ static void poll_loop(SourceCtx* ctx) {
         // cache while playback is paused or behind live.
         int fetched = 0;
         {
-            std::lock_guard<std::mutex> lk(ctx->mtx);
-            if (ctx->session) fetched = ctx->session->pump_downloads(4);
+            auto sess = get_session(ctx);
+            // Downloads block on the network — again, no lock held.
+            if (sess) fetched = sess->pump_downloads(4);
         }
 
         // Periodic status so an operator can see it working.
         if (now - ctx->last_status_log_ms > 30000) {
             ctx->last_status_log_ms = now;
-            std::lock_guard<std::mutex> lk(ctx->mtx);
-            if (ctx->session) {
-                auto& s = ctx->session->stats();
+            auto sess2 = get_session(ctx);
+            if (sess2) {
+                auto& s = sess2->stats();
                 mlog_info("source: head=%llu live=%llu behind=%.0fs "
                           "buffered=%.0fs cached=%zu downloaded=%llu "
                           "frames_out=%llu",
-                          (unsigned long long)ctx->session->playback_head(),
-                          (unsigned long long)ctx->session->live_edge(),
-                          ctx->session->behind_live_s(),
-                          ctx->session->buffered_ahead_s(),
-                          ctx->session->cache().count(),
+                          (unsigned long long)sess2->playback_head(),
+                          (unsigned long long)sess2->live_edge(),
+                          sess2->behind_live_s(),
+                          sess2->buffered_ahead_s(),
+                          sess2->cache().count(),
                           (unsigned long long)s.downloaded,
                           (unsigned long long)ctx->frames_out.load());
             }
@@ -417,14 +436,21 @@ static void poll_loop(SourceCtx* ctx) {
 static void feed_loop(SourceCtx* ctx) {
     mlog_info("source: feed loop started");
     while (ctx->running.load()) {
+        // While held, stop pulling and feeding entirely. Otherwise the decoder
+        // and delivery queues fill, push_fragment blocks, and Resume cannot get
+        // in — which froze OBS.
+        if (ctx->paused.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
+
+        auto sess = get_session(ctx);
+        if (!sess) break;
         std::optional<PlayableSegment> seg;
         {
-            std::lock_guard<std::mutex> lk(ctx->mtx);
-            if (!ctx->session) break;
             // Start playback as soon as the prebuffer is satisfied.
-            if (ctx->session->play_state() == PlayState::Stopped)
-                ctx->session->start();
-            seg = ctx->session->next_segment();
+            if (sess->play_state() == PlayState::Stopped) sess->start();
+            seg = sess->next_segment();
         }
 
         if (!seg) {
@@ -437,17 +463,15 @@ static void feed_loop(SourceCtx* ctx) {
         // restarts from the re-sent init segment; feeding across a jump
         // produces out-of-order timestamps and a glitched picture.
         {
-            uint64_t d;
-            {
-                std::lock_guard<std::mutex> lk(ctx->mtx);
-                d = ctx->session ? ctx->session->discontinuity_id() : 0;
-            }
+            uint64_t d = sess->discontinuity_id();
             if (d != ctx->seen_discontinuity) {
                 ctx->seen_discontinuity = d;
                 if (ctx->decoder_started.load()) {
                     mlog_info("source: playback jumped — restarting decoder");
-                    std::lock_guard<std::mutex> lk(ctx->mtx);
-                    if (ctx->decoder) { ctx->decoder->stop(); ctx->decoder.reset(); }
+                    std::shared_ptr<CmafDecoder> old;
+                    { std::lock_guard<std::mutex> lk(ctx->obj_mtx);
+                      old = ctx->decoder; ctx->decoder.reset(); }
+                    if (old) old->stop();      // stop() blocks: outside the lock
                     ctx->decoder_started = false;
                     ctx->first_pts_ns = -1;      // re-anchor the playout clock
                     ctx->logged_av_offset = false;
@@ -470,20 +494,15 @@ static void feed_loop(SourceCtx* ctx) {
                 std::this_thread::sleep_for(std::chrono::milliseconds(250));
                 continue;
             }
-            std::lock_guard<std::mutex> lk(ctx->mtx);
-            ctx->decoder = std::make_unique<CmafDecoder>();
-            ctx->decoder->on_video([ctx](const DecodedVideoFrame& f) {
-                deliver_video(ctx, f);
-            });
-            ctx->decoder->on_audio([ctx](const DecodedAudioFrame& f) {
-                deliver_audio(ctx, f);
-            });
-            if (!ctx->decoder->start(seg->init)) {
+            auto dec = std::make_shared<CmafDecoder>();
+            dec->on_video([ctx](const DecodedVideoFrame& f) { deliver_video(ctx, f); });
+            dec->on_audio([ctx](const DecodedAudioFrame& f) { deliver_audio(ctx, f); });
+            if (!dec->start(seg->init)) {
                 mlog_error("source: decoder failed to start: %s",
-                           ctx->decoder->error().c_str());
-                ctx->decoder.reset();
+                           dec->error().c_str());
                 continue;
             }
+            { std::lock_guard<std::mutex> lk(ctx->obj_mtx); ctx->decoder = dec; }
             ctx->decoder_started = true;
             ctx->feed_start_ns = os_gettime_ns();
             ctx->pushed_media_ns = 0;
@@ -504,10 +523,9 @@ static void feed_loop(SourceCtx* ctx) {
         }
         if (!ctx->running.load()) break;
 
-        {
-            std::lock_guard<std::mutex> lk(ctx->mtx);
-            if (ctx->decoder) ctx->decoder->push_fragment(seg->media);
-        }
+        // push_fragment blocks when the decoder is full — deliberately not
+        // under any lock.
+        if (auto dec = get_decoder(ctx)) dec->push_fragment(seg->media);
         ctx->pushed_media_ns += (uint64_t)(seg->duration_s * 1e9);
     }
     mlog_info("source: feed loop exiting");
@@ -536,8 +554,10 @@ static void stop_workers(SourceCtx* ctx) {
         ctx->dq.clear();
     }
     {
-        std::lock_guard<std::mutex> lk(ctx->mtx);
-        if (ctx->decoder) { ctx->decoder->stop(); ctx->decoder.reset(); }
+        std::shared_ptr<CmafDecoder> old;
+        { std::lock_guard<std::mutex> lk(ctx->obj_mtx);
+          old = ctx->decoder; ctx->decoder.reset(); }
+        if (old) old->stop();          // blocks; outside the lock
     }
     ctx->decoder_started = false;
     ctx->first_pts_ns = -1;
@@ -548,25 +568,53 @@ static void src_update(void* data, obs_data_t* s) {
     unregister_decoder_controls(ctx);
     stop_workers(ctx);
 
+    // Storage is machine-wide (see decoder_settings.h): a source uses its own
+    // fields when filled, otherwise the shared settings. That way credentials
+    // are entered once, survive an unclean OBS exit, and are shared by every
+    // additional source.
+    DecoderSettings shared = decoder_settings();
+
+    auto pick = [](const char* own, const std::string& fallback) {
+        return (own && *own) ? std::string(own) : fallback;
+    };
+
     S3Config s3;
-    s3.endpoint_host     = obs_data_get_string(s, S_ENDPOINT);
-    s3.r2_account_id     = obs_data_get_string(s, S_ACCOUNT);
-    s3.bucket            = obs_data_get_string(s, S_BUCKET);
-    s3.access_key_id     = obs_data_get_string(s, S_KEYID);
-    s3.secret_access_key = obs_data_get_string(s, S_SECRET);
-    s3.region            = obs_data_get_string(s, S_REGION);
+    s3.endpoint_host     = pick(obs_data_get_string(s, S_ENDPOINT), shared.endpoint_host);
+    s3.r2_account_id     = pick(obs_data_get_string(s, S_ACCOUNT),  shared.r2_account_id);
+    s3.bucket            = pick(obs_data_get_string(s, S_BUCKET),   shared.bucket);
+    s3.access_key_id     = pick(obs_data_get_string(s, S_KEYID),    shared.access_key_id);
+    s3.secret_access_key = pick(obs_data_get_string(s, S_SECRET),   shared.secret_access_key);
+    s3.region            = pick(obs_data_get_string(s, S_REGION),   shared.region);
 
     DecoderConfig dc;
-    dc.room_id              = obs_data_get_string(s, S_ROOM);
+    dc.room_id              = pick(obs_data_get_string(s, S_ROOM), shared.room_id);
     dc.prebuffer_segments   = (int)obs_data_get_int(s, S_PREBUF);
     dc.keep_behind_segments = (int)obs_data_get_int(s, S_KEEP);
     ctx->poll_interval_ms   = (int)obs_data_get_int(s, S_POLL_MS);
 
     if (s3.bucket.empty() ||
         (s3.endpoint_host.empty() && s3.r2_account_id.empty())) {
-        mlog_warn("source: not configured yet (need bucket + endpoint or "
-                  "R2 account id)");
+        mlog_warn("source: not configured yet — enter storage details in the "
+                  "Multisite Decoder dock (or this source's properties)");
         return;
+    }
+
+    // Anything typed into the source becomes the machine default, so the next
+    // source (and the next OBS session) already has it.
+    if (!shared.configured() ||
+        shared.bucket != s3.bucket || shared.room_id != dc.room_id) {
+        DecoderSettings upd = shared;
+        upd.endpoint_host     = s3.endpoint_host;
+        upd.r2_account_id     = s3.r2_account_id;
+        upd.bucket            = s3.bucket;
+        upd.access_key_id     = s3.access_key_id;
+        upd.secret_access_key = s3.secret_access_key;
+        upd.region            = s3.region;
+        upd.room_id           = dc.room_id;
+        upd.prebuffer_segments = dc.prebuffer_segments;
+        upd.poll_interval_ms   = ctx->poll_interval_ms;
+        upd.keep_behind_segments = dc.keep_behind_segments;
+        set_decoder_settings(upd);
     }
 
     char* cachedir = obs_module_config_path("cache");
@@ -574,9 +622,11 @@ static void src_update(void* data, obs_data_t* s) {
     bfree(cachedir);
 
     {
-        std::lock_guard<std::mutex> lk(ctx->mtx);
-        ctx->transport = std::make_unique<S3Transport>(s3);
-        ctx->session   = std::make_unique<DecoderSession>(dc, *ctx->transport);
+        auto tx  = std::make_shared<S3Transport>(s3);
+        auto ses = std::make_shared<DecoderSession>(dc, *tx);
+        std::lock_guard<std::mutex> lk(ctx->obj_mtx);
+        ctx->transport = tx;
+        ctx->session   = ses;
     }
 
     register_decoder_controls(ctx);      // hotkeys act on this source
@@ -601,7 +651,7 @@ static void src_destroy(void* data) {
     unregister_decoder_controls(ctx);
     stop_workers(ctx);
     {
-        std::lock_guard<std::mutex> lk(ctx->mtx);
+        std::lock_guard<std::mutex> lk(ctx->obj_mtx);
         ctx->session.reset();
         ctx->transport.reset();
     }
@@ -617,20 +667,24 @@ static void src_defaults(obs_data_t* s) {
 }
 
 // ── DecoderControls: one implementation, shared by buttons and hotkeys ───────
+// These are called from the UI thread. They must not block, and must not
+// contend with a worker thread that is mid-network-call — so they take a
+// reference to the session under a short lock and act through it.
 void SourceCtx::pause() {
-    std::lock_guard<std::mutex> lk(mtx);
-    if (!session) return;
-    // Stop delivery immediately, then stop pulling new segments.
+    auto sess = get_session(this);
+    if (!sess) return;
+    // Order matters: stop delivery first so the picture holds immediately,
+    // then stop pulling new segments.
     paused = true;
     pause_started_ns = os_gettime_ns();
-    session->pause();
+    sess->pause();
     mlog_info("source: PAUSED at segment %llu — cache keeps filling",
-              (unsigned long long)session->playback_head());
+              (unsigned long long)sess->playback_head());
 }
 
 void SourceCtx::resume() {
-    std::lock_guard<std::mutex> lk(mtx);
-    if (!session) return;
+    auto sess = get_session(this);
+    if (!sess) return;
 
     // The playout clock maps media time to wall time. While paused, wall time
     // keeps running but media time does not, so without this every frame would
@@ -651,46 +705,41 @@ void SourceCtx::resume() {
                   (double)paused_for / 1e9);
     }
 
-    paused = false;               // delivery resumes at once
-    session->resume();
+    paused = false;               // delivery and feeding resume at once
+    sess->resume();
     mlog_info("source: RESUMED from segment %llu (%.0fs behind live)",
-              (unsigned long long)session->playback_head(),
-              session->behind_live_s());
+              (unsigned long long)sess->playback_head(),
+              sess->behind_live_s());
 }
 
 void SourceCtx::toggle_pause() {
-    const bool was = paused.load();
-    if (was) resume(); else pause();
+    if (paused.load()) resume(); else pause();
 }
 
 void SourceCtx::jump_to_live() {
-    {
-        std::lock_guard<std::mutex> lk(mtx);
-        if (!session) return;
-        // A jump restarts the decoder and re-anchors the clock, so any pending
-        // pause offset is irrelevant — and the operator expects picture back.
-        pause_started_ns = 0;
-        session->jump_to_live();
-        mlog_info("source: JUMPED TO LIVE (segment %llu)",
-                  (unsigned long long)session->playback_head());
-    }
+    auto sess = get_session(this);
+    if (!sess) return;
+    pause_started_ns = 0;
+    sess->jump_to_live();
     paused = false;
+    mlog_info("source: JUMPED TO LIVE (segment %llu)",
+              (unsigned long long)sess->playback_head());
 }
 
 void SourceCtx::log_status() {
-    std::lock_guard<std::mutex> lk(mtx);
-    if (!session) { mlog_info("source: not configured"); return; }
-    auto& st = session->stats();
-    auto cur = session->current_marker();
+    auto sess = get_session(this);
+    if (!sess) { mlog_info("source: not configured"); return; }
+    auto& st = sess->stats();
+    auto cur = sess->current_marker();
     mlog_info("source status: room=%d head=%llu live=%llu behind=%.0fs "
               "buffered=%.0fs cached=%zu downloaded=%llu dl_fail=%llu "
               "checksum_fail=%llu served=%llu frames_out=%llu%s%s",
-              (int)session->room_state(),
-              (unsigned long long)session->playback_head(),
-              (unsigned long long)session->live_edge(),
-              session->behind_live_s(),
-              session->buffered_ahead_s(),
-              session->cache().count(),
+              (int)sess->room_state(),
+              (unsigned long long)sess->playback_head(),
+              (unsigned long long)sess->live_edge(),
+              sess->behind_live_s(),
+              sess->buffered_ahead_s(),
+              sess->cache().count(),
               (unsigned long long)st.downloaded,
               (unsigned long long)st.download_failures,
               (unsigned long long)st.checksum_failures,
@@ -698,59 +747,67 @@ void SourceCtx::log_status() {
               (unsigned long long)frames_out.load(),
               cur ? " marker=" : "",
               cur ? cur->label.c_str() : "");
-    if (!session->last_error().empty())
-        mlog_info("source last error: %s", session->last_error().c_str());
+    if (!sess->last_error().empty())
+        mlog_info("source last error: %s", sess->last_error().c_str());
 }
 
 void SourceCtx::snapshot(DecoderSnapshot& out) const {
-    std::lock_guard<std::mutex> lk(const_cast<std::mutex&>(mtx));
     out.room_id = room_id_for_display;
     out.paused  = paused.load();
     out.audio_channels = audio_channels.load();
-    if (!session) return;
-    out.room_state       = (int)session->room_state();
-    out.head             = session->playback_head();
-    out.live_edge        = session->live_edge();
-    out.first_available  = session->earliest_available();
-    out.behind_live_s    = session->behind_live_s();
-    out.buffered_ahead_s = session->buffered_ahead_s();
-    out.cached           = session->cache().count();
-    out.last_error       = session->last_error();
-    if (auto cur = session->current_marker()) out.current_marker = cur->label;
-    for (const auto& m : session->markers())
-        out.markers.emplace_back(m.label + "  (segment " +
-                                 std::to_string(m.seq) + ")", m.id);
+    std::shared_ptr<DecoderSession> sess;
+    { std::lock_guard<std::mutex> lk(obj_mtx); sess = session; }
+    if (!sess) return;
+    out.room_state       = (int)sess->room_state();
+    out.head             = sess->playback_head();
+    out.live_edge        = sess->live_edge();
+    out.first_available  = sess->earliest_available();
+    out.behind_live_s    = sess->behind_live_s();
+    out.buffered_ahead_s = sess->buffered_ahead_s();
+    out.cached           = sess->cache().count();
+    out.last_error       = sess->last_error();
+    out.playhead_ms = sess->playhead_wall_ms();
+    out.live_ms     = sess->live_wall_ms();
+    out.earliest_ms = sess->earliest_wall_ms();
+    out.started_ms  = sess->event_started_ms();
+    if (auto cur = sess->current_marker()) out.current_marker = cur->label;
+    for (const auto& m : sess->markers())
+        out.markers.push_back({ m.label, m.id, (long long)m.at_ms });
 }
 
 void SourceCtx::jump_to_marker(const std::string& id) {
-    {
-        std::lock_guard<std::mutex> lk(mtx);
-        if (!session) return;
-        if (!session->jump_to_marker(id)) {
-            mlog_warn("source: could not jump to marker '%s' — it may no "
-                      "longer be retained", id.c_str());
-            return;
-        }
-        mlog_info("source: jumped to marker (segment %llu)",
-                  (unsigned long long)session->playback_head());
+    auto sess = get_session(this);
+    if (!sess) return;
+    if (!sess->jump_to_marker(id)) {
+        mlog_warn("source: could not jump to marker '%s' — it may no longer "
+                  "be retained", id.c_str());
+        return;
     }
     pause_started_ns = 0;
     paused = false;
+    mlog_info("source: jumped to marker (segment %llu)",
+              (unsigned long long)sess->playback_head());
+}
+
+void SourceCtx::reconfigure() {
+    // obs_source_update with null settings re-applies the source's current
+    // settings on the next tick, which re-runs src_update — picking up the
+    // machine-wide storage config. Deferring avoids tearing down worker
+    // threads from whichever thread happened to click the button.
+    if (source) obs_source_update(source, nullptr);
 }
 
 void SourceCtx::seek(unsigned long long seq) {
-    {
-        std::lock_guard<std::mutex> lk(mtx);
-        if (!session) return;
-        if (!session->seek((uint64_t)seq)) {
-            mlog_warn("source: cannot seek to segment %llu (outside the "
-                      "retained window)", seq);
-            return;
-        }
-        mlog_info("source: seeked to segment %llu", seq);
+    auto sess = get_session(this);
+    if (!sess) return;
+    if (!sess->seek((uint64_t)seq)) {
+        mlog_warn("source: cannot seek to segment %llu (outside the retained "
+                  "window)", seq);
+        return;
     }
     pause_started_ns = 0;
     paused = false;
+    mlog_info("source: seeked to segment %llu", seq);
 }
 
 // Property buttons delegate to the same methods the hotkeys use.
@@ -774,12 +831,7 @@ static bool on_jump_marker(obs_properties_t*, obs_property_t* prop, void* data) 
     (void)prop;
     // Read the selection under the lock, then release it: jump_to_marker takes
     // the same lock itself.
-    std::string id;
-    {
-        std::lock_guard<std::mutex> lk(ctx->mtx);
-        if (!ctx->session) return false;
-        id = ctx->pending_marker_id;
-    }
+    const std::string id = ctx->pending_marker_id;
     if (id.empty()) {
         mlog_info("source: pick a marker first");
         return false;
@@ -820,11 +872,23 @@ static obs_properties_t* src_props(void* data) {
         OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
     if (data) {
         auto* ctx = static_cast<SourceCtx*>(data);
-        std::lock_guard<std::mutex> lk(ctx->mtx);
-        if (ctx->session) {
-            for (const auto& m : ctx->session->markers()) {
-                std::string label = m.label + "  (segment " +
-                                    std::to_string(m.seq) + ")";
+        if (auto sess = get_session(ctx)) {
+            for (const auto& m : sess->markers()) {
+                // Clock time, not a sequence number: an operator recognises
+                // "10:42" and never "segment 147".
+                char when[32] = "";
+                if (m.at_ms > 0) {
+                    const std::time_t t = (std::time_t)(m.at_ms / 1000);
+                    std::tm lt{};
+#if defined(_WIN32)
+                    localtime_s(&lt, &t);
+#else
+                    localtime_r(&t, &lt);
+#endif
+                    std::strftime(when, sizeof(when), "%H:%M", &lt);
+                }
+                std::string label = when[0] ? (std::string(when) + "  " + m.label)
+                                            : m.label;
                 obs_property_list_add_string(mk, label.c_str(), m.id.c_str());
             }
         }

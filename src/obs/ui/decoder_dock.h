@@ -15,6 +15,9 @@ class QLabel;
 class QPushButton;
 class QComboBox;
 class QTimer;
+class QLineEdit;
+class QSpinBox;
+class QDialog;
 
 namespace multisite_obs {
 
@@ -53,6 +56,9 @@ public:
 
 private slots:
     void refresh();
+    void onStart();
+    void onSaveSettings();
+    void onOpenSettings();
     void onPause();
     void onResume();
     void onJumpLive();
@@ -72,10 +78,25 @@ private:
     QPushButton* m_pause = nullptr;
     QPushButton* m_resume = nullptr;
     QPushButton* m_live = nullptr;
+    QPushButton* m_start = nullptr;
     QComboBox* m_markers = nullptr;
     QPushButton* m_jumpMarker = nullptr;
     QTimer* m_timer = nullptr;
     size_t m_marker_count = 0;
+
+    // Machine-wide storage settings, entered once here.
+    QLineEdit* m_accountId = nullptr;
+    QLineEdit* m_endpoint = nullptr;
+    QLineEdit* m_bucket = nullptr;
+    QLineEdit* m_keyId = nullptr;
+    QLineEdit* m_secret = nullptr;
+    QLineEdit* m_region = nullptr;
+    QLineEdit* m_roomId = nullptr;
+    QSpinBox*  m_prebuffer = nullptr;
+    // In a dialog rather than the dock, for the same reason as the encoder:
+    // settings are set once, the dock is watched mid-service.
+    QDialog* m_settings = nullptr;
+    QPushButton* m_settingsBtn = nullptr;
 };
 
 } // namespace multisite_obs

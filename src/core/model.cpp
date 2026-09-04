@@ -119,6 +119,7 @@ std::string Manifest::to_json() const {
     j["event_id"]            = event_id;
     j["status"]              = status;
     j["updated_at_ms"]       = updated_at_ms;
+    j["started_at_ms"]       = started_at_ms;
     j["first_available_seq"] = first_available_seq;
     j["window_start_seq"]    = window_start_seq;
     j["latest_seq"]          = latest_seq;
@@ -128,7 +129,7 @@ std::string Manifest::to_json() const {
     json segs = json::array();
     for (const auto& s : segments)
         segs.push_back({ {"seq", s.seq}, {"duration_s", s.duration_s},
-                         {"checksum", s.checksum} });
+                         {"checksum", s.checksum}, {"at_ms", s.at_ms} });
     j["segments"] = segs;
     return j.dump();
 }
@@ -138,6 +139,7 @@ Manifest Manifest::from_json(const std::string& s) {
     m.event_id            = j.value("event_id", "");
     m.status              = j.value("status", "live");
     m.updated_at_ms       = j.value("updated_at_ms", (int64_t)0);
+    m.started_at_ms       = j.value("started_at_ms", (int64_t)0);
     m.first_available_seq = j.value("first_available_seq", (uint64_t)0);
     m.window_start_seq    = j.value("window_start_seq", (uint64_t)0);
     m.latest_seq          = j.value("latest_seq", (uint64_t)0);
@@ -150,6 +152,7 @@ Manifest Manifest::from_json(const std::string& s) {
             ms.seq        = seg.value("seq", (uint64_t)0);
             ms.duration_s = seg.value("duration_s", 6.0);
             ms.checksum   = seg.value("checksum", "");
+            ms.at_ms      = seg.value("at_ms", (int64_t)0);
             m.segments.push_back(ms);
         }
     }

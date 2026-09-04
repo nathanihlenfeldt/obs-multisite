@@ -15,6 +15,7 @@ class QPushButton;
 class QLabel;
 class QTimer;
 class QCheckBox;
+class QDialog;
 
 namespace multisite_obs {
 
@@ -24,6 +25,7 @@ public:
     explicit EncoderDock(QWidget* parent = nullptr);
 
 private slots:
+    void onOpenSettings();
     void onGoLive();
     void onEnd();
     void onSaveSettings();
@@ -66,6 +68,12 @@ private:
     QLabel* m_link = nullptr;
     QLabel* m_error = nullptr;
     QTimer* m_timer = nullptr;
+
+    // Settings live in a modal dialog rather than in the dock: they are
+    // configured once, while the dock is what an operator watches mid-service.
+    // Keeping them inline made the dock taller than the screen.
+    QDialog* m_settings = nullptr;
+    QPushButton* m_settingsBtn = nullptr;
 };
 
 } // namespace multisite_obs

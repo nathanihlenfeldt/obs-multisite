@@ -413,6 +413,9 @@ static bool out_start(void* data) {
                    "missing, so decoders will reject the stream");
 
     ctx->transport = std::make_unique<S3Transport>(s3);
+    // Report the URL actually in use: a mistyped endpoint is otherwise only
+    // visible as curl's opaque "bad/illegal format" error.
+    mlog_info("storage: %s", ctx->transport->base_url().c_str());
     ctx->session   = std::make_unique<Session>(sc, *ctx->transport);
 
     // Offer resume if a previous event was interrupted.

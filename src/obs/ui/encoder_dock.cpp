@@ -19,11 +19,26 @@
 #include <QSpinBox>
 #include <QTimer>
 #include <QVBoxLayout>
+#include <QDateTime>
+#include <QDialog>
+#include <QDialogButtonBox>
+#include <QScrollArea>
 
 namespace multisite_obs {
 
 static QString tr_(const char* key) {
     return QString::fromUtf8(obs_module_text(key));
+}
+
+// Plain-language duration: an operator reads "3 min 6 sec", not "31 segments".
+static QString friendly_duration(double seconds) {
+    if (seconds < 1.0) return QObject::tr("none");
+    const int total = (int)(seconds + 0.5);
+    const int mins = total / 60;
+    const int secs = total % 60;
+    if (mins == 0) return QObject::tr("%1 sec").arg(secs);
+    if (secs == 0) return QObject::tr("%1 min").arg(mins);
+    return QObject::tr("%1 min %2 sec").arg(mins).arg(secs);
 }
 
 EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
@@ -39,7 +54,9 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
 
     auto addStat = [&](int row, int col, const char* labelKey, QLabel*& out) {
         auto* cap = new QLabel(tr_(labelKey), statusBox);
-        cap->setStyleSheet("color: palette(mid);");
+        // Dim but still legible: palette(mid) is nearly invisible on
+        // OBS's dark theme, which left the numbers looking unlabelled.
+        cap->setStyleSheet("color: palette(text); opacity: 0.75;");
         out = new QLabel("—", statusBox);
         grid->addWidget(cap, row, col * 2);
         grid->addWidget(out, row, col * 2 + 1);
@@ -83,8 +100,21 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     }
     root->addWidget(markerBox);
 
+    // Settings button — opens the dialog built below.
+    m_settingsBtn = new QPushButton(tr_("Dock.Settings"), this);
+    root->addWidget(m_settingsBtn);
+    connect(m_settingsBtn, &QPushButton::clicked,
+            this, &EncoderDock::onOpenSettings);
+
+    root->addStretch(1);
+
+    // ── Settings dialog ──────────────────────────────────────────────────────
+    m_settings = new QDialog(this);
+    m_settings->setWindowTitle(tr_("Dock.SettingsTitle"));
+    auto* dlgRoot = new QVBoxLayout(m_settings);
+
     // ── Storage ──────────────────────────────────────────────────────────────
-    auto* storeBox = new QGroupBox(tr_("Dock.Storage"), this);
+    auto* storeBox = new QGroupBox(tr_("Dock.Storage"), m_settings);
     auto* form = new QFormLayout(storeBox);
     m_accountId = new QLineEdit(storeBox);
     m_endpoint  = new QLineEdit(storeBox);
@@ -103,10 +133,10 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     form->addRow(tr_("Region"), m_region);
     form->addRow(tr_("RoomID"), m_room);
     form->addRow(QString(), m_tags);
-    root->addWidget(storeBox);
+    dlgRoot->addWidget(storeBox);
 
     // ── Media ────────────────────────────────────────────────────────────────
-    auto* mediaBox = new QGroupBox(tr_("Dock.Media"), this);
+    auto* mediaBox = new QGroupBox(tr_("Dock.Media"), m_settings);
     auto* mform = new QFormLayout(mediaBox);
     m_segDur = new QDoubleSpinBox(mediaBox);
     m_segDur->setRange(2.0, 15.0);
@@ -132,9 +162,11 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     mform->addRow(tr_("TrackLabels"), m_trackLabels);
     mform->addRow(tr_("ChannelLabels"), m_channelLabels);
     mform->addRow(tr_("MarkerLabels"), m_markerLabels);
-    root->addWidget(mediaBox);
+    dlgRoot->addWidget(mediaBox);
 
-    root->addStretch(1);
+    auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, m_settings);
+    dlgRoot->addWidget(buttons);
+    connect(buttons, &QDialogButtonBox::rejected, m_settings, &QDialog::accept);
 
     connect(m_goLive, &QPushButton::clicked, this, &EncoderDock::onGoLive);
     connect(m_end,    &QPushButton::clicked, this, &EncoderDock::onEnd);
@@ -161,6 +193,12 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     refresh();
 }
 
+void EncoderDock::onOpenSettings() {
+    if (!m_settings) return;
+    m_settings->exec();
+    onSaveSettings();      // persist whatever was changed
+}
+
 void EncoderDock::loadIntoFields() {
     auto cfg = BroadcastController::instance().settings();
     cfg.load();
@@ -184,14 +222,17 @@ void EncoderDock::loadIntoFields() {
 }
 
 void EncoderDock::onSaveSettings() {
+    // Trim everything: values are usually pasted from a dashboard and a
+    // trailing space in a key or bucket produces failures that look nothing
+    // like their cause.
     BroadcastSettings cfg;
-    cfg.r2_account_id     = m_accountId->text().toStdString();
-    cfg.endpoint_host     = m_endpoint->text().toStdString();
-    cfg.bucket            = m_bucket->text().toStdString();
-    cfg.access_key_id     = m_keyId->text().toStdString();
-    cfg.secret_access_key = m_secret->text().toStdString();
-    cfg.region            = m_region->text().toStdString();
-    cfg.room_id           = m_room->text().toStdString();
+    cfg.r2_account_id     = m_accountId->text().trimmed().toStdString();
+    cfg.endpoint_host     = m_endpoint->text().trimmed().toStdString();
+    cfg.bucket            = m_bucket->text().trimmed().toStdString();
+    cfg.access_key_id     = m_keyId->text().trimmed().toStdString();
+    cfg.secret_access_key = m_secret->text().trimmed().toStdString();
+    cfg.region            = m_region->text().trimmed().toStdString();
+    cfg.room_id           = m_room->text().trimmed().toStdString();
     cfg.use_object_tags   = m_tags->isChecked();
     cfg.segment_duration_s = m_segDur->value();
     cfg.video_bitrate_kbps = m_vBitrate->value();
@@ -267,10 +308,16 @@ void EncoderDock::refresh() {
     const int mins = (int)(st.uptime_s / 60.0);
     const int secs = (int)st.uptime_s % 60;
     m_uptime->setText(QString("%1:%2").arg(mins).arg(secs, 2, 10, QChar('0')));
-    m_confirmed->setText(QString::number(st.confirmed));
-    m_queue->setText(QString::number((qulonglong)st.pending));
-    m_retries->setText(QString::number(st.retries));
-    m_data->setText(QString::number(st.bytes / (1024.0 * 1024.0), 'f', 1) + " MB");
+    // How much of the service has been sent, in time — the count of segments
+    // is an implementation detail nobody needs.
+    const double seg = m_segDur ? m_segDur->value() : 6.0;
+    m_confirmed->setText(friendly_duration((double)st.confirmed * seg));
+    m_queue->setText(st.pending == 0
+                       ? tr_("Dock.NothingWaiting")
+                       : friendly_duration((double)st.pending * seg));
+    m_retries->setText(st.retries == 0 ? tr_("Dock.None")
+                                       : QString::number(st.retries));
+    m_data->setText(QString::number(st.bytes / (1024.0 * 1024.0), 'f', 0) + " MB");
 
     // The reliability signal an operator actually needs mid-service.
     switch (st.link_health) {

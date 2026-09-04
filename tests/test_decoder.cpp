@@ -78,7 +78,9 @@ struct FakeEncoder {
         manifest.video = { "h264", 1280, 720, 30.0 };
         manifest.audio_tracks = { { 0, "Main mix", "aac", 2, 48000 } };
         manifest.first_available_seq = 0;
+        manifest.started_at_ms = started_at_ms;
     }
+    int64_t started_at_ms = 1700000000000LL;   // a fixed, realistic epoch
 
     static std::vector<uint8_t> body_for(uint64_t seq, size_t sz = 4096) {
         std::vector<uint8_t> v(sz);
@@ -100,6 +102,7 @@ struct FakeEncoder {
         store.put("events/" + event + "/segments/" + name + ".m4s", body, "", {});
         ManifestSegment ms;
         ms.seq = s; ms.duration_s = seg_dur; ms.checksum = sha256_hex(body);
+        ms.at_ms = started_at_ms + (int64_t)(s * seg_dur * 1000.0);
         manifest.push(ms, window);
         clock_ms += (int64_t)(seg_dur * 1000);
         publish_manifest();
@@ -421,7 +424,43 @@ int main() {
         CHECK(dec.markers().empty(), "markers cleared when the event changes");
     }
 
-    std::printf("== 10. Head never runs past the live edge ==\n");
+    std::printf("== 10. Positions map to wall-clock time ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTWWWWWWWWWWWWWWWWWWW");
+        enc.publish_start();
+        for (int i = 0; i < 10; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d11").string();
+        cfg.prebuffer_segments = 0; cfg.download_ahead_segments = 40;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        for (int i = 0; i < 6; ++i) dec.pump_downloads(10);
+        dec.start();
+
+        CHECK(dec.event_started_ms() == enc.started_at_ms,
+              "event start time reaches the satellite");
+        // Segment 4 holds content 24s after the service started (4 x 6s).
+        const int64_t expect4 = enc.started_at_ms + 24000;
+        CHECK(dec.wall_clock_ms(4) == expect4,
+              "a position converts to the clock time of its content");
+        CHECK(dec.seek(4), "seek to that position");
+        CHECK(dec.playhead_wall_ms() == expect4,
+              "playhead reports the clock time being shown");
+        CHECK(dec.live_wall_ms() > dec.playhead_wall_ms(),
+              "live edge is later than the playhead when behind");
+        std::printf("     (showing %lld ms into the epoch, live at %lld)\n",
+                    (long long)dec.playhead_wall_ms(),
+                    (long long)dec.live_wall_ms());
+
+        // Outside the rolling window it must still estimate rather than give up.
+        Manifest m; m.started_at_ms = enc.started_at_ms;
+        CHECK(dec.wall_clock_ms(500) > enc.started_at_ms,
+              "positions outside the manifest window are still estimated");
+    }
+
+    std::printf("== 11. Head never runs past the live edge ==\n");
     {
         FakeStore store;
         FakeEncoder enc(store, "r", "01EVENTIIIIIIIIIIIIIIIIIII");
