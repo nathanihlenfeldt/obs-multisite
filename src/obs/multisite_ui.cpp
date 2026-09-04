@@ -113,6 +113,31 @@ void decoder_reconfigure_all() {
     for (auto* d : g_decoders) d->reconfigure();
 }
 
+void decoder_play_all() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* d : g_decoders) d->play();
+}
+void decoder_stop_all() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* d : g_decoders) d->stop_playback();
+}
+void decoder_seek_time(long long wall_ms) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* d : g_decoders) d->seek_to_time(wall_ms);
+}
+void decoder_jog(double seconds) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* d : g_decoders) d->jog(seconds);
+}
+void decoder_set_delay(double seconds) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* d : g_decoders) d->set_delay_from_live(seconds);
+}
+void decoder_set_locked(bool locked) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    for (auto* d : g_decoders) d->set_locked(locked);
+}
+
 void decoder_jump_to_marker(const std::string& id) {
     std::lock_guard<std::mutex> lk(g_mtx);
     for (auto* d : g_decoders) d->jump_to_marker(id);
@@ -183,6 +208,21 @@ static void hotkey_toggle(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
 static void hotkey_live(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
     if (pressed) for_each_decoder([](DecoderControls* d) { d->jump_to_live(); });
 }
+// Play / Stop / Lock and jog, so a service can be run from the keyboard
+// without touching the mouse — the same reason Resi ships hotkeys.
+static void hotkey_play(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
+    if (pressed) decoder_play_all();
+}
+static void hotkey_stop(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
+    if (pressed) decoder_stop_all();
+}
+static void hotkey_jog_back(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
+    if (pressed) decoder_jog(-10.0);
+}
+static void hotkey_jog_fwd(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
+    if (pressed) decoder_jog(10.0);
+}
+
 static void hotkey_status(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
     if (pressed) {
         for_each_decoder([](DecoderControls* d) { d->log_status(); });
@@ -214,6 +254,18 @@ void register_ui() {
     g_hotkeys.push_back(obs_hotkey_register_frontend(
         "multisite.status", obs_module_text("Hotkey.Status"),
         hotkey_status, nullptr));
+    g_hotkeys.push_back(obs_hotkey_register_frontend(
+        "multisite.play", obs_module_text("Hotkey.Play"),
+        hotkey_play, nullptr));
+    g_hotkeys.push_back(obs_hotkey_register_frontend(
+        "multisite.stop", obs_module_text("Hotkey.Stop"),
+        hotkey_stop, nullptr));
+    g_hotkeys.push_back(obs_hotkey_register_frontend(
+        "multisite.jog_back", obs_module_text("Hotkey.JogBack"),
+        hotkey_jog_back, nullptr));
+    g_hotkeys.push_back(obs_hotkey_register_frontend(
+        "multisite.jog_fwd", obs_module_text("Hotkey.JogForward"),
+        hotkey_jog_fwd, nullptr));
 
     for (int i = 0; i < 4; ++i) {
         std::string name = "multisite.marker" + std::to_string(i + 1);

@@ -201,7 +201,7 @@ int main() {
 
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d3").string();
-        cfg.prebuffer_segments = 2; cfg.download_ahead_segments = 30;
+        cfg.prebuffer_segments = 2; cfg.buffer_minutes = 3;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         for (int i = 0; i < 5; ++i) dec.pump_downloads(10);
@@ -244,7 +244,7 @@ int main() {
 
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d4").string();
-        cfg.prebuffer_segments = 2; cfg.download_ahead_segments = 40;
+        cfg.prebuffer_segments = 2; cfg.buffer_minutes = 4;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         for (int i = 0; i < 8; ++i) dec.pump_downloads(10);
@@ -388,7 +388,7 @@ int main() {
 
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d10").string();
-        cfg.prebuffer_segments = 0; cfg.download_ahead_segments = 40;
+        cfg.prebuffer_segments = 0; cfg.buffer_minutes = 4;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
 
@@ -433,7 +433,7 @@ int main() {
 
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d11").string();
-        cfg.prebuffer_segments = 0; cfg.download_ahead_segments = 40;
+        cfg.prebuffer_segments = 0; cfg.buffer_minutes = 4;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         for (int i = 0; i < 6; ++i) dec.pump_downloads(10);
@@ -501,7 +501,7 @@ int main() {
         cfg.room_id = "r"; cfg.cache_dir = (base / "d13").string();
         // A realistic prebuffer: playback sits behind live, which is the
         // normal case and the one where resume must continue immediately.
-        cfg.prebuffer_segments = 3; cfg.download_ahead_segments = 40;
+        cfg.prebuffer_segments = 3; cfg.buffer_minutes = 4;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         for (int i = 0; i < 6; ++i) dec.pump_downloads(10);
@@ -570,7 +570,78 @@ int main() {
               "continues the moment new content arrives");
     }
 
-    std::printf("== 14. Head never runs past the live edge ==\n");
+    std::printf("== 14. Buffer target is honoured in minutes, and fetched fast ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTBUFFERBUFFERBUFFER");
+        enc.publish_start();
+        // 25 minutes of programme at 6s segments.
+        for (int i = 0; i < 250; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d15").string();
+        cfg.prebuffer_segments = 2;
+        cfg.buffer_minutes = 10;            // 100 segments at 6s
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+
+        // Jump back 15 minutes, the case that previously refused to buffer.
+        const int64_t fifteen_back = dec.live_wall_ms() - 15 * 60 * 1000;
+        CHECK(dec.seek_to_wall_ms(fifteen_back) != 0,
+              "seek back 15 minutes by clock time");
+
+        // Draining the queue must bank the whole buffer target, not 60s of it.
+        for (int i = 0; i < 400; ++i) dec.pump_downloads(64);
+        const double ahead = dec.buffered_ahead_s();
+        std::printf("     (buffered %.0fs ahead after seeking back)\n", ahead);
+        CHECK(ahead > 300.0,
+              "buffers minutes ahead when behind live (not just 60s)");
+        CHECK(dec.stats().downloaded > 50,
+              "fetched aggressively rather than at playback speed");
+
+        auto ranges = dec.cached_ranges();
+        CHECK(!ranges.empty(), "cached ranges reported for the timeline");
+        std::printf("     (%zu contiguous cached range(s), first %llu..%llu)\n",
+                    ranges.size(),
+                    (unsigned long long)ranges.front().first,
+                    (unsigned long long)ranges.front().second);
+    }
+
+    std::printf("== 15. Seeking by clock time lands mid-segment ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTSEEKSEEKSEEKSEEKSE");
+        enc.publish_start();
+        for (int i = 0; i < 20; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d16").string();
+        cfg.prebuffer_segments = 2; cfg.buffer_minutes = 5;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        for (int i = 0; i < 20; ++i) dec.pump_downloads(32);
+        dec.start();
+
+        // 40 seconds in: segment 6 (36s) plus 4 seconds.
+        const int64_t target = enc.started_at_ms + 40000;
+        CHECK(dec.seek_to_wall_ms(target) == target, "seek to 40s in");
+        // Seeking outside what is cached means fetching again — the same
+        // behaviour any DVR has, and worth asserting rather than assuming.
+        for (int i = 0; i < 20; ++i) dec.pump_downloads(32);
+        auto seg = dec.next_segment();
+        CHECK(seg.has_value(), "segment served after a timed seek");
+        CHECK(seg && seg->seq == 6, "landed on the segment containing 40s");
+        CHECK(seg && seg->skip_to_ms == 4000,
+              "reports 4s into the segment, so seeking is not limited to "
+              "6-second boundaries");
+        CHECK(seg && seg->starts_at_ms == enc.started_at_ms + 36000,
+              "segment start time reported for the playing clock");
+        // The offset applies to that segment only.
+        auto seg2 = dec.next_segment();
+        CHECK(seg2 && seg2->skip_to_ms == 0, "offset does not leak to the next");
+    }
+
+    std::printf("== 16. Head never runs past the live edge ==\n");
     {
         FakeStore store;
         FakeEncoder enc(store, "r", "01EVENTIIIIIIIIIIIIIIIIIII");

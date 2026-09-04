@@ -106,6 +106,24 @@ struct SourceCtx : DecoderControls {
     std::atomic<uint64_t> frames_at_resume{0};
     std::atomic<bool>     resume_checked{false};
 
+    // The clock time of the frame currently on screen. Derived from the frame
+    // being delivered, so it advances continuously rather than jumping once
+    // per segment — which is why the displayed time appeared frozen.
+    std::atomic<long long> playing_at_ms{0};
+    // Wall time and first media pts of the current segment, used to convert a
+    // frame's pts into a clock reading.
+    std::atomic<long long> seg_starts_at_ms{0};
+    std::atomic<long long> seg_first_pts_ns{-1};
+    // After a timed seek, frames earlier than this point in the segment are
+    // dropped, giving roughly one-second accuracy instead of six.
+    std::atomic<long long> skip_until_pts_ns{-1};
+
+    // An operator loads an event, lets it buffer, then presses Play on cue.
+    // Auto-playing as soon as enough is buffered is wrong for a service.
+    std::atomic<bool> playing{false};
+    // Guards against accidental clicks mid-service.
+    std::atomic<bool> controls_locked{false};
+
     // DecoderControls — driven by hotkeys and the Tools menu.
     void pause() override;
     void resume() override;
@@ -116,6 +134,14 @@ struct SourceCtx : DecoderControls {
     void jump_to_marker(const std::string& id) override;
     void seek(unsigned long long seq) override;
     void reconfigure() override;
+    void play() override;
+    void stop_playback() override;
+    bool is_playing() const override { return playing.load(); }
+    void seek_to_time(long long wall_ms) override;
+    void jog(double seconds) override;
+    void set_delay_from_live(double seconds) override;
+    void set_locked(bool l) override { controls_locked = l; }
+    bool locked() const override { return controls_locked.load(); }
 
     // Marker chosen in the properties dialog, acted on by the Jump button.
     std::string pending_marker_id;
@@ -254,6 +280,32 @@ static void deliver_loop(SourceCtx* ctx) {
             std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns));
         }
         if (!ctx->running.load()) break;
+
+        // Sub-segment seek: drop frames before the requested moment. Segments
+        // are the unit of transfer; they need not be the unit of seeking.
+        {
+            const long long skip = ctx->skip_until_pts_ns.load();
+            if (skip >= 0) {
+                long long base = ctx->seg_first_pts_ns.load();
+                const long long pts = item.is_video ? item.video.pts_ns
+                                                    : item.audio.pts_ns;
+                if (base < 0) { ctx->seg_first_pts_ns = pts; base = pts; }
+                if (pts - base < skip) continue;      // not there yet
+                ctx->skip_until_pts_ns = -1;          // arrived
+            }
+        }
+
+        // Keep the playing clock in step with the frame going to air, so the
+        // displayed time advances continuously instead of once per segment.
+        {
+            long long base = ctx->seg_first_pts_ns.load();
+            const long long pts = item.is_video ? item.video.pts_ns
+                                                : item.audio.pts_ns;
+            if (base < 0) { ctx->seg_first_pts_ns = pts; base = pts; }
+            const long long segstart = ctx->seg_starts_at_ms.load();
+            if (segstart > 0)
+                ctx->playing_at_ms = segstart + (pts - base) / 1000000LL;
+        }
 
         if (item.is_video) {
             const DecodedVideoFrame& f = item.video;
@@ -494,11 +546,17 @@ static void feed_loop(SourceCtx* ctx) {
             continue;
         }
 
+        // Loading fills the buffer; only Play sends anything to air. This is
+        // the difference between a feed that is ready and a feed that is out.
+        if (!ctx->playing.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            continue;
+        }
+
         auto sess = get_session(ctx);
         if (!sess) break;
         std::optional<PlayableSegment> seg;
         {
-            // Start playback as soon as the prebuffer is satisfied.
             if (sess->play_state() == PlayState::Stopped) sess->start();
             seg = sess->next_segment();
         }
@@ -573,6 +631,13 @@ static void feed_loop(SourceCtx* ctx) {
         }
         if (!ctx->running.load()) break;
 
+        // Record this segment's wall time so delivered frames can be turned
+        // into a clock reading, and carry any mid-segment seek offset.
+        ctx->seg_starts_at_ms = (long long)seg->starts_at_ms;
+        ctx->seg_first_pts_ns = -1;              // set by the first frame
+        if (seg->skip_to_ms > 0)
+            ctx->skip_until_pts_ns = seg->skip_to_ms * 1000000LL;
+
         // push_fragment blocks when the decoder is full — deliberately not
         // under any lock.
         if (auto dec = get_decoder(ctx)) dec->push_fragment(seg->media);
@@ -640,6 +705,7 @@ static void src_update(void* data, obs_data_t* s) {
     dc.room_id              = pick(obs_data_get_string(s, S_ROOM), shared.room_id);
     dc.prebuffer_segments   = (int)obs_data_get_int(s, S_PREBUF);
     dc.keep_behind_segments = (int)obs_data_get_int(s, S_KEEP);
+    dc.buffer_minutes       = shared.buffer_minutes;
     ctx->poll_interval_ms   = (int)obs_data_get_int(s, S_POLL_MS);
 
     if (s3.bucket.empty() ||
@@ -834,7 +900,19 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
             out.channel_labels    = layout.front().channel_labels;
         }
     }
-    out.playhead_ms = sess->playhead_wall_ms();
+    out.playing = playing.load();
+    out.locked  = controls_locked.load();
+    // Prefer the frame-accurate playing clock; fall back to the segment.
+    const long long tick = playing_at_ms.load();
+    out.playhead_ms = tick > 0 ? tick : (long long)sess->playhead_wall_ms();
+    {
+        // Downloaded ranges as clock times, for the timeline.
+        for (const auto& r : sess->cached_ranges()) {
+            const int64_t a = sess->wall_clock_ms(r.first);
+            const int64_t b = sess->wall_clock_ms(r.second);
+            if (a > 0 && b >= a) out.cached_spans.emplace_back(a, b);
+        }
+    }
     out.live_ms     = sess->live_wall_ms();
     out.earliest_ms = sess->earliest_wall_ms();
     out.started_ms  = sess->event_started_ms();
@@ -855,6 +933,75 @@ void SourceCtx::jump_to_marker(const std::string& id) {
     paused = false;
     mlog_info("source: jumped to marker (segment %llu)",
               (unsigned long long)sess->playback_head());
+}
+
+void SourceCtx::play() {
+    auto sess = get_session(this);
+    if (!sess) { mlog_warn("source: play ignored — not configured"); return; }
+    pause_started_ns = 0;
+    paused = false;
+    playing = true;
+    sess->resume();
+    resumed_at_ns = os_gettime_ns();
+    frames_at_resume = frames_out.load();
+    resume_checked = false;
+    mlog_info("source: PLAY — %.0fs behind live, %.0fs buffered",
+              sess->behind_live_s(), sess->buffered_ahead_s());
+}
+
+void SourceCtx::stop_playback() {
+    playing = false;
+    paused = false;
+    pause_started_ns = 0;
+    {
+        std::lock_guard<std::mutex> qlk(dq_mtx);
+        dq.clear();
+    }
+    first_pts_ns = -1;
+    dq_cv.notify_all();
+    mlog_info("source: STOPPED (still downloading, ready to play again)");
+}
+
+void SourceCtx::seek_to_time(long long wall_ms) {
+    auto sess = get_session(this);
+    if (!sess) return;
+    const int64_t got = sess->seek_to_wall_ms((int64_t)wall_ms);
+    if (got == 0) {
+        mlog_warn("source: that moment is no longer available in storage");
+        return;
+    }
+    // Treat as a discontinuity: drop what is queued and re-anchor.
+    {
+        std::lock_guard<std::mutex> qlk(dq_mtx);
+        dq.clear();
+    }
+    first_pts_ns = -1;
+    pause_started_ns = 0;
+    paused = false;
+    dq_cv.notify_all();
+    mlog_info("source: went to %lld (%.0fs behind live)",
+              (long long)got, sess->behind_live_s());
+}
+
+void SourceCtx::jog(double seconds) {
+    const long long from = playing_at_ms.load();
+    if (from <= 0) {
+        mlog_warn("source: cannot jog until the playing time is known");
+        return;
+    }
+    seek_to_time(from + (long long)(seconds * 1000.0));
+}
+
+void SourceCtx::set_delay_from_live(double seconds) {
+    auto sess = get_session(this);
+    if (!sess) return;
+    const int64_t live = sess->live_wall_ms();
+    if (live <= 0) {
+        mlog_warn("source: live time not known yet");
+        return;
+    }
+    seek_to_time((long long)live - (long long)(seconds * 1000.0));
+    mlog_info("source: holding %.0f minutes behind live", seconds / 60.0);
 }
 
 void SourceCtx::reconfigure() {

@@ -54,6 +54,8 @@ void DecoderSettings::load() {
         poll_interval_ms = (int)obs_data_get_int(d, "poll_interval_ms");
     if (obs_data_has_user_value(d, "keep_behind_segments"))
         keep_behind_segments = (int)obs_data_get_int(d, "keep_behind_segments");
+    if (obs_data_has_user_value(d, "buffer_minutes"))
+        buffer_minutes = (int)obs_data_get_int(d, "buffer_minutes");
     obs_data_release(d);
 }
 
@@ -72,6 +74,7 @@ void DecoderSettings::save() const {
     obs_data_set_int(d, "prebuffer_segments", prebuffer_segments);
     obs_data_set_int(d, "poll_interval_ms", poll_interval_ms);
     obs_data_set_int(d, "keep_behind_segments", keep_behind_segments);
+    obs_data_set_int(d, "buffer_minutes", buffer_minutes);
 
     char* path = obs_module_config_path("decoder.json");
     if (path) {

@@ -27,6 +27,10 @@ struct DecoderSettings {
     int    prebuffer_segments = 2;
     int    poll_interval_ms = 3000;
     int    keep_behind_segments = 200;
+    // How far ahead to download, in minutes of programme. This is the figure
+    // that decides how long the campus could keep broadcasting if the
+    // connection dropped, so it is worth setting as high as the link allows.
+    int    buffer_minutes = 10;
 
     void load();
     void save() const;

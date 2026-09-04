@@ -140,6 +140,30 @@ source tears the decoder down and restarts it from the re-sent init segment —
 feeding fragments across a jump would otherwise decode as out-of-order
 timestamps and a glitched picture.
 
+### Operator workflow
+
+Modelled on how a receive-only campus actually runs a service, and on the
+conventions of existing multisite decoders:
+
+- **Load, then Play.** Loading connects and fills the buffer; nothing goes to
+  air until Play. Playback used to start as soon as enough had arrived, which
+  is wrong for a service.
+- **Buffer measured in minutes** (default 10, up to 60), downloaded as fast as
+  the link allows. This is the reliability figure that matters: it is how long
+  the campus could keep broadcasting through an outage. Reported as
+  "Could broadcast for 12 min".
+- **Stay behind live by N minutes → Go**, for campuses that want a safety
+  margin rather than riding the live edge.
+- **Lock** disables everything that changes what is on air, so nothing can be
+  clicked by accident mid-service.
+- **Jog** in ±1 s / ±10 s / ±1 min steps. Seeking is accurate to about a
+  second: the segment containing the moment is fetched and frames before it are
+  dropped, so accuracy is not limited to the segment length.
+- **Clock time throughout.** The playing time is derived from the frame going
+  to air, so it advances continuously; the timeline is labelled with clock
+  times, hovering shows the recorded time under the cursor, and markers appear
+  at their real times.
+
 ### Operator docks (`src/obs/ui/`)
 
 Two Qt docks OBS remembers the position of:

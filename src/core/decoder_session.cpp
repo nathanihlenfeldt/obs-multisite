@@ -89,6 +89,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
         return m_room;
     }
 
+    ensure_started_at();
     m_latest_seq          = m_manifest.latest_seq;
     m_first_available_seq = m_manifest.first_available_seq;
     m_manifest_updated_ms = m_manifest.updated_at_ms;
@@ -124,6 +125,23 @@ RoomState DecoderSession::poll(int64_t now_override) {
         m_last_error.clear();
     }
     return m_room;
+}
+
+// event.json has always carried the event's start time; the manifest only
+// gained it recently. Read it once per event so clock times work for events
+// published by older encoders too.
+void DecoderSession::ensure_started_at() {
+    if (m_manifest.started_at_ms > 0) return;
+    auto r = m_tx.get(event_prefix() + "event.json");
+    if (!r.success) return;
+    try {
+        EventInfo ev = EventInfo::from_json(
+            std::string(r.body.begin(), r.body.end()));
+        if (ev.started_at_ms > 0) m_manifest.started_at_ms = ev.started_at_ms;
+        if (ev.segment_duration_s > 0.1) m_segment_duration_s = ev.segment_duration_s;
+    } catch (...) {
+        // A malformed event.json must not disturb playback.
+    }
 }
 
 bool DecoderSession::ensure_init() {
@@ -180,9 +198,15 @@ int DecoderSession::pump_downloads(int max) {
     }
     from = std::max(from, m_first_available_seq);
 
-    uint64_t to = std::min<uint64_t>(
-        m_latest_seq,
-        from + (uint64_t)std::max(1, m_cfg.download_ahead_segments));
+    // Convert the buffer target from minutes of programme into segments, and
+    // fetch everything up to it. When far behind live this is a large window,
+    // which is the point: bank as much as the link can manage.
+    const double seg = m_segment_duration_s > 0.1 ? m_segment_duration_s : 6.0;
+    uint64_t want_ahead = (uint64_t)std::max(
+        1.0, ((double)std::max(1, m_cfg.buffer_minutes) * 60.0) / seg);
+    if (want_ahead > (uint64_t)m_cfg.max_cached_segments)
+        want_ahead = (uint64_t)m_cfg.max_cached_segments;
+    uint64_t to = std::min<uint64_t>(m_latest_seq, from + want_ahead);
 
     int fetched = 0;
     for (uint64_t s = from; s <= to && fetched < max; ++s) {
@@ -190,9 +214,15 @@ int DecoderSession::pump_downloads(int max) {
         if (download_one(s)) ++fetched;
     }
 
-    // Bound disk use, but keep plenty of scrub-back room.
+    // Bound disk use, but keep plenty of scrub-back room. With a large buffer
+    // the cache can grow well ahead of the head, so cap the total too.
     if (m_head_set && m_head > (uint64_t)m_cfg.keep_behind_segments)
         m_cache->prune_below(m_head - (uint64_t)m_cfg.keep_behind_segments);
+    if ((int)m_cache->count() > m_cfg.max_cached_segments) {
+        const uint64_t lowest = m_cache->lowest_seq();
+        const size_t excess = m_cache->count() - (size_t)m_cfg.max_cached_segments;
+        m_cache->prune_below(lowest + (uint64_t)excess);
+    }
 
     return fetched;
 }
@@ -289,6 +319,14 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
     PlayableSegment out;
     out.seq = m_head;
     out.duration_s = m_segment_duration_s;
+    // Wall time of this segment, and any mid-segment offset from a seek.
+    for (const auto& s : m_manifest.segments)
+        if (s.seq == m_head && s.at_ms > 0) out.starts_at_ms = s.at_ms;
+    if (out.starts_at_ms == 0 && m_manifest.started_at_ms > 0)
+        out.starts_at_ms = m_manifest.started_at_ms +
+            (int64_t)((double)m_head * m_segment_duration_s * 1000.0);
+    out.skip_to_ms = m_pending_skip_ms;
+    m_pending_skip_ms = 0;          // applies to this segment only
     for (const auto& s : m_manifest.segments)
         if (s.seq == m_head && s.duration_s > 0.1) out.duration_s = s.duration_s;
     out.media = std::move(*media);
@@ -374,6 +412,56 @@ double DecoderSession::behind_live_s() const {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (!m_head_set || m_latest_seq < m_head) return 0.0;
     return (double)(m_latest_seq - m_head) * m_segment_duration_s;
+}
+
+std::vector<std::pair<uint64_t, uint64_t>> DecoderSession::cached_ranges() const {
+    auto seqs = m_cache->cached_seqs();
+    std::vector<std::pair<uint64_t, uint64_t>> out;
+    for (uint64_t s : seqs) {
+        if (!out.empty() && s == out.back().second + 1) out.back().second = s;
+        else out.push_back({ s, s });
+    }
+    return out;
+}
+
+// Seek by TIME, which is how an operator thinks. Finds the segment containing
+// the requested moment and records how far into it to start, so accuracy is not
+// limited to the segment boundary.
+int64_t DecoderSession::seek_to_wall_ms(int64_t wall_ms) {
+    uint64_t target = 0;
+    int64_t  seg_start = 0;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        if (m_manifest.started_at_ms <= 0) return 0;
+        const double seg = m_segment_duration_s > 0.1 ? m_segment_duration_s : 6.0;
+
+        // Prefer an exact match from the manifest window.
+        bool found = false;
+        for (const auto& s : m_manifest.segments) {
+            if (s.at_ms <= 0) continue;
+            const int64_t end = s.at_ms + (int64_t)(s.duration_s * 1000.0);
+            if (wall_ms >= s.at_ms && wall_ms < end) {
+                target = s.seq; seg_start = s.at_ms; found = true; break;
+            }
+        }
+        if (!found) {
+            // Outside the window: derive from the event start.
+            const int64_t offset = wall_ms - m_manifest.started_at_ms;
+            if (offset < 0) return 0;
+            target = (uint64_t)((double)offset / 1000.0 / seg);
+            seg_start = m_manifest.started_at_ms +
+                        (int64_t)((double)target * seg * 1000.0);
+        }
+        if (target < m_first_available_seq || target > m_latest_seq) return 0;
+    }
+
+    if (!seek(target)) return 0;              // seek() raises the discontinuity
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        m_pending_skip_ms = wall_ms - seg_start;
+        if (m_pending_skip_ms < 0) m_pending_skip_ms = 0;
+    }
+    return wall_ms;
 }
 
 double DecoderSession::buffered_ahead_s() const {

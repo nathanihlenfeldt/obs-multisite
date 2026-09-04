@@ -38,8 +38,15 @@ struct DecoderConfig {
     std::string cache_dir;
     // Segments to buffer before playback starts. Higher = more resilient.
     int    prebuffer_segments = 2;
-    // How far ahead of the playback head to keep downloading.
-    int    download_ahead_segments = 10;
+    // How far ahead of the playhead to keep downloading, in MINUTES of
+    // programme. This is the reliability figure that matters: it is how long
+    // the campus could keep broadcasting if its connection died. Downloading
+    // runs as fast as the link allows until this much is banked, rather than
+    // trickling along at playback speed — which is what made jumping back
+    // twenty minutes appear not to buffer at all.
+    int    buffer_minutes = 10;
+    // Hard ceiling, so a small disk cannot be filled by a long buffer.
+    int    max_cached_segments = 2000;
     // Keep this many segments behind the head on disk (scrub-back room).
     int    keep_behind_segments = 200;
     // Treat the room as Offline if the manifest hasn't updated within this.
@@ -53,6 +60,14 @@ struct PlayableSegment {
     double   duration_s = 6.0;
     std::vector<uint8_t> init;      // only populated on the first hand-off
     std::vector<uint8_t> media;
+    // Wall-clock time of the start of this segment, so the host can report the
+    // playing time precisely rather than per-segment.
+    int64_t  starts_at_ms = 0;
+    // Milliseconds into this segment at which playback should begin. Set after
+    // a seek to a time that falls mid-segment; the host drops earlier frames.
+    // Segments are the unit of transfer, but they need not be the unit of
+    // seeking.
+    int64_t  skip_to_ms = 0;
 };
 
 class DecoderSession {
@@ -124,8 +139,19 @@ public:
     // How far behind live the campus currently is, in seconds.
     double behind_live_s() const;
 
-    // Seconds of contiguous cached content ahead of the head.
+    // Seconds of contiguous cached content ahead of the head — i.e. how long
+    // playback could continue with no network at all.
     double buffered_ahead_s() const;
+
+    // The contiguous cached ranges, as [first,last] sequence pairs, so a UI can
+    // draw what is actually on disk rather than approximate it.
+    std::vector<std::pair<uint64_t, uint64_t>> cached_ranges() const;
+
+    // Seek to a wall-clock time. Returns the exact position reached, or 0 if
+    // the time is outside what storage still retains. Sub-segment accuracy is
+    // handled by the host: `skip_to_ms` in the served segment tells it how far
+    // into that segment to begin.
+    int64_t seek_to_wall_ms(int64_t wall_ms);
 
     const SegmentCache& cache() const { return *m_cache; }
 
@@ -160,6 +186,7 @@ private:
     bool     m_head_set = false;
     bool     m_init_sent = false;
     uint64_t m_discontinuity = 0;
+    int64_t  m_pending_skip_ms = 0;   // applied to the next served segment
 
     Stats m_stats;
     mutable std::mutex m_mtx;
@@ -168,6 +195,7 @@ private:
     std::string segment_key(uint64_t seq) const;
     std::string checksum_for(uint64_t seq) const;
     bool ensure_init();
+    void ensure_started_at();
     bool download_one(uint64_t seq);
 };
 

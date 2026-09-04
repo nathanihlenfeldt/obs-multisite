@@ -51,89 +51,143 @@ static QString clock_time(long long ms) {
 // ── TimelineBar ──────────────────────────────────────────────────────────────
 TimelineBar::TimelineBar(QWidget* parent) : QWidget(parent) {
     setCursor(Qt::PointingHandCursor);
+    setMouseTracking(true);          // needed for the hover readout
     setToolTip(tr_("Dock.TimelineHint"));
 }
 
-QSize TimelineBar::minimumSizeHint() const { return QSize(120, 26); }
+QSize TimelineBar::minimumSizeHint() const { return QSize(160, 46); }
 
-void TimelineBar::setRange(unsigned long long first, unsigned long long live) {
-    if (m_first == first && m_live == live) return;
-    m_first = first; m_live = live;
+void TimelineBar::setSpan(long long earliest_ms, long long live_ms) {
+    if (m_earliest == earliest_ms && m_live == live_ms) return;
+    m_earliest = earliest_ms; m_live = live_ms;
     update();
 }
-void TimelineBar::setHead(unsigned long long head) {
-    if (m_head == head) return;
-    m_head = head; update();
+void TimelineBar::setPlayhead(long long ms) {
+    if (m_head == ms) return;
+    m_head = ms; update();
 }
-void TimelineBar::setBufferedTo(unsigned long long seq) {
-    if (m_buffered == seq) return;
-    m_buffered = seq; update();
+void TimelineBar::setDownloaded(std::vector<std::pair<long long, long long>> spans) {
+    if (m_downloaded == spans) return;
+    m_downloaded = std::move(spans); update();
 }
-void TimelineBar::setMarkers(std::vector<unsigned long long> seqs) {
-    if (m_markers == seqs) return;
-    m_markers = std::move(seqs); update();
+void TimelineBar::setMarkers(std::vector<long long> times_ms) {
+    if (m_markers == times_ms) return;
+    m_markers = std::move(times_ms); update();
 }
 
-double TimelineBar::fraction(unsigned long long seq) const {
-    if (m_live <= m_first) return 0.0;
-    if (seq <= m_first) return 0.0;
-    if (seq >= m_live) return 1.0;
-    return (double)(seq - m_first) / (double)(m_live - m_first);
+double TimelineBar::fraction(long long ms) const {
+    if (m_live <= m_earliest) return 0.0;
+    if (ms <= m_earliest) return 0.0;
+    if (ms >= m_live) return 1.0;
+    return (double)(ms - m_earliest) / (double)(m_live - m_earliest);
+}
+
+long long TimelineBar::timeAt(int x) const {
+    if (m_live <= m_earliest || width() <= 0) return 0;
+    double f = (double)x / (double)width();
+    f = std::min(1.0, std::max(0.0, f));
+    return m_earliest + (long long)(f * (double)(m_live - m_earliest));
 }
 
 void TimelineBar::paintEvent(QPaintEvent*) {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing, true);
 
-    const int h = 8;
-    const int y = (height() - h) / 2;
+    const int h = 10;
+    const int y = 16;                 // room for the clock scale above
     const int w = width();
 
-    // retained window
+    // The recording that still exists in storage.
     p.setPen(Qt::NoPen);
     p.setBrush(QColor(0x36, 0x3b, 0x41));
     p.drawRoundedRect(QRect(0, y, w, h), 4, 4);
 
-    if (m_live > m_first) {
-        // played region, up to the head
-        const int headX = (int)(fraction(m_head) * w);
-        p.setBrush(QColor(0x2f, 0x3f, 0x4d));
-        p.drawRoundedRect(QRect(0, y, headX, h), 4, 4);
+    if (m_live <= m_earliest) return;
 
-        // buffered ahead of the head
-        const int bufX = (int)(fraction(m_buffered) * w);
-        if (bufX > headX) {
-            p.setBrush(QColor(0x2f, 0x6f, 0x57));
-            p.drawRect(QRect(headX, y, bufX - headX, h));
-        }
+    // What is downloaded here — drawn from the real cached ranges, so an
+    // operator can see the buffer growing rather than trusting a number.
+    p.setBrush(QColor(0x2f, 0x6f, 0x57));
+    for (const auto& sp : m_downloaded) {
+        const int x1 = (int)(fraction(sp.first) * w);
+        const int x2 = (int)(fraction(sp.second) * w);
+        if (x2 >= x1) p.drawRect(QRect(x1, y, std::max(1, x2 - x1), h));
+    }
 
-        // marker ticks
-        p.setPen(QPen(QColor(0xe0, 0xa0, 0x20), 2));
-        for (unsigned long long s : m_markers) {
-            const int x = (int)(fraction(s) * w);
-            p.drawLine(x, y - 3, x, y + h + 3);
-        }
+    // Already played, up to the playhead.
+    const int headX = (int)(fraction(m_head) * w);
+    p.setBrush(QColor(0x3b, 0x82, 0xc4, 90));
+    p.drawRect(QRect(0, y, headX, h));
 
-        // live edge
-        p.setPen(QPen(QColor(0xe5, 0x48, 0x4d), 2));
-        p.drawLine(w - 1, y - 4, w - 1, y + h + 4);
+    // Clock scale: a few labelled ticks so positions mean something.
+    p.setPen(QPen(QColor(0x7f, 0x86, 0x8e)));
+    QFont f = p.font(); f.setPointSizeF(f.pointSizeF() - 1.5); p.setFont(f);
+    const int ticks = std::max(2, std::min(5, w / 90));
+    for (int i = 0; i <= ticks; ++i) {
+        const double frac = (double)i / ticks;
+        const long long t = m_earliest +
+            (long long)(frac * (double)(m_live - m_earliest));
+        const int x = (int)(frac * w);
+        p.drawLine(x, y - 4, x, y - 1);
+        const QString label =
+            QDateTime::fromMSecsSinceEpoch((qint64)t).toString("HH:mm");
+        QRect r(x - 22, 0, 44, 12);
+        p.drawText(r, (i == 0 ? Qt::AlignLeft : (i == ticks ? Qt::AlignRight
+                                                            : Qt::AlignHCenter))
+                      | Qt::AlignVCenter, label);
+    }
 
-        // playhead
+    // Marker ticks.
+    p.setPen(QPen(QColor(0xe0, 0xa0, 0x20), 2));
+    for (long long t : m_markers) {
+        const int x = (int)(fraction(t) * w);
+        p.drawLine(x, y - 2, x, y + h + 2);
+    }
+
+    // Live edge.
+    p.setPen(QPen(QColor(0xe5, 0x48, 0x4d), 2));
+    p.drawLine(w - 1, y - 3, w - 1, y + h + 3);
+
+    // Playhead.
+    p.setPen(Qt::NoPen);
+    p.setBrush(QColor(0xdf, 0xe3, 0xe7));
+    p.drawEllipse(QPoint(headX, y + h / 2), 6, 6);
+    p.setPen(QPen(QColor(0x3b, 0x82, 0xc4), 2));
+    p.setBrush(Qt::NoBrush);
+    p.drawEllipse(QPoint(headX, y + h / 2), 6, 6);
+
+    // Hover: a following marker and the recorded time under the cursor, so the
+    // operator knows what they are jogging to BEFORE they click.
+    if (m_hoverX >= 0) {
+        const long long t = timeAt(m_hoverX);
+        p.setPen(QPen(QColor(0xdf, 0xe3, 0xe7, 160), 1, Qt::DashLine));
+        p.drawLine(m_hoverX, y - 6, m_hoverX, y + h + 6);
+        const QString label =
+            QDateTime::fromMSecsSinceEpoch((qint64)t).toString("HH:mm:ss");
+        p.setPen(QPen(QColor(0xff, 0xff, 0xff)));
+        QRect box(m_hoverX - 30, y + h + 4, 60, 14);
+        if (box.left() < 0) box.moveLeft(0);
+        if (box.right() > w) box.moveRight(w);
+        p.setBrush(QColor(0x1a, 0x1d, 0x20, 210));
         p.setPen(Qt::NoPen);
-        p.setBrush(QColor(0xdf, 0xe3, 0xe7));
-        p.drawEllipse(QPoint(headX, y + h / 2), 6, 6);
-        p.setPen(QPen(QColor(0x3b, 0x82, 0xc4), 2));
-        p.setBrush(Qt::NoBrush);
-        p.drawEllipse(QPoint(headX, y + h / 2), 6, 6);
+        p.drawRoundedRect(box, 3, 3);
+        p.setPen(QPen(QColor(0xff, 0xff, 0xff)));
+        p.drawText(box, Qt::AlignCenter, label);
     }
 }
 
 void TimelineBar::mousePressEvent(QMouseEvent* e) {
-    if (m_live <= m_first || width() <= 0) return;
-    const double f = std::min(1.0, std::max(0.0, (double)e->pos().x() / width()));
-    const auto span = m_live - m_first;
-    const auto target = m_first + (unsigned long long)(f * (double)span);
-    emit seekRequested(target);
+    const long long t = timeAt(e->pos().x());
+    if (t > 0) emit seekRequested(t);
+}
+
+void TimelineBar::mouseMoveEvent(QMouseEvent* e) {
+    m_hoverX = e->pos().x();
+    update();
+}
+
+void TimelineBar::leaveEvent(QEvent*) {
+    m_hoverX = -1;
+    update();
 }
 
 // ── DecoderDock ──────────────────────────────────────────────────────────────
@@ -163,13 +217,21 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     connect(m_timeline, &TimelineBar::seekRequested,
             this, &DecoderDock::onSeek);
 
-    // controls
+    // Load, then play. Loading fills the buffer; Play puts it to air. Keeping
+    // these separate is how an operator prepares before a service rather than
+    // having playback start the moment enough has arrived.
     auto* startRow = new QHBoxLayout();
-    m_start = new QPushButton(tr_("Dock.Start"), this);
-    m_start->setToolTip(tr_("Dock.StartHint"));
+    m_start = new QPushButton(tr_("Dock.Load"), this);
+    m_start->setToolTip(tr_("Dock.LoadHint"));
+    m_play  = new QPushButton(tr_("Dock.Play"), this);
+    m_stop  = new QPushButton(tr_("Dock.Stop"), this);
     startRow->addWidget(m_start);
+    startRow->addWidget(m_play);
+    startRow->addWidget(m_stop);
     root->addLayout(startRow);
     connect(m_start, &QPushButton::clicked, this, &DecoderDock::onStart);
+    connect(m_play,  &QPushButton::clicked, this, &DecoderDock::onPlay);
+    connect(m_stop,  &QPushButton::clicked, this, &DecoderDock::onStop);
 
     auto* row = new QHBoxLayout();
     m_pause  = new QPushButton(tr_("Pause"), this);
@@ -182,6 +244,42 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     connect(m_pause,  &QPushButton::clicked, this, &DecoderDock::onPause);
     connect(m_resume, &QPushButton::clicked, this, &DecoderDock::onResume);
     connect(m_live,   &QPushButton::clicked, this, &DecoderDock::onJumpLive);
+
+    // Jog: coarse and honest. Seeking lands within about a second, so
+    // frame-level steps would be misleading.
+    auto* jogRow = new QHBoxLayout();
+    struct { const char* text; double secs; } jogs[] = {
+        { "-1 min", -60.0 }, { "-10 s", -10.0 }, { "-1 s", -1.0 },
+        { "+1 s", 1.0 }, { "+10 s", 10.0 }, { "+1 min", 60.0 },
+    };
+    for (auto& j : jogs) {
+        auto* b = new QPushButton(QString::fromUtf8(j.text), this);
+        b->setMaximumWidth(64);
+        const double secs = j.secs;
+        connect(b, &QPushButton::clicked, this, [this, secs] { onJog(secs); });
+        jogRow->addWidget(b);
+    }
+    root->addLayout(jogRow);
+
+    // Sit at a fixed delay behind the main site — the usual way a campus runs
+    // when it wants a safety margin.
+    auto* delayRow = new QHBoxLayout();
+    delayRow->addWidget(new QLabel(tr_("Dock.DelayFromLive"), this));
+    m_delayMins = new QSpinBox(this);
+    m_delayMins->setRange(0, 120);
+    m_delayMins->setSuffix(tr_("Dock.Minutes"));
+    m_delayMins->setValue(0);
+    m_goTo = new QPushButton(tr_("Dock.GoTo"), this);
+    delayRow->addWidget(m_delayMins);
+    delayRow->addWidget(m_goTo);
+    delayRow->addStretch(1);
+    m_lock = new QPushButton(tr_("Dock.Lock"), this);
+    m_lock->setCheckable(true);
+    m_lock->setToolTip(tr_("Dock.LockHint"));
+    delayRow->addWidget(m_lock);
+    root->addLayout(delayRow);
+    connect(m_goTo, &QPushButton::clicked, this, &DecoderDock::onGoToDelay);
+    connect(m_lock, &QPushButton::toggled, this, &DecoderDock::onLockToggled);
 
     // markers
     auto* mrow = new QHBoxLayout();
@@ -250,6 +348,11 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     form->addRow(tr_("Region"), m_region);
     form->addRow(tr_("RoomID"), m_roomId);
     form->addRow(tr_("Prebuffer"), m_prebuffer);
+    m_bufferMins = new QSpinBox(storeBox);
+    m_bufferMins->setRange(1, 60);
+    m_bufferMins->setSuffix(tr_("Dock.Minutes"));
+    m_bufferMins->setToolTip(tr_("BufferMinutesHint"));
+    form->addRow(tr_("BufferMinutes"), m_bufferMins);
     dlgRoot->addWidget(storeBox);
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, m_settings);
@@ -266,13 +369,15 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
         m_region->setText(QString::fromStdString(cfg.region));
         m_roomId->setText(QString::fromStdString(cfg.room_id));
         m_prebuffer->setValue(cfg.prebuffer_segments);
+        m_bufferMins->setValue(cfg.buffer_minutes);
     }
     for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId,
                           m_secret, m_region, m_roomId })
         connect(e, &QLineEdit::editingFinished, this,
                 &DecoderDock::onSaveSettings);
-    connect(m_prebuffer, &QSpinBox::editingFinished, this,
-            &DecoderDock::onSaveSettings);
+    for (QSpinBox* sb : { m_prebuffer, m_bufferMins })
+        connect(sb, &QSpinBox::editingFinished, this,
+                &DecoderDock::onSaveSettings);
 
     root->addStretch(1);
 
@@ -301,18 +406,27 @@ void DecoderDock::onSaveSettings() {
     cfg.region            = m_region->text().trimmed().toStdString();
     cfg.room_id           = m_roomId->text().trimmed().toStdString();
     cfg.prebuffer_segments = m_prebuffer->value();
+    cfg.buffer_minutes     = m_bufferMins->value();
     set_decoder_settings(cfg);
 }
 
 void DecoderDock::onStart() {
-    // Apply any edits before (re)starting, so the button always uses what is
-    // on screen, and make existing sources re-read them.
+    // Load: apply settings, (re)connect and start filling the buffer. It does
+    // NOT go to air — that is what Play is for.
     onSaveSettings();
     decoder_reconfigure_all();
-    // Explicit "begin playing / reload": jump to the live edge, which also
-    // re-anchors the clock and restarts the decoder. Useful after the encoder
-    // has been restarted, or when a source has been sitting idle.
     decoder_jump_live_all();
+}
+
+void DecoderDock::onPlay()  { decoder_play_all(); }
+void DecoderDock::onStop()  { decoder_stop_all(); }
+void DecoderDock::onJog(double seconds) { decoder_jog(seconds); }
+void DecoderDock::onGoToDelay() {
+    decoder_set_delay(m_delayMins ? m_delayMins->value() * 60.0 : 0.0);
+}
+void DecoderDock::onLockToggled(bool on) {
+    decoder_set_locked(on);
+    if (m_lock) m_lock->setText(on ? tr_("Dock.Unlock") : tr_("Dock.Lock"));
 }
 
 void DecoderDock::onPause()    { decoder_pause_all(); }
@@ -325,8 +439,8 @@ void DecoderDock::onJumpMarker() {
     decoder_jump_to_marker(id.toStdString());
 }
 
-void DecoderDock::onSeek(unsigned long long seq) {
-    decoder_seek(seq);
+void DecoderDock::onSeek(long long wall_ms) {
+    decoder_seek_time(wall_ms);
 }
 
 void DecoderDock::refresh() {
@@ -344,10 +458,22 @@ void DecoderDock::refresh() {
     }
 
     m_room->setText(QString::fromStdString(s.room_id));
-    m_pause->setEnabled(!s.paused);
-    m_resume->setEnabled(s.paused);
-    m_live->setEnabled(true);
-    m_jumpMarker->setEnabled(m_markers->count() > 0);
+    // Lock disables everything that changes what is on air.
+    const bool ctl = !s.locked;
+    m_pause->setEnabled(ctl && s.playing && !s.paused);
+    m_resume->setEnabled(ctl && s.paused);
+    m_live->setEnabled(ctl);
+    m_play->setEnabled(ctl && !s.playing);
+    m_stop->setEnabled(ctl && s.playing);
+    m_start->setEnabled(ctl);
+    m_goTo->setEnabled(ctl);
+    m_jumpMarker->setEnabled(ctl && m_markers->count() > 0);
+    if (m_lock && m_lock->isChecked() != s.locked) {
+        m_lock->blockSignals(true);
+        m_lock->setChecked(s.locked);
+        m_lock->setText(s.locked ? tr_("Dock.Unlock") : tr_("Dock.Lock"));
+        m_lock->blockSignals(false);
+    }
 
     // room state, matching RoomState
     switch (s.room_state) {
@@ -389,14 +515,16 @@ void DecoderDock::refresh() {
         m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #e0a020;");
     }
 
-    m_timeline->setRange(s.first_available, s.live_edge);
-    m_timeline->setHead(s.head);
-    // buffered_ahead_s is a duration; convert back to a sequence for display.
-    const double seg = 6.0;   // display approximation; exact value is per-event
-    m_timeline->setBufferedTo(s.head +
-        (unsigned long long)(s.buffered_ahead_s / seg));
+    // Timeline entirely in clock time now, with the real downloaded ranges.
+    m_timeline->setSpan(s.earliest_ms, s.live_ms);
+    m_timeline->setPlayhead(s.playhead_ms);
+    m_timeline->setDownloaded(s.cached_spans);
+    {
+        std::vector<long long> mt;
+        for (const auto& m : s.markers) if (m.at_ms > 0) mt.push_back(m.at_ms);
+        m_timeline->setMarkers(std::move(mt));
+    }
 
-    std::vector<unsigned long long> mseqs;
     // Rebuild the marker list only when it changes, so the combo doesn't
     // reset while an operator is using it.
     if (s.markers.size() != m_marker_count) {
@@ -414,13 +542,16 @@ void DecoderDock::refresh() {
         if (idx >= 0) m_markers->setCurrentIndex(idx);
     }
 
+    // The reliability figure: how long this campus could keep broadcasting if
+    // the connection died right now.
     m_buffered->setText(friendly_duration(s.buffered_ahead_s));
-    // A count of cached segments means nothing to an operator; the useful
-    // figure is how far back they could rewind.
+    m_buffered->setToolTip(tr_("Dock.BufferedHint"));
+    // How far back the recording still exists in storage (not on this PC).
     {
         const double back = (s.playhead_ms > s.earliest_ms && s.earliest_ms > 0)
             ? (double)(s.playhead_ms - s.earliest_ms) / 1000.0 : 0.0;
         m_cached->setText(friendly_duration(back));
+        m_cached->setToolTip(tr_("Dock.RewindHint"));
     }
     m_marker->setText(s.current_marker.empty()
                         ? QString("—")

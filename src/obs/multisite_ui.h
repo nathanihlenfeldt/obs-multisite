@@ -49,6 +49,18 @@ struct DecoderControls {
     // restart. Needed when credentials are entered in the dock after a source
     // already exists.
     virtual void reconfigure() = 0;
+    // Load/Play separation: loading buffers, playing goes to air.
+    virtual void play() = 0;
+    virtual void stop_playback() = 0;
+    virtual bool is_playing() const = 0;
+    // Seek by clock time (roughly one-second accuracy).
+    virtual void seek_to_time(long long wall_ms) = 0;
+    // Jog by a number of seconds, positive or negative.
+    virtual void jog(double seconds) = 0;
+    // Sit at a constant delay behind live, e.g. five minutes.
+    virtual void set_delay_from_live(double seconds) = 0;
+    virtual void set_locked(bool locked) = 0;
+    virtual bool locked() const = 0;
 };
 
 void register_encoder_controls(EncoderControls* e);
@@ -76,6 +88,11 @@ struct DecoderSnapshot {
     int         audio_channels = 0;
     // Wall-clock times, so the UI never has to mention sequence numbers.
     long long   playhead_ms = 0, live_ms = 0, earliest_ms = 0, started_ms = 0;
+    bool        playing = false;
+    bool        locked = false;
+    // Contiguous downloaded ranges as clock times, so the timeline can show
+    // exactly what is on disk.
+    std::vector<std::pair<long long, long long>> cached_spans;
     // label, id, and the clock time the marker refers to
     struct MarkerEntry { std::string label; std::string id; long long at_ms; };
     std::vector<MarkerEntry> markers;
@@ -89,6 +106,12 @@ void decoder_pause_all();
 void decoder_resume_all();
 void decoder_jump_live_all();
 void decoder_reconfigure_all();
+void decoder_play_all();
+void decoder_stop_all();
+void decoder_seek_time(long long wall_ms);
+void decoder_jog(double seconds);
+void decoder_set_delay(double seconds);
+void decoder_set_locked(bool locked);
 void decoder_jump_to_marker(const std::string& id);
 void decoder_seek(unsigned long long seq);
 

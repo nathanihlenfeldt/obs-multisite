@@ -23,30 +23,39 @@ namespace multisite_obs {
 
 // Timeline strip: retained window, buffered region, playhead, live edge and
 // marker ticks. Clicking seeks.
+// Timeline in CLOCK TIME. Shows the recording that still exists in storage,
+// which parts are downloaded here, where the playhead is, the live edge, and
+// marker ticks. Hovering reports the recorded time under the cursor; clicking
+// goes there.
 class TimelineBar : public QWidget {
     Q_OBJECT
 public:
     explicit TimelineBar(QWidget* parent = nullptr);
 
-    void setRange(unsigned long long first, unsigned long long live);
-    void setHead(unsigned long long head);
-    void setBufferedTo(unsigned long long seq);
-    void setMarkers(std::vector<unsigned long long> seqs);
+    void setSpan(long long earliest_ms, long long live_ms);
+    void setPlayhead(long long ms);
+    void setDownloaded(std::vector<std::pair<long long, long long>> spans);
+    void setMarkers(std::vector<long long> times_ms);
 
     QSize minimumSizeHint() const override;
 
 signals:
-    void seekRequested(unsigned long long seq);
+    void seekRequested(long long wall_ms);
 
 protected:
     void paintEvent(QPaintEvent*) override;
     void mousePressEvent(QMouseEvent*) override;
+    void mouseMoveEvent(QMouseEvent*) override;
+    void leaveEvent(QEvent*) override;
 
 private:
-    double fraction(unsigned long long seq) const;
+    double fraction(long long ms) const;
+    long long timeAt(int x) const;
 
-    unsigned long long m_first = 0, m_live = 0, m_head = 0, m_buffered = 0;
-    std::vector<unsigned long long> m_markers;
+    long long m_earliest = 0, m_live = 0, m_head = 0;
+    std::vector<std::pair<long long, long long>> m_downloaded;
+    std::vector<long long> m_markers;
+    int  m_hoverX = -1;
 };
 
 class DecoderDock : public QWidget {
@@ -63,7 +72,12 @@ private slots:
     void onResume();
     void onJumpLive();
     void onJumpMarker();
-    void onSeek(unsigned long long seq);
+    void onSeek(long long wall_ms);
+    void onPlay();
+    void onStop();
+    void onLockToggled(bool);
+    void onJog(double seconds);
+    void onGoToDelay();
 
 private:
     QLabel* m_room = nullptr;
@@ -79,6 +93,12 @@ private:
     QPushButton* m_resume = nullptr;
     QPushButton* m_live = nullptr;
     QPushButton* m_start = nullptr;
+    QPushButton* m_play = nullptr;
+    QPushButton* m_stop = nullptr;
+    QPushButton* m_lock = nullptr;
+    QSpinBox*    m_delayMins = nullptr;
+    QPushButton* m_goTo = nullptr;
+    QLabel*      m_hint = nullptr;
     QComboBox* m_markers = nullptr;
     QPushButton* m_jumpMarker = nullptr;
     QTimer* m_timer = nullptr;
@@ -93,6 +113,7 @@ private:
     QLineEdit* m_region = nullptr;
     QLineEdit* m_roomId = nullptr;
     QSpinBox*  m_prebuffer = nullptr;
+    QSpinBox*  m_bufferMins = nullptr;
     // In a dialog rather than the dock, for the same reason as the encoder:
     // settings are set once, the dock is watched mid-service.
     QDialog* m_settings = nullptr;

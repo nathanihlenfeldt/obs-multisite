@@ -46,9 +46,12 @@ add_test(NAME reliability COMMAND test_reliability)
 # The core is shared with the planned headless appliance, which links neither
 # OBS nor Qt. Enforce that boundary rather than trusting convention.
 if(UNIX)
+    # Invoked through sh explicitly: the executable bit is not preserved when
+    # files are uploaded through GitHub's web interface, and ctest then reports
+    # "permission denied" rather than running the check.
     add_test(NAME core_portable
-             COMMAND ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_core_portable.sh
-                     ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
+             COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_core_portable.sh
+                        ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
 endif()
 
 add_executable(test_session tests/test_session.cpp)
