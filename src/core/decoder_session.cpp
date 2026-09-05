@@ -82,6 +82,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
             m_play = PlayState::Stopped;
             m_markers = MarkerList{};
             m_markers_checked_ms = 0;
+            m_saw_live = false;     // a new event has not been seen live yet
             ++m_discontinuity;      // new event: new init segment and timeline
         }
         event_id = m_event_id;
@@ -171,6 +172,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
         m_room = RoomState::Offline;
     } else {
         m_room = RoomState::Live;
+        m_saw_live = true;          // remembered for the rest of this event
         { std::lock_guard<std::mutex> elk(m_err_mtx); m_last_error.clear(); }
     }
     return m_room;
@@ -196,6 +198,12 @@ int DecoderSession::pump_downloads(int max) {
 
         if (m_head_set.load()) {
             from = m_head.load();
+        } else if (m_room.load() == RoomState::Ended) {
+            // A finished recording plays from the beginning, so fetch from the
+            // beginning. Downloading from the live edge while playback intends
+            // to start at segment zero left the first segment missing and
+            // start() refused to begin.
+            from = m_first_available_seq.load();
         } else {
             const uint64_t back = (uint64_t)std::max(0, m_cfg.prebuffer_segments);
             from = (m_latest_seq.load() > back) ? (m_latest_seq.load() - back)
@@ -299,10 +307,19 @@ bool DecoderSession::start() {
     if (!m_cache->has_init()) return false;
 
     if (!m_head_set.load()) {
-        // Start `prebuffer_segments` behind the live edge so there's a cushion.
-        uint64_t back = (uint64_t)std::max(0, m_cfg.prebuffer_segments);
-        uint64_t want = (m_latest_seq.load() > back) ? (m_latest_seq.load() - back)
-                                              : m_first_available_seq.load();
+        uint64_t want;
+        if (rs == RoomState::Ended) {
+            // A recording that has already finished is video-on-demand: start
+            // at the beginning. Starting near the end (which is what treating
+            // it as "live" does) means loading a finished service and landing
+            // twelve seconds from the close.
+            want = m_first_available_seq.load();
+        } else {
+            // Live: start `prebuffer_segments` behind the edge for a cushion.
+            const uint64_t back = (uint64_t)std::max(0, m_cfg.prebuffer_segments);
+            want = (m_latest_seq.load() > back) ? (m_latest_seq.load() - back)
+                                                : m_first_available_seq.load();
+        }
         want = std::max(want, m_first_available_seq.load());
         if (!m_cache->has(want)) return false;      // prebuffer not ready yet
         m_head = want;
@@ -486,9 +503,27 @@ int64_t DecoderSession::wall_clock_ms(uint64_t seq) const {
     return started + (int64_t)((double)seq * m_segment_duration_s.load() * 1000.0);
 }
 
+int64_t DecoderSession::end_wall_ms() const {
+    const uint64_t last = m_latest_seq.load();
+    const int64_t at = wall_clock_ms(last);
+    if (at <= 0) return 0;
+    return at + (int64_t)(m_segment_duration_s.load() * 1000.0);
+}
+
+bool DecoderSession::at_end() const {
+    return m_head_set.load() && m_head.load() > m_latest_seq.load();
+}
+
 int64_t DecoderSession::playhead_wall_ms() const {
     if (!m_head_set.load()) return 0;
-    return wall_clock_ms(m_head.load());
+    const int64_t t = wall_clock_ms(m_head.load());
+    // Once playback runs past the last segment the head points at a position
+    // that does not exist, and the reported time ran beyond the end of the
+    // recording. Clamp it: the displayed time must never exceed what was
+    // actually recorded.
+    const int64_t end = end_wall_ms();
+    if (end > 0 && t > end) return end;
+    return t;
 }
 
 int64_t DecoderSession::live_wall_ms() const {

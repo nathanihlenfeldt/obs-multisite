@@ -520,8 +520,16 @@ void DecoderDock::refresh() {
                                             : "color: #e5484d; font-weight: bold;");
             break;
         case 3:
-            m_state->setText(tr_("Dock.Ended"));
-            m_state->setStyleSheet("color: palette(mid);");
+            // Two different situations, and an operator needs to tell them
+            // apart: the service they were watching has just finished, versus
+            // this was already a recording when they loaded it.
+            if (s.was_live) {
+                m_state->setText(tr_("Dock.BroadcastEnded"));
+                m_state->setStyleSheet("color: #e0a020; font-weight: bold;");
+            } else {
+                m_state->setText(tr_("Dock.NotLive"));
+                m_state->setStyleSheet("color: #8fd3b4;");
+            }
             break;
         case 1:
             m_state->setText(tr_("Dock.Offline"));
@@ -536,7 +544,22 @@ void DecoderDock::refresh() {
     // Lead with the clock time being shown — the thing an operator can match
     // against what is happening in the room — and express the offset in plain
     // language rather than as a signed number.
-    if (s.head > s.live_edge && s.live_edge > 0) {
+    if (s.ended) {
+        // A finished recording: show where you are in it and how much is left.
+        // "Behind live" is meaningless once there is no live edge to be behind.
+        if (s.at_end) {
+            m_behind->setText(tr_("Dock.AtEnd"));
+            m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #8b9198;");
+        } else {
+            const double left = (s.end_ms > s.playhead_ms)
+                ? (double)(s.end_ms - s.playhead_ms) / 1000.0 : 0.0;
+            m_behind->setText(tr_("Dock.Showing").arg(clock_time(s.playhead_ms))
+                              + "  —  "
+                              + tr_("Dock.Remaining")
+                                  .arg(friendly_duration(left)));
+            m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #8fd3b4;");
+        }
+    } else if (s.head > s.live_edge && s.live_edge > 0) {
         // Caught right up: nothing new has been published yet. This is normal
         // and must not look like a fault.
         m_behind->setText(tr_("Dock.WaitingForMain"));
@@ -553,7 +576,10 @@ void DecoderDock::refresh() {
     }
 
     // Timeline entirely in clock time now, with the real downloaded ranges.
-    m_timeline->setSpan(s.earliest_ms, s.live_ms);
+    // For a finished recording the span runs to its true end, not to the last
+    // segment's start time.
+    m_timeline->setSpan(s.earliest_ms,
+                        (s.ended && s.end_ms > 0) ? s.end_ms : s.live_ms);
     m_timeline->setPlayhead(s.playhead_ms);
     m_timeline->setDownloaded(s.cached_spans);
     {

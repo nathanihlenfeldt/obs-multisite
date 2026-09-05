@@ -18,6 +18,15 @@ std::vector<EncoderChoice> available_video_encoders() {
     for (size_t i = 0; obs_enum_encoder_types(i, &id); ++i) {
         if (!id) continue;
         if (obs_get_encoder_type(id) != OBS_ENCODER_VIDEO) continue;
+
+        // Skip what OBS itself hides. Enumeration returns legacy aliases and
+        // internal entries too, which is why an AMD machine showed the AMF
+        // encoder twice: the real one plus a deprecated alias for the same
+        // hardware. OBS's own encoder list filters on these flags.
+        const uint32_t caps = obs_get_encoder_caps(id);
+        if (caps & (OBS_ENCODER_CAP_DEPRECATED | OBS_ENCODER_CAP_INTERNAL))
+            continue;
+
         const char* codec = obs_get_encoder_codec(id);
         if (!codec) continue;
         const std::string c = codec;
@@ -37,13 +46,40 @@ std::vector<EncoderChoice> available_video_encoders() {
                      (e.id.find("_tex")  != std::string::npos) ||
                      (e.id.find("vaapi") != std::string::npos) ||
                      (e.id.find("videotoolbox") != std::string::npos);
+        // Belt and braces against two entries that present identically.
+        bool dup = false;
+        for (const auto& x : out)
+            if (x.name == e.name && x.codec == e.codec) { dup = true; break; }
+        if (dup) continue;
+
         out.push_back(e);
     }
+
+    // x264 exists on every OBS install and is the fallback the controller uses,
+    // so make sure it is always offered even if enumeration missed it.
+    {
+        bool have_x264 = false;
+        for (const auto& e : out) if (e.id == "obs_x264") have_x264 = true;
+        if (!have_x264 && obs_get_encoder_codec("obs_x264")) {
+            EncoderChoice e;
+            e.id = "obs_x264";
+            const char* disp = obs_encoder_get_display_name("obs_x264");
+            e.name = disp ? disp : "x264";
+            e.codec = "h264";
+            out.push_back(e);
+        }
+    }
+
     // Hardware first, then by codec, so the best option is the obvious one.
     std::stable_sort(out.begin(), out.end(),
         [](const EncoderChoice& a, const EncoderChoice& b) {
             if (a.hardware != b.hardware) return a.hardware;
-            return a.codec > b.codec;      // hevc before h264
+            // hevc, then h264, then av1 — av1 last because it has had the
+            // least real-world exercise here.
+            auto rank = [](const std::string& c) {
+                return c == "hevc" ? 0 : (c == "h264" ? 1 : 2);
+            };
+            return rank(a.codec) < rank(b.codec);
         });
     return out;
 }
@@ -198,18 +234,17 @@ bool BroadcastController::go_live(std::string& error) {
         // scenecut inserts IDRs at scene changes, which breaks even spacing.
         obs_data_set_string(vs, "x264opts", "scenecut=0");
     } else if (enc_id.find("nvenc") != std::string::npos) {
-        // Look-ahead can move I-frames off the interval; B-frames are fine but
-        // adaptive I-frame placement is not.
+        // Look-ahead can move I-frames off the interval, which is the one
+        // thing that must not happen: keyframes have to land on the segment
+        // boundary or segment lengths vary.
         obs_data_set_bool(vs, "lookahead", false);
-        obs_data_set_bool(vs, "repeat_headers", true);
-        obs_data_set_string(vs, "preset2", "p5");
-        obs_data_set_string(vs, "tune", "hq");
-        obs_data_set_string(vs, "multipass", "qres");
-    } else if (enc_id.find("qsv") != std::string::npos) {
-        obs_data_set_string(vs, "target_usage", "balanced");
-    } else if (enc_id.find("amf") != std::string::npos) {
-        obs_data_set_string(vs, "preset", "quality");
     }
+    // Nothing else is set. Quality presets differ in key and value between
+    // encoder families, and a mistyped key is silently ignored — an earlier
+    // attempt set the AMF preset to "quality" and the encoder logged
+    // "preset: speed", i.e. it did nothing. OBS's own defaults are sensible,
+    // and leaving them alone is more honest than pretending to tune something.
+    // Only the settings that the segmenting REQUIRES are forced.
 
     m_venc = obs_video_encoder_create(enc_id.c_str(), "multisite_v", vs, nullptr);
     obs_data_release(vs);

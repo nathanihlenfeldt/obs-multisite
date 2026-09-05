@@ -130,6 +130,18 @@ public:
     // names the encoder operator typed would never be seen by anyone.
     std::vector<AudioTrack> audio_layout() const;
 
+    // A finished recording behaves as video-on-demand: it has an end, a
+    // duration, and a position within it — "behind live" is meaningless.
+    bool    event_ended() const { return m_room.load() == RoomState::Ended; }
+    // Whether this event was seen LIVE at any point since it was loaded.
+    // "The broadcast just ended" and "this is a recording of a past service"
+    // are different things to an operator, and only this distinguishes them.
+    bool    was_live_this_session() const { return m_saw_live.load(); }
+    // Wall-clock time just past the last frame of the recording.
+    int64_t end_wall_ms() const;
+    // True once playback has run past the last segment there is.
+    bool    at_end() const;
+
     // Wall-clock time of a position in the programme. Uses the exact time
     // recorded for a segment when it is still in the manifest window, and
     // estimates from the event start otherwise. 0 if unknown.
@@ -196,6 +208,7 @@ private:
     std::atomic<uint64_t> m_first_available_seq{0};
     std::atomic<double>   m_segment_duration_s{6.0};
     std::atomic<int64_t>  m_started_at_ms{0};
+    std::atomic<bool>     m_saw_live{false};
     std::atomic<uint64_t> m_head{0};
     std::atomic<bool>     m_head_set{false};
     bool     m_init_sent = false;

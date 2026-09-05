@@ -290,18 +290,88 @@ Backed by durable object storage, this is "pause live TV," per campus.
 
 ---
 
+## 7.5 Finished events: video-on-demand
+
+An event that has ended is not a failure state — it is a complete recording,
+and a satellite must be able to load and play it exactly like a live feed that
+happens not to be advancing.
+
+- **Loading a finished event starts at the beginning**, not at the live edge.
+  Treating a completed service as "live" meant loading it and landing seconds
+  from the close.
+- **Ending a broadcast mid-playback changes nothing for the satellite**: it
+  keeps playing through the remaining segments to the end. Nothing is cut off.
+- **The reported time never runs past the end of the recording.** Once playback
+  passes the last segment the playhead points at a position that does not
+  exist; the displayed clock is clamped to the true end.
+- **The UI switches vocabulary.** For a live event it reports how far behind
+  live the campus is; for a finished one it reports the position and how much
+  is left, then "End of the recording". "Behind live" means nothing once there
+  is no live edge.
+- Distinguishing a *clean end* from a *lost connection* matters: a clean end is
+  reported as a finished recording, while a manifest that simply stops
+  advancing is reported as offline after the stale threshold.
+- **"Ended" covers two situations that must not read the same.** A broadcast
+  that finished *while the satellite was watching* is reported as
+  "BROADCAST ENDED" — the service has just closed and the recording is playing
+  out. An event that was *already finished when loaded* is reported as
+  "RECORDING (not live)" — this is a past service, and nothing has just
+  happened. The satellite remembers whether it ever saw the event live, and
+  the memory resets when the event changes.
+
+### 7.5.1 Event browsing (planned)
+
+When the event list arrives (it needs `ListObjectsV2`, section 4.x), each entry
+must carry **its own current state**, not just a date:
+
+- **LIVE** — this event is the one `live.json` points at and its manifest is
+  still advancing. At most one event is live at a time.
+- **RECORDING** — a finished event, playable as video-on-demand.
+- **INTERRUPTED** — the manifest stopped advancing without a clean end, i.e.
+  the encoder died. Still playable up to wherever it got to, but the operator
+  should know it is incomplete.
+
+A campus will usually see one live event among many recordings, so the state is
+what makes the list scannable — the date alone does not say which one is
+happening now. Entries should be labelled by start date and time, newest
+first, with the live one pinned to the top.
+
 ## 8. User interface
 
-- **Encoder (main site):** a Tools-menu panel for global storage config
-  (endpoint, keys, bucket, room) and audio-track labelling; **Go Live / End**; a
-  live status readout (queue depth, upload rate, retries); marker controls; and
-  the resume-or-new prompt.
-- **Decoder (satellite):** the source appears in OBS as usual, with a dedicated
-  control dock for the DVR — Pause / Resume / Jump-to-Live, a scrub bar with
-  markers, the behind-live indicator, and an Offline state.
-- Tools-menu items and the dock use OBS's frontend API and Qt. The core
-  reliability and media path work without any UI, so they land first; the UI is
-  layered on afterward.
+Two Qt docks, plus hotkeys. The core reliability and media path work with no UI
+at all, which is what lets the same engine drive the planned appliance.
+
+**Encoder dock (main site)**
+
+- Storage settings, saved as they are edited so credentials are never retyped.
+- Video encoder chosen from what the machine actually has (x264, NVENC,
+  QuickSync, AMF), hardware first.
+- **Go live / End broadcast**, with failures shown in the dock rather than left
+  in the log.
+- Marker buttons, named by the operator.
+- The reliability readout that matters mid-service: how much of the service has
+  been sent, how much is waiting, retries, and link health.
+
+**Decoder dock (satellite)**
+
+- **Load** then **Play**: loading fills the buffer, Play puts it to air.
+- A timeline in clock time showing what is in storage, what is downloaded here,
+  the playhead and markers. Hovering reports the recorded time under the
+  cursor; clicking goes there.
+- Hold picture / Continue / Catch up to now, jog in ±1 s to ±1 min steps, and
+  "stay behind live by N minutes".
+- **Lock**, to stop anything being changed by accident during a service.
+- Position and state in plain language, switching vocabulary between a live
+  event and a finished recording.
+
+**Language.** The interface never mentions segments, buffers in the abstract,
+or live edges. It reports times ("Showing 10:41:03"), durations ("Could
+broadcast for 12 min") and plain states. The audience is a volunteer, not the
+person who wrote it.
+
+**Hotkeys** cover play, stop, hold, resume, catch-up, jog and marker drops, and
+work without Qt — useful for an operator running the service from the keyboard,
+and the fallback when a build has no docks.
 
 ---
 
@@ -402,28 +472,30 @@ campus announcements.
 
 ## 10. Delivery phases
 
-Each phase leaves the project in a testable, usable state.
+Each phase leaves the project in a testable, usable state. Phases 1–5 are
+built; 6 and 7 are not started.
 
-- **Phase 1 — Reliability core.** Durable upload queue, retry/backoff, checksums,
+- **Phase 1 — Reliability core.** ✅ Durable upload queue, retry/backoff, checksums,
   resume-after-crash, decoder cache with verification, and stale detection. This
   is format-agnostic and lands before the media format work.
-- **Phase 2 — Format, namespace & audio.** FFmpeg CMAF muxing (`init.mp4` +
-  `.m4s`), codec-agnostic wrapper (H.264 now; HEVC/AV1 later), multi-track
-  production audio (up to 6 OBS tracks, muxed and sample-accurate), the
-  `rooms/live.json` + `events/{ulid}` model, 6 s keyframe-aligned segments,
-  lifecycle tags, and generalized S3 endpoint configuration.
-- **Phase 3 — Timeslipping.** Decoder DVR: playback head vs live edge, deep local
+- **Phase 2 — Format, namespace & audio.** ✅ FFmpeg CMAF muxing (`init.mp4` +
+  `.m4s`), codec-agnostic wrapper (H.264 and HEVC both tested end to end; AV1
+  carried but less exercised), packed multi-channel production audio, the
+  `rooms/live.json` + `events/{ulid}` model, keyframe-aligned segments,
+  prefix/age lifecycle, and generalized S3 endpoint configuration.
+- **Phase 3 — Timeslipping.** ✅ Decoder DVR: playback head vs live edge, deep local
   cache, pause/resume/jump-to-live/scrub, behind-live indicator, restart
   recovery.
-- **Phase 4 — Markers & cues.** Authoring, consumption, jump-to-marker, and local
-  automation hooks.
-- **Phase 5 — User interface.** Encoder Tools-menu and status panel; decoder Qt
-  control dock.
-- **Phase 6 — Satellite appliance.** Headless Linux decoder with SDI/HDMI
+- **Phase 4 — Markers & cues.** ✅ Authoring from the encoder, consumption and
+  jump-to-marker at the satellite. Decoder-side cue authoring is not built.
+- **Phase 5 — User interface.** ✅ Encoder and decoder Qt docks, hotkeys, and
+  plain-language status. Event browsing (section 7.5.1) is the outstanding
+  piece and needs bucket listing.
+- **Phase 6 — Satellite appliance.** ⬜ Headless Linux decoder with SDI/HDMI
   output and a browser-based operator UI (section 8.1). Reuses the existing
   receive core; adds the output layer, the channel de-interleaver, the web
   control surface, and the boot/restart behaviour that makes it an appliance.
-- **Phase 7 — Extensions.** Web/mobile simulcast, scheduling, redundancy, and
+- **Phase 7 — Extensions.** ⬜ Web/mobile simulcast, scheduling, redundancy, and
   local insertion.
 
 ---

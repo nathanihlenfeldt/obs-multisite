@@ -90,6 +90,12 @@ struct DecoderSnapshot {
     long long   playhead_ms = 0, live_ms = 0, earliest_ms = 0, started_ms = 0;
     bool        playing = false;
     bool        locked = false;
+    // A finished recording is video-on-demand: it has an end and a position
+    // within it, and "behind live" means nothing.
+    bool        ended = false;
+    bool        at_end = false;
+    bool        was_live = false;   // seen live at some point since loading
+    long long   end_ms = 0;
     // Contiguous downloaded ranges as clock times, so the timeline can show
     // exactly what is on disk.
     std::vector<std::pair<long long, long long>> cached_spans;

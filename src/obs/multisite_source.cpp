@@ -494,10 +494,13 @@ static void poll_loop(SourceCtx* ctx) {
             RoomState st = sess->poll();
             if (st != ctx->last_room) {
                 ctx->last_room = st;
-                const char* name = st == RoomState::Live    ? "LIVE"
-                                 : st == RoomState::Ended   ? "ended"
-                                 : st == RoomState::Offline ? "offline"
-                                                            : "unknown";
+                const char* name =
+                    st == RoomState::Live  ? "LIVE"
+                  : st == RoomState::Ended ? (sess->was_live_this_session()
+                        ? "BROADCAST ENDED — playing out the recording"
+                        : "a finished recording (was not live when loaded)")
+                  : st == RoomState::Offline ? "offline"
+                                             : "unknown";
                 mlog_info("source: room is %s%s", name,
                           st == RoomState::Offline ? " (encoder stopped or unreachable)" : "");
                 if ((st == RoomState::Offline || st == RoomState::Ended) &&
@@ -946,6 +949,10 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     { std::lock_guard<std::mutex> lk(obj_mtx); sess = session; }
     if (!sess) return;
     out.room_state       = (int)sess->room_state();
+    out.ended            = sess->event_ended();
+    out.at_end           = sess->at_end();
+    out.was_live         = sess->was_live_this_session();
+    out.end_ms           = sess->end_wall_ms();
     out.head             = sess->playback_head();
     out.live_edge        = sess->live_edge();
     out.first_available  = sess->earliest_available();
@@ -962,6 +969,7 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     }
     out.playing = playing.load();
     out.locked  = controls_locked.load();
+    out.ended   = sess ? false : false;   // filled below once sess is known
     // Prefer the frame-accurate playing clock; fall back to the segment.
     const long long tick = playing_at_ms.load();
     out.playhead_ms = tick > 0 ? tick : (long long)sess->playhead_wall_ms();

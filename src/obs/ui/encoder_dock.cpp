@@ -161,8 +161,12 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     // encoder leaves the CPU free for everything else the main site is doing.
     m_encoder = new QComboBox(mediaBox);
     for (const auto& e : available_video_encoders()) {
+        // Show the codec explicitly: two entries can have similar names, and
+        // the codec is what actually matters at the satellite.
         QString label = QString::fromStdString(e.name);
+        label += "  —  " + QString::fromStdString(e.codec).toUpper();
         if (e.hardware) label += tr_("Dock.HardwareSuffix");
+        if (e.codec == "av1") label += tr_("Dock.ExperimentalSuffix");
         m_encoder->addItem(label, QString::fromStdString(e.id));
     }
     m_encoder->setToolTip(tr_("Dock.EncoderHint"));

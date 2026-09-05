@@ -641,7 +641,122 @@ int main() {
         CHECK(seg2 && seg2->skip_to_ms == 0, "offset does not leak to the next");
     }
 
-    std::printf("== 16. Head never runs past the live edge ==\n");
+    std::printf("== 16. A finished recording plays as video-on-demand ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTVODVODVODVODVODVOD");
+        enc.publish_start();
+        for (int i = 0; i < 20; ++i) enc.publish_segment();
+        enc.end();                                  // operator ends the broadcast
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d17").string();
+        cfg.prebuffer_segments = 2; cfg.buffer_minutes = 5;
+        DecoderSession dec(cfg, store);
+        CHECK(dec.poll(enc.clock_ms) == RoomState::Ended, "reports a finished event");
+        CHECK(dec.event_ended(), "event_ended() is true");
+
+        for (int i = 0; i < 10; ++i) dec.pump_downloads(32);
+        CHECK(dec.start(), "playback starts");
+        CHECK(dec.playback_head() == 0,
+              "STARTS AT THE BEGINNING, not near the end");
+
+        // The end time must be the end of the last segment, not its start.
+        const int64_t expect_end = enc.started_at_ms + 20 * 6000;
+        CHECK(dec.end_wall_ms() == expect_end,
+              "end time is the end of the recording");
+
+        // Play right through.
+        int served = 0;
+        while (dec.next_segment().has_value() && served < 40) ++served;
+        CHECK(served == 20, "played every segment through to the end");
+        CHECK(dec.at_end(), "reports having reached the end");
+        CHECK(dec.playhead_wall_ms() <= dec.end_wall_ms(),
+              "the displayed time NEVER runs past the end of the recording");
+        std::printf("     (played %d segments; ends at %lld, playhead %lld)\n",
+                    served, (long long)dec.end_wall_ms(),
+                    (long long)dec.playhead_wall_ms());
+    }
+
+    std::printf("== 17. Ending mid-playback plays through to the end ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTFINISHFINISHFINISH");
+        enc.publish_start();
+        for (int i = 0; i < 10; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d18").string();
+        cfg.prebuffer_segments = 4; cfg.buffer_minutes = 5;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        for (int i = 0; i < 10; ++i) dec.pump_downloads(32);
+        dec.start();
+        const uint64_t from = dec.playback_head();
+        dec.next_segment();
+
+        enc.end();                                  // End broadcast pressed
+        CHECK(dec.poll(enc.clock_ms) == RoomState::Ended,
+              "notices the broadcast ended");
+        for (int i = 0; i < 10; ++i) dec.pump_downloads(32);
+
+        int served = 1;
+        while (dec.next_segment().has_value() && served < 40) ++served;
+        CHECK(dec.playback_head() > dec.live_edge(),
+              "kept playing to the last segment rather than stopping");
+        CHECK(served == (int)(9 - from + 1),
+              "served exactly the segments that remained");
+        CHECK(dec.playhead_wall_ms() <= dec.end_wall_ms(),
+              "time stays within the recording after it finishes");
+    }
+
+    std::printf("== 18. 'Ended' means two different things ==\n");
+    {
+        // (a) Loaded while already finished: this is a recording of a past
+        //     service, not something that just ended.
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTWASNTLIVEWASNTLIVE");
+        enc.publish_start();
+        for (int i = 0; i < 5; ++i) enc.publish_segment();
+        enc.end();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d19").string();
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        CHECK(dec.event_ended(), "reports a finished event");
+        CHECK(!dec.was_live_this_session(),
+              "knows it was NOT live while we were watching");
+    }
+    {
+        // (b) Live when loaded, then the operator ends the broadcast.
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTWASLIVEWASLIVEWASL");
+        enc.publish_start();
+        for (int i = 0; i < 5; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d20").string();
+        DecoderSession dec(cfg, store);
+        CHECK(dec.poll(enc.clock_ms) == RoomState::Live, "live when loaded");
+        CHECK(dec.was_live_this_session(), "remembers seeing it live");
+
+        enc.end();
+        CHECK(dec.poll(enc.clock_ms) == RoomState::Ended, "notices it ended");
+        CHECK(dec.was_live_this_session(),
+              "still knows the broadcast ended while we watched");
+
+        // A different event resets the memory.
+        FakeEncoder enc2(store, "r", "01EVENTNEXTNEXTNEXTNEXTNE");
+        enc2.publish_start();
+        for (int i = 0; i < 3; ++i) enc2.publish_segment();
+        enc2.end();
+        dec.poll(enc2.clock_ms);
+        CHECK(!dec.was_live_this_session(),
+              "a different event starts with a clean slate");
+    }
+
+    std::printf("== 19. Head never runs past the live edge ==\n");
     {
         FakeStore store;
         FakeEncoder enc(store, "r", "01EVENTIIIIIIIIIIIIIIIIIII");

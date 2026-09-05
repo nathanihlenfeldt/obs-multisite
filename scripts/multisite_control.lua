@@ -1,8 +1,16 @@
--- multisite_control.lua — drives the obs-multisite output.
+-- multisite_control.lua — OPTIONAL. Drives the obs-multisite output from Lua.
 --
--- OBS doesn't expose custom outputs in its UI, so this script provides the
--- Go Live / End controls and the storage settings until the native Tools-menu
--- panel lands (Phase 5).
+-- NOT REQUIRED any more: the Multisite Encoder dock does everything this does,
+-- with saved settings, encoder selection and a live status readout. Use the
+-- dock unless you have a reason not to.
+--
+-- Kept because a script is still the easier route for:
+--   * a build without the Qt docks (see ENABLE_QT in CMakeLists.txt),
+--   * starting a broadcast from other automation, or
+--   * machines where the operator never opens the OBS window.
+--
+-- Note it does not expose everything the dock does — encoder choice and packed
+-- channel labels are dock-only, and this script always uses x264.
 --
 -- Install: Tools → Scripts → + → select this file, fill in the fields, then use
 -- the "Go live" / "End broadcast" buttons.
