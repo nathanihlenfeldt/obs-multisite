@@ -160,7 +160,8 @@ void Player::stop() {
     }
     // Never leave the last frame of a service on a screen in an empty room.
     m_video.blank();
-    m_audio.flush();
+    m_audio.close();
+    m_audio_open = false;
 }
 
 void Player::teardown_decoder() {
@@ -216,6 +217,41 @@ void Player::reconfigure(const Config& cfg) {
         before.keep_behind_segments != cfg.keep_behind_segments ||
         before.max_cached_segments  != cfg.max_cached_segments ||
         before.stale_after_ms     != cfg.stale_after_ms;
+
+    // Settings that decide where picture and sound come OUT are applied by
+    // reopening those outputs, not by restarting the receive path. Changing
+    // the resolution must not tear down a service's buffer, and a setting
+    // that only takes effect after a reboot is no use on a box with no
+    // keyboard.
+    const bool display_changed =
+        before.drm_card   != cfg.drm_card   ||
+        before.connector  != cfg.connector  ||
+        before.out_width  != cfg.out_width  ||
+        before.out_height != cfg.out_height ||
+        before.out_fps    != cfg.out_fps;
+
+    if (display_changed) {
+        plog_info("display settings changed — resetting the output");
+        m_video.close();
+        std::string err;
+        if (!m_video.open(cfg, err)) {
+            plog_error("display: %s", err.c_str());
+            note_error("display: " + err);
+        } else {
+            plog_info("display: %s", m_video.description().c_str());
+        }
+        // Whatever was on the screen belongs to the old mode.
+        m_idle_showing = false;
+        m_last_frame_ns = 0;
+    }
+
+    if (before.alsa_device    != cfg.alsa_device ||
+        before.audio_channels != cfg.audio_channels ||
+        before.audio_enabled  != cfg.audio_enabled) {
+        plog_info("sound settings changed — reopening the output");
+        m_audio_reopen = true;
+        if (!cfg.audio_enabled) { m_audio.close(); m_audio_open = false; }
+    }
 
     if (!receive_changed) {
         plog_info("settings saved");
@@ -299,7 +335,6 @@ void Player::on_audio(const DecodedAudioFrame& f) {
 
 void Player::deliver_loop() {
     plog_info("delivery started");
-    bool audio_open = false;
 
     while (m_running.load()) {
         // While held, deliver nothing: the picture stays on the last frame the
@@ -421,18 +456,26 @@ void Player::deliver_loop() {
             m_frame_version++;
         } else {
             Config cfg = config();
-            if (cfg.audio_enabled && !audio_open) {
+            // The device was changed in the interface. Let the old one go so
+            // the next frame opens the new one.
+            if (m_audio_reopen.exchange(false)) {
+                m_audio.close();
+                m_audio_open = false;
+            }
+            if (cfg.audio_enabled && !m_audio_open.load()) {
                 const int ch = cfg.audio_channels > 0 ? cfg.audio_channels
                                                       : item.audio.channels;
                 std::string err;
                 if (m_audio.open(cfg, item.audio.sample_rate, ch, err)) {
-                    audio_open = true;
+                    m_audio_open = true;
                     plog_info("audio out: %s", m_audio.description().c_str());
                 } else {
                     plog_error("audio out failed: %s", err.c_str());
                     note_error("audio output: " + err);
-                    // Do not retry every frame; a dead card would fill the log.
-                    audio_open = true;
+                    // Do not retry every frame; a dead card would fill the log
+                    // faster than an operator could read it. Changing the
+                    // device in the interface asks for another attempt.
+                    m_audio_open = true;
                 }
             }
             if (cfg.audio_enabled) m_audio.write(item.audio);
@@ -766,7 +809,7 @@ void Player::pause() {
     // then stop pulling new segments.
     m_paused = true;
     sess->pause();
-    plog_info("HOLDING at %s", "the current picture");
+    plog_info("HOLDING the picture — the cache keeps filling");
 }
 
 void Player::resume() {

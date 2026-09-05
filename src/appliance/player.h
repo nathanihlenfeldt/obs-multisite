@@ -267,6 +267,13 @@ private:
     // page-flip the display for no reason.
     std::string m_idle_signature;
     bool        m_idle_showing = false;
+    // The sound card is opened by the delivery thread, once the first decoded
+    // frame reveals the feed's rate and channel count. Setting this asks it to
+    // let the current device go and open the newly chosen one — otherwise a
+    // device picked in the interface would not take effect until the next
+    // reboot, which for a box with no keyboard is no use at all.
+    std::atomic<bool> m_audio_open{false};
+    std::atomic<bool> m_audio_reopen{false};
 
     // Latest decoded picture, kept for the preview.
     mutable std::mutex m_frame_mtx;
