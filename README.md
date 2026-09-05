@@ -24,6 +24,7 @@ far more than one that is two seconds behind and stutters.
 > place, a technical person on hand, and the assumption that any given service
 > may have to go ahead without it. Treat a successful rehearsal as necessary
 > rather than sufficient.
+
 ---
 
 ## Why this exists
@@ -113,9 +114,10 @@ has been exercised end to end between two Windows machines but **has not yet run
 a real service** — a full-length soak test is the most valuable outstanding
 task.
 
-The satellite appliance (Phase 6) is built and installable on a Raspberry Pi —
-see below — but has not yet run a service either. Extensions (Phase 7) are not
-started.
+A campus can receive in either of two ways — the OBS decoder on a PC, or the
+Raspberry Pi appliance — and both are built. See
+[Choosing a satellite](#choosing-a-satellite). The appliance has not run a
+service either. Extensions (Phase 7) are not started.
 
 **What works**
 
@@ -125,7 +127,11 @@ started.
   encoder (x264, NVENC, QuickSync, AMF).
 - Satellite receive with a deep local buffer, checksum verification, and
   timeslipping — hold, resume, catch up, scrub, jump to a marker.
-- Finished events play as video-on-demand from the beginning.
+- **Event browsing.** The decoder lists what a room has recorded, shows which is
+  on air, which are finished recordings and which were cut short by an encoder
+  that died, and plays any of them back.
+- Finished *and interrupted* events play as video-on-demand from the beginning —
+  a service whose encoder crashed is still watchable afterwards.
 - Operator docks in plain language, plus hotkeys.
 
 **What does not, yet** — see [Known gaps](#known-gaps).
@@ -140,6 +146,8 @@ downloads segments ahead of playback into a local cache.
 
 ```
 rooms/{room_id}/live.json        which event is live in this room
+rooms/{room_id}/events/{ulid}.json   one entry per event, so a room's
+                                 recordings list in a single request
 events/{ulid}/event.json         codec config, audio layout, start time
 events/{ulid}/init.mp4           codec configuration for the event
 events/{ulid}/segments/…m4s      the media
@@ -175,8 +183,82 @@ For the full design, see [PROJECT-SCOPE.md](PROJECT-SCOPE.md).
 3. **Load event**, let the buffer fill, then **Play** when you are ready. Use
    **Lock** during the service so nothing can be clicked by accident.
 
+To play something other than the live service, use the **Recordings** list:
+pick a past service and press **Load recording**. Playback then stays on it —
+if a new service starts mid-watch the dock offers the switch rather than taking
+it, because being pulled out of a recording you are part-way through is worse
+than being told. **Back to live** returns to following the room.
+
 Hotkeys for play, stop, hold, resume, catch-up, jog and markers are in
 Settings → Hotkeys.
+
+> The event list needs the **`s3:ListBucket`** permission. Cloudflare's "Object
+> Read & Write" token has it; an object-scoped or read-only token often does
+> not, and the dock will say so rather than showing an empty list.
+
+---
+
+## Choosing a satellite
+
+A campus can receive in one of two ways, and they suit different rooms.
+
+**OBS on a PC** — the decoder is a *source in a scene*, so the campus can
+produce around the relayed service. **The Pi appliance** — a fixed-function box
+that plays the service and nothing else. Both are built; neither has yet run a
+real service.
+
+### What running the decoder in OBS makes possible
+
+Because the relayed programme is an ordinary source, everything OBS does applies
+to it. This is the reason to choose a PC over the appliance, and for many
+churches it is the deciding factor.
+
+**Local content over the relayed service**
+
+- Lower thirds, campus announcements, scripture graphics, a countdown before the
+  service, a logo bug — keyed over the incoming picture with OBS's normal
+  sources and filters.
+- Cut away entirely to a local camera for a campus host, a local worship set or
+  notices, then back to the relay. The decoder keeps downloading while it is off
+  screen, so returning does not mean re-buffering.
+- Record the campus feed locally and simulcast it to YouTube or Facebook at the
+  same time as it plays in the room.
+
+**Video in and out**
+
+- **Blackmagic DeckLink** and **AJA** are supported by OBS itself, in and out.
+  A campus can take SDI to the house system and bring SDI in from a local
+  camera on the same machine.
+- **NDI** in and out through the DistroAV plugin (formerly obs-ndi), where the
+  house system already runs NDI.
+- Anything else OBS can see: HDMI capture cards, USB cameras, screen capture.
+
+**Audio into the house system**
+
+- **Dante** via Dante Virtual Soundcard or a Dante-enabled interface: OBS sees
+  it as a normal output device, so the relayed programme lands on the Dante
+  network alongside everything else the church already runs. The same approach
+  works for AES67/AVB interfaces, USB interfaces, or an analogue break-out.
+- Audio leaves OBS through its monitoring device, so whichever interface the
+  room uses is the one to select there.
+
+Two caveats worth knowing before planning around this. Every third-party plugin
+named above is someone else's project, on its own release schedule. And packed
+multi-channel audio currently arrives as a single multi-channel stream — routing
+individual channels to separate destinations needs the de-interleaver, which is
+not built (see [Known gaps](#known-gaps)).
+
+### When the appliance is the better answer
+
+The appliance gives all of that up on purpose. No scene, no overlays, no local
+sources: it plays the relayed service, on a box that costs less than a monitor,
+boots into the service on power-up, and is driven from a phone with no desktop
+to leave in the wrong state.
+
+Choose it where a campus needs the service on a screen and nothing more — an
+overflow room, a chapel, a plant meeting in a school hall. Choose OBS where the
+campus produces around the relay, or where it has to reach existing SDI, NDI or
+Dante infrastructure.
 
 ---
 
@@ -238,8 +320,10 @@ not a second implementation.
 
 ## The campus player (satellite appliance)
 
-A small box at a campus that receives, decodes and plays out, with no
-operator-facing desktop software. On stock **Raspberry Pi OS Lite (64-bit)**:
+The alternative to running the decoder in OBS: a small box at a campus that
+receives, decodes and plays out, with no operator-facing desktop software. See
+[Choosing a satellite](#choosing-a-satellite) for which suits a given room. On
+stock **Raspberry Pi OS Lite (64-bit)**:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/nathanihlenfeldt/obs-multisite/main/scripts/player/install.sh | sudo bash
@@ -279,7 +363,7 @@ phone and no SSH.
 
 ## What the tests cover
 
-Nine suites, all runnable without OBS:
+Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
 
 | suite | what it proves |
 |---|---|
@@ -287,6 +371,9 @@ Nine suites, all runnable without OBS:
 | `session` | the write-ordering invariant holds continuously, including across a crash and resume; packed multi-channel audio round-trips |
 | `decoder` | timeslipping: the cache fills while paused, resume continues exactly where it stopped, markers, seek-by-time, VOD playback, and that a gap stalls rather than silently skipping |
 | `responsive` | UI queries stay fast while downloading — the property that keeps OBS usable during a service |
+| `snapshot` | the figures the dock reads agree with the session they are built from |
+| `s3_list` | a ListObjectsV2 response is read correctly, including pagination and an access-denied body; a signed query string is canonicalised the way S3 does it |
+| `event_catalog` | events are classified as live / recording / interrupted, rooms stay separate, a listing failure is not shown as "no recordings", and an event that recorded nothing is not offered |
 | `cmaf`, `cmaf_hevc` | the muxer produces decodable fragments for H.264 and HEVC, with multi-track audio |
 | `cmaf_decode` | the round trip: what the muxer wrote, the decoder plays back |
 | `s3_url` | endpoint and bucket values survive being pasted with schemes, slashes and whitespace |
@@ -296,10 +383,6 @@ Nine suites, all runnable without OBS:
 
 ## Known gaps
 
-- **No event browsing.** The decoder follows `live.json`, so it plays whichever
-  event is newest. Choosing an older recording needs `ListObjectsV2` in the
-  transport — see scope §7.5.1, which also specifies showing each event's state
-  (live / recording / interrupted).
 - **Multi-track mode plays only the first audio track** at the satellite. The
   primary path is packed multi-channel, which carries end to end; separate
   audio-only sources for the multi-track alternative are not built.
@@ -315,9 +398,10 @@ Nine suites, all runnable without OBS:
 
 ## Roadmap
 
-- **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
-  tier (see above). Still to come: the packed-channel de-interleaver, DeckLink
-  SDI output for the production tier, and hardware-decoder selection on Pi 4.
+- **Phase 6 — Satellite appliance.** Built and installable for the ARM64 /
+  Raspberry Pi HDMI tier (see above), but not yet run through a service. Still
+  to come: the packed-channel de-interleaver, DeckLink SDI output for the
+  production tier, and hardware-decoder selection on Pi 4.
 - **Phase 7 — Extensions.** Web and mobile simulcast from the same files,
   scheduling, redundancy, and local insertion.
 

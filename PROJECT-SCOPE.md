@@ -101,6 +101,7 @@ This ranking is the tie-breaker for every design choice.
 ```
 rooms/{room_id}/
     live.json                     # pointer to the current live event_id (+ heartbeat)
+    events/{event_id}.json        # per-room index entry, written once at "Go Live"
 events/{event_id}/                # event_id = ULID minted by the encoder at "Go Live"
     event.json                    # static: video + audio-track layout, codecs, first_seq
     init.mp4                      # ONE CMAF init: video + every enabled audio track
@@ -110,6 +111,13 @@ events/{event_id}/                # event_id = ULID minted by the encoder at "Go
 ```
 
 - `room_id` is the broadcast source (e.g. `main-auditorium`).
+- The per-room index exists because `events/` is a flat global namespace:
+  nothing in an event's key says which room it belongs to, only `event.json`
+  does. Without the index, listing one room's events means listing every event
+  ever recorded and reading each descriptor to discard most of them. Writing it
+  is deliberately non-fatal — a service must not be held off air because an
+  index entry failed — and events recorded before it existed are still found by
+  that slower scan.
 - `event_id` is a ULID minted locally by the encoder at "Go Live".
 - Decoders need only read access; the encoder needs write access scoped to its
   own room/event paths.
@@ -338,10 +346,10 @@ happens not to be advancing.
   happened. The satellite remembers whether it ever saw the event live, and
   the memory resets when the event changes.
 
-### 7.5.1 Event browsing (planned)
+### 7.5.1 Event browsing
 
-When the event list arrives (it needs `ListObjectsV2`, section 4.x), each entry
-must carry **its own current state**, not just a date:
+Built. The decoder lists a room's events and each entry carries **its own
+current state**, not just a date:
 
 - **LIVE** — this event is the one `live.json` points at and its manifest is
   still advancing. At most one event is live at a time.
@@ -352,8 +360,13 @@ must carry **its own current state**, not just a date:
 
 A campus will usually see one live event among many recordings, so the state is
 what makes the list scannable — the date alone does not say which one is
-happening now. Entries should be labelled by start date and time, newest
-first, with the live one pinned to the top.
+happening now. Entries are labelled by start date and time, newest first, with
+the live one pinned to the top.
+
+Choosing an event pins playback to it. A service starting mid-watch does **not**
+steal the playback; the operator is told something is live and offered the
+switch, because being pulled out of a recording part-way through is worse than
+being told about it.
 
 ## 8. User interface
 
