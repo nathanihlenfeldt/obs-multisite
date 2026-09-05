@@ -1,0 +1,281 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#12151a">
+<title>Campus player</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header id="banner">
+  <div class="state" id="state">Connecting…</div>
+  <div class="room" id="room">&nbsp;</div>
+  <button class="lock" id="lock" title="Stop anything being changed by accident">Lock</button>
+</header>
+
+<nav id="tabs">
+  <button class="tab is-on" data-tab="play">Play</button>
+  <button class="tab" data-tab="events">Services</button>
+  <button class="tab" data-tab="settings">Settings</button>
+  <button class="tab" data-tab="system">This box</button>
+  <button class="tab" data-tab="log">Log</button>
+</nav>
+
+<main>
+
+<!-- ── Play ──────────────────────────────────────────────────────────────── -->
+<section id="tab-play" class="panel is-on">
+
+  <div class="now">
+    <div class="clock" id="clock">--:--:--</div>
+    <div class="sub" id="position">&nbsp;</div>
+  </div>
+
+  <div class="timeline-wrap">
+    <div class="timeline" id="timeline" title="Click to go to a moment">
+      <div class="stored" id="tl-stored"></div>
+      <div class="downloaded" id="tl-downloaded"></div>
+      <div class="markers" id="tl-markers"></div>
+      <div class="head" id="tl-head"></div>
+    </div>
+    <div class="timeline-labels">
+      <span id="tl-left">&nbsp;</span>
+      <span id="tl-hover"></span>
+      <span id="tl-right">&nbsp;</span>
+    </div>
+  </div>
+
+  <div class="transport">
+    <button class="big go"   id="btn-play">Play</button>
+    <button class="big hold" id="btn-hold">Hold picture</button>
+    <button class="big"      id="btn-live">Catch up to now</button>
+    <button class="big off"  id="btn-stop">Stop</button>
+  </div>
+
+  <div class="jog">
+    <span class="jog-label">Go back</span>
+    <button data-jog="-60">1 min</button>
+    <button data-jog="-10">10 s</button>
+    <button data-jog="-1">1 s</button>
+    <span class="jog-label">Go forward</span>
+    <button data-jog="1">1 s</button>
+    <button data-jog="10">10 s</button>
+    <button data-jog="60">1 min</button>
+  </div>
+
+  <div class="row delay">
+    <label for="delay-min">Stay behind live by</label>
+    <input type="number" id="delay-min" min="0" max="120" step="1" value="0">
+    <span>minutes</span>
+    <button id="btn-delay">Set</button>
+  </div>
+
+  <details class="preview" id="preview-box">
+    <summary>Preview picture</summary>
+    <p class="hint">
+      The preview is separate from what is going out — look at it to line up a
+      cue without touching the picture on the screen.
+    </p>
+    <div class="preview-frame">
+      <img id="preview-img" alt="Preview of the incoming feed">
+      <div class="preview-none" id="preview-none">Nothing decoded yet</div>
+    </div>
+    <div class="row">
+      <label for="preview-rate">Refresh</label>
+      <select id="preview-rate">
+        <option value="0">Off</option>
+        <option value="1">Once a second</option>
+        <option value="4" selected>Smooth (4 a second)</option>
+        <option value="10">As fast as it can</option>
+      </select>
+    </div>
+  </details>
+
+  <div class="cues" id="cues"></div>
+
+  <div class="readout" id="readout"></div>
+  <div class="alert" id="alert" hidden></div>
+</section>
+
+<!-- ── Services ──────────────────────────────────────────────────────────── -->
+<section id="tab-events" class="panel">
+  <div class="row">
+    <button id="btn-refresh-events">Refresh the list</button>
+    <button id="btn-follow-live">Follow whatever is live</button>
+    <span class="muted" id="events-note"></span>
+  </div>
+  <ul class="events" id="events"></ul>
+</section>
+
+<!-- ── Settings ──────────────────────────────────────────────────────────── -->
+<section id="tab-settings" class="panel">
+  <form id="settings-form">
+
+    <h2>Where the service comes from</h2>
+    <div class="field">
+      <label for="c-room">Room</label>
+      <input id="c-room" name="room_id" autocomplete="off">
+      <p class="hint">The name the main site broadcasts under, e.g. main-auditorium.</p>
+    </div>
+    <div class="field">
+      <label for="c-bucket">Bucket</label>
+      <input id="c-bucket" name="bucket" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="c-account">Cloudflare R2 account ID</label>
+      <input id="c-account" name="r2_account_id" autocomplete="off">
+      <p class="hint">Leave blank if you are giving a full endpoint below instead.</p>
+    </div>
+    <div class="field">
+      <label for="c-endpoint">Endpoint host</label>
+      <input id="c-endpoint" name="endpoint_host" autocomplete="off"
+             placeholder="s3.eu-west-2.amazonaws.com">
+    </div>
+    <div class="field">
+      <label for="c-region">Region</label>
+      <input id="c-region" name="region" autocomplete="off">
+      <p class="hint">"auto" for Cloudflare R2; the real region for AWS.</p>
+    </div>
+    <div class="field">
+      <label for="c-key">Access key ID</label>
+      <input id="c-key" name="access_key_id" autocomplete="off">
+    </div>
+    <div class="field">
+      <label for="c-secret">Secret access key</label>
+      <input id="c-secret" name="secret_access_key" type="password" autocomplete="new-password">
+      <p class="hint">Read-only access is all this box needs.</p>
+    </div>
+
+    <h2>How much to keep ready</h2>
+    <div class="field">
+      <label for="c-buffer">Download ahead</label>
+      <input id="c-buffer" name="buffer_minutes" type="number" min="1" max="240">
+      <p class="hint">
+        Minutes of programme kept ready on disk. This is how long the campus
+        could keep broadcasting if the connection died — set it as high as the
+        link allows.
+      </p>
+    </div>
+    <div class="field">
+      <label for="c-prebuffer">Wait before starting</label>
+      <input id="c-prebuffer" name="prebuffer_segments" type="number" min="0" max="20">
+      <p class="hint">Pieces of programme to gather before the picture starts.</p>
+    </div>
+    <div class="field">
+      <label for="c-cache">Cache folder</label>
+      <input id="c-cache" name="cache_dir" autocomplete="off">
+      <p class="hint" id="cache-warning"></p>
+    </div>
+
+    <h2>Picture</h2>
+    <div class="field">
+      <label for="c-display">Display</label>
+      <select id="c-display" name="connector"></select>
+    </div>
+    <div class="field">
+      <label for="c-mode">Resolution and rate</label>
+      <select id="c-mode"></select>
+      <p class="hint">
+        The box sets this on the output itself. "Whatever the screen prefers"
+        is right unless you are feeding a chain that needs a specific rate.
+      </p>
+    </div>
+    <div class="field">
+      <label for="c-idle">When nothing is playing</label>
+      <select id="c-idle" name="idle_mode">
+        <option value="black">Show black</option>
+        <option value="hold">Hold the last picture</option>
+        <option value="splash">Show this box's details</option>
+        <option value="image">Show a holding slide</option>
+      </select>
+    </div>
+    <div class="field" id="idle-image-field" hidden>
+      <label for="c-idle-image">Holding slide</label>
+      <input id="c-idle-image" name="idle_image_path" placeholder="/var/lib/multisite-player/slate.png">
+    </div>
+
+    <h2>Sound</h2>
+    <div class="field">
+      <label for="c-audio-on">Sound out</label>
+      <select id="c-audio-on" name="audio_enabled">
+        <option value="true">On</option>
+        <option value="false">Muted</option>
+      </select>
+    </div>
+    <div class="field">
+      <label for="c-alsa">Output device</label>
+      <select id="c-alsa" name="alsa_device"></select>
+      <p class="hint">
+        HDMI carries up to eight channels; a de-embedder at the campus
+        recovers the individual mixes and the click.
+      </p>
+    </div>
+    <div class="field">
+      <label for="c-channels">Channels</label>
+      <input id="c-channels" name="audio_channels" type="number" min="0" max="8">
+      <p class="hint">0 follows whatever the feed carries.</p>
+    </div>
+
+    <h2>On power-up</h2>
+    <div class="field">
+      <label for="c-autoplay">Start playing by itself</label>
+      <select id="c-autoplay" name="auto_play">
+        <option value="true">Yes — go to air as soon as there is a feed</option>
+        <option value="false">No — wait for someone to press Play</option>
+      </select>
+    </div>
+
+    <div class="row sticky-save">
+      <button type="submit" class="big go">Save settings</button>
+      <span class="muted" id="settings-note"></span>
+    </div>
+  </form>
+</section>
+
+<!-- ── This box ──────────────────────────────────────────────────────────── -->
+<section id="tab-system" class="panel">
+  <dl class="facts" id="facts"></dl>
+
+  <h2>Clock</h2>
+  <div class="row">
+    <label for="s-tz">Time zone</label>
+    <select id="s-tz"></select>
+    <button id="btn-tz">Set</button>
+  </div>
+  <div class="row">
+    <label for="s-ntp">Set the time from the network</label>
+    <select id="s-ntp">
+      <option value="true">Yes</option>
+      <option value="false">No</option>
+    </select>
+    <button id="btn-ntp">Apply</button>
+  </div>
+  <div class="row">
+    <button id="btn-settime">Set the clock from this device</button>
+    <span class="hint">Only works with network time off.</span>
+  </div>
+
+  <h2>Power</h2>
+  <div class="row">
+    <button id="btn-restart">Restart the player</button>
+    <button id="btn-reboot" class="danger">Reboot the box</button>
+    <button id="btn-shutdown" class="danger">Shut down</button>
+  </div>
+</section>
+
+<!-- ── Log ───────────────────────────────────────────────────────────────── -->
+<section id="tab-log" class="panel">
+  <div class="row">
+    <button id="btn-log-refresh">Refresh</button>
+    <label><input type="checkbox" id="log-follow" checked> Keep up to date</label>
+  </div>
+  <pre class="log" id="log"></pre>
+</section>
+
+</main>
+
+<script src="/app.js"></script>
+</body>
+</html>

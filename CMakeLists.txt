@@ -201,6 +201,73 @@ else()
     message(STATUS "skipping CMAF muxer targets")
 endif()
 
+# ── Optional: the satellite appliance (headless player) ───────────────────────
+# The Raspberry Pi / mini-PC receive box: the same core, with its own video and
+# audio output and a browser-based operator interface instead of OBS.
+#
+# It builds anywhere the core does. On a machine with no KMS and no ALSA — a
+# developer's laptop — the outputs fall back to null implementations, which is
+# what lets the engine and the whole web interface be exercised without the
+# hardware in front of you.
+option(BUILD_PLAYER "Build the satellite appliance (headless player)" ON)
+
+if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
+    set(MULTISITE_PLAYER_VERSION "0.1.0" CACHE STRING "Player version string")
+    # Where the operator interface is installed. Overridable at runtime with
+    # --web-root so the page can be edited on a running box.
+    set(MULTISITE_PLAYER_WEB_ROOT "${CMAKE_INSTALL_PREFIX}/share/multisite-player/web"
+        CACHE STRING "Installed location of the operator interface")
+
+    add_executable(multisite-player
+        src/appliance/main.cpp
+        src/appliance/config.cpp
+        src/appliance/log.cpp
+        src/appliance/player.cpp
+        src/appliance/http_server.cpp
+        src/appliance/api.cpp
+        src/appliance/sysinfo.cpp
+        src/appliance/preview.cpp
+        src/appliance/outputs.cpp)
+
+    target_link_libraries(multisite-player PRIVATE
+        multisite_core multisite_s3 multisite_cmaf)
+    target_compile_definitions(multisite-player PRIVATE
+        MULTISITE_PLAYER_VERSION="${MULTISITE_PLAYER_VERSION}"
+        MULTISITE_PLAYER_WEB_ROOT="${MULTISITE_PLAYER_WEB_ROOT}")
+
+    # DRM/KMS: the appliance drives the HDMI output itself, with no desktop.
+    find_package(PkgConfig QUIET)
+    if(PkgConfig_FOUND)
+        pkg_check_modules(LIBDRM IMPORTED_TARGET libdrm)
+        pkg_check_modules(ALSA IMPORTED_TARGET alsa)
+    endif()
+
+    if(TARGET PkgConfig::LIBDRM)
+        target_sources(multisite-player PRIVATE src/appliance/drm_output.cpp)
+        target_link_libraries(multisite-player PRIVATE PkgConfig::LIBDRM)
+        target_compile_definitions(multisite-player PRIVATE MULTISITE_HAVE_DRM=1)
+        message(STATUS "player: DRM/KMS display output enabled")
+    else()
+        message(STATUS "player: no libdrm — building without display output")
+    endif()
+
+    if(TARGET PkgConfig::ALSA)
+        target_sources(multisite-player PRIVATE src/appliance/alsa_output.cpp)
+        target_link_libraries(multisite-player PRIVATE PkgConfig::ALSA)
+        target_compile_definitions(multisite-player PRIVATE MULTISITE_HAVE_ALSA=1)
+        message(STATUS "player: ALSA audio output enabled")
+    else()
+        message(STATUS "player: no ALSA — building without audio output")
+    endif()
+
+    install(TARGETS multisite-player RUNTIME DESTINATION bin)
+    install(DIRECTORY src/appliance/web/
+            DESTINATION share/multisite-player/web)
+elseif(BUILD_PLAYER)
+    message(STATUS "skipping the appliance "
+                   "(needs FFmpeg and libcurl on a POSIX host)")
+endif()
+
 # ── Optional: the OBS plugin module ───────────────────────────────────────────
 # Enable with -DBUILD_OBS_PLUGIN=ON. libobs is discovered either via its CMake
 # config (obs-deps / an OBS build tree) or via pkg-config (distro libobs-dev).
