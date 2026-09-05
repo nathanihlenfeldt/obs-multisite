@@ -326,4 +326,6 @@ someone took the time to paste a log.
 
 ## License
 
-MIT. Vendored `nlohmann/json` is MIT.
+MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Stage Audio Works.
+
+Vendored `nlohmann/json` is MIT.
