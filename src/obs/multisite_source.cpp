@@ -973,7 +973,6 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     }
     out.playing = playing.load();
     out.locked  = controls_locked.load();
-    out.ended   = sess ? false : false;   // filled below once sess is known
     // Prefer the frame-accurate playing clock; fall back to the segment.
     const long long tick = playing_at_ms.load();
     out.playhead_ms = tick > 0 ? tick : (long long)sess->playhead_wall_ms();

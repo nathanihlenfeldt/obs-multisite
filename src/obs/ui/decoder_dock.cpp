@@ -524,8 +524,11 @@ void DecoderDock::refresh() {
         m_lock->blockSignals(false);
     }
 
-    // room state, matching RoomState
-    switch (s.room_state) {
+    // The chip and the readout below must agree, so both key off `ended`
+    // rather than one reading the raw room_state and the other a flag: they
+    // disagreed once, and the dock showed "RECORDING (not live)" above
+    // "1 min 10 sec behind".
+    switch (s.ended ? 3 : s.room_state) {
         case 2:  // Live
             m_state->setText(s.paused ? tr_("Dock.Held") : tr_("Dock.Live"));
             m_state->setStyleSheet(s.paused ? "color: #e0a020; font-weight: bold;"

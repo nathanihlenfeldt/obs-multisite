@@ -63,6 +63,14 @@ add_executable(test_decoder tests/test_decoder.cpp)
 target_link_libraries(test_decoder PRIVATE multisite_core)
 add_test(NAME decoder COMMAND test_decoder)
 
+# The dock reads a snapshot struct rather than the session directly, so the
+# values it is built from must agree with their source. A stray line once reset
+# one of them after it had been assigned, and the UI showed two contradictory
+# states at once.
+add_executable(test_snapshot tests/test_snapshot.cpp)
+target_link_libraries(test_snapshot PRIVATE multisite_core)
+add_test(NAME snapshot COMMAND test_snapshot)
+
 # Guards the property that matters in live production: UI queries must stay
 # fast while the decoder is downloading. Holding the state lock across network
 # I/O once made a timeline click appear to lock OBS up entirely.
