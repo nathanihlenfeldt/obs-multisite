@@ -660,8 +660,14 @@ void DecoderDock::refreshEvents(const DecoderSnapshot& s) {
         m_eventsNote->setStyleSheet("color: palette(text); opacity: 0.75;");
 
     const bool ctl = !s.locked;
-    m_loadEvent->setEnabled(ctl && m_events->currentItem() != nullptr);
-    m_returnLive->setEnabled(ctl && !s.pinned_event_id.empty());
+    // While a switch is in flight the button says so and refuses further
+    // presses: an unresponsive-looking button is what makes an operator click
+    // it repeatedly, queuing up switches nobody asked for.
+    m_loadEvent->setText(s.loading ? tr_("Dock.LoadingShort")
+                                   : tr_("Dock.LoadRecording"));
+    m_loadEvent->setEnabled(ctl && !s.loading &&
+                            m_events->currentItem() != nullptr);
+    m_returnLive->setEnabled(ctl && !s.loading && !s.pinned_event_id.empty());
 
     // A service has started while a recording is pinned. The decoder stays
     // where it is on purpose — being pulled out of a recording mid-watch would
@@ -710,6 +716,16 @@ void DecoderDock::refresh() {
     // rather than one reading the raw room_state and the other a flag: they
     // disagreed once, and the dock showed "RECORDING (not live)" above
     // "1 min 10 sec behind".
+    // An action in progress outranks the settled state. The dock ticks every
+    // 500 ms, so this is what turns a click into something visible long before
+    // the network has finished answering it.
+    if (s.loading) {
+        m_state->setText(tr_("Dock.Loading"));
+        m_state->setStyleSheet("color: #3b82c4; font-weight: bold;");
+    } else if (s.buffering || s.seek_target_ms > 0) {
+        m_state->setText(tr_("Dock.Buffering"));
+        m_state->setStyleSheet("color: #3b82c4; font-weight: bold;");
+    } else
     switch (s.ended ? 3 : s.room_state) {
         case 2:  // Live
             m_state->setText(s.paused ? tr_("Dock.Held") : tr_("Dock.Live"));
@@ -747,7 +763,16 @@ void DecoderDock::refresh() {
     // Lead with the clock time being shown — the thing an operator can match
     // against what is happening in the room — and express the offset in plain
     // language rather than as a signed number.
-    if (s.ended) {
+    if (s.seek_target_ms > 0) {
+        // A jog or a timeline click. The position updates instantly; the
+        // wording makes clear the picture has not caught up yet, so the
+        // operator is neither left wondering nor misled.
+        m_behind->setText(tr_("Dock.GoingTo").arg(clock_time(s.seek_target_ms)));
+        m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #3b82c4;");
+    } else if (s.loading) {
+        m_behind->setText(tr_("Dock.LoadingRecording"));
+        m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #3b82c4;");
+    } else if (s.ended) {
         // A finished recording: show where you are in it and how much is left.
         // "Behind live" is meaningless once there is no live edge to be behind.
         // How far through the recording, out of its total length — the way a

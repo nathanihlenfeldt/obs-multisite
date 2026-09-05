@@ -136,6 +136,26 @@ struct SourceCtx : DecoderControls {
     std::atomic<uint64_t> frames_dropped{0};
     std::atomic<uint64_t> last_resync_log_ns{0};
 
+    // ── Immediate feedback ───────────────────────────────────────────────────
+    // Every operator action here is answered by the network, not by the click:
+    // a pin takes effect on the next poll, and a seek shows nothing until a
+    // frame has been fetched and decoded. Left alone, the dock sat unchanged
+    // for seconds and then snapped — which reads as a dropped click, so the
+    // operator presses again.
+    //
+    // These three record what has been ASKED FOR, so the dock can say so at
+    // once and correct itself when the real state arrives.
+    //
+    // `poll_now` cuts the wait itself: the poll loop otherwise sleeps out the
+    // remainder of its interval (3 s by default) before even looking.
+    std::atomic<bool>      poll_now{false};
+    // Where a seek is heading, until frames actually arrive there. 0 = settled.
+    std::atomic<long long> seek_target_ms{0};
+    // An event has been chosen but its manifest has not been loaded yet.
+    std::atomic<bool>      loading_event{false};
+    // Cleared once the first frame after an action reaches OBS.
+    std::atomic<bool>      awaiting_frames{false};
+
     // ── Event list ───────────────────────────────────────────────────────────
     // The catalog makes one request per event, so a refresh runs on the poll
     // thread. The dock only ever sets a flag and reads the last result — it
@@ -371,6 +391,15 @@ static void deliver_loop(SourceCtx* ctx) {
                 ctx->playing_at_ms = segstart + (pts - base) / 1000000LL;
         }
 
+        // A frame has reached OBS, so whatever was asked for has landed. This
+        // is what turns the dock's provisional readout back into a confirmed
+        // one, and it is deliberately keyed on delivery rather than on the
+        // seek returning: the seek is instant, arriving there is not.
+        if (ctx->awaiting_frames.exchange(false)) {
+            ctx->seek_target_ms = 0;
+            ctx->loading_event  = false;
+        }
+
         if (item.is_video) {
             const DecodedVideoFrame& f = item.video;
             struct obs_source_frame frame = {};
@@ -502,12 +531,23 @@ static void poll_loop(SourceCtx* ctx) {
     while (ctx->running.load()) {
         const int64_t now = (int64_t)(os_gettime_ns() / 1000000ULL);
 
-        if (now >= next_poll) {
+        // An operator action (pinning an event, reconfiguring) sets poll_now so
+        // the switch happens in the next few milliseconds rather than whenever
+        // the interval happens to come round. Waiting out three seconds before
+        // even looking is what made Load feel like a dropped click.
+        if (now >= next_poll || ctx->poll_now.exchange(false)) {
             next_poll = now + ctx->poll_interval_ms;
             auto sess = get_session(ctx);
             if (!sess) break;
             // poll() does network I/O and can take seconds; never under a lock.
             RoomState st = sess->poll();
+
+            // The chosen event is now loaded (or has definitively failed).
+            // Load does not go to air, so no frame will arrive to clear this —
+            // the poll that performed the switch has to.
+            if (ctx->loading_event.load() && st != RoomState::Unknown)
+                ctx->loading_event = false;
+
             if (st != ctx->last_room) {
                 ctx->last_room = st;
                 const char* name =
@@ -805,23 +845,71 @@ static void src_update(void* data, obs_data_t* s) {
     unregister_decoder_controls(ctx);
     stop_workers(ctx);
 
-    // Storage is machine-wide (see decoder_settings.h): a source uses its own
-    // fields when filled, otherwise the shared settings. That way credentials
-    // are entered once, survive an unclean OBS exit, and are shared by every
-    // additional source.
+    // Storage is machine-wide and lives in ONE place: the decoder dock's
+    // settings dialog (see decoder_settings.h).
+    //
+    // These fields used to exist in the source properties as well, with the
+    // source's copy winning when filled. Two editable copies of a credential is
+    // a trap: changing it in the dock appeared to do nothing, because a value
+    // saved in the scene silently overrode it, and there was no indication
+    // anywhere that this was happening. The properties fields are gone.
     DecoderSettings shared = decoder_settings();
 
+    // One-time migration for scenes saved before that change. Anything still
+    // held in the source is lifted into the machine settings (unless those are
+    // already configured, which means the dock is the newer truth), and then
+    // cleared from the source so it can never shadow the dock again.
+    {
+        auto own = [&](const char* key) {
+            const char* v = obs_data_get_string(s, key);
+            return (v && *v) ? std::string(v) : std::string();
+        };
+        const std::string legacy_bucket   = own(S_BUCKET);
+        const std::string legacy_endpoint = own(S_ENDPOINT);
+        const std::string legacy_account  = own(S_ACCOUNT);
+        const bool has_legacy = !legacy_bucket.empty() ||
+                                !legacy_endpoint.empty() || !legacy_account.empty();
+
+        if (has_legacy) {
+            if (!shared.configured()) {
+                DecoderSettings upd  = shared;
+                upd.endpoint_host     = legacy_endpoint;
+                upd.r2_account_id     = legacy_account;
+                upd.bucket            = legacy_bucket;
+                upd.access_key_id     = own(S_KEYID);
+                upd.secret_access_key = own(S_SECRET);
+                if (!own(S_REGION).empty()) upd.region = own(S_REGION);
+                set_decoder_settings(upd);
+                shared = decoder_settings();
+                mlog_info("source: moved this scene's storage settings into the "
+                          "machine-wide decoder settings — they are now edited "
+                          "in the Multisite Decoder dock");
+            } else {
+                mlog_info("source: discarding storage settings saved in this "
+                          "scene; the decoder dock's settings are used instead");
+            }
+            // Clear either way: a stale copy in the scene is exactly what made
+            // dock edits appear to have no effect.
+            for (const char* key : { S_ENDPOINT, S_ACCOUNT, S_BUCKET,
+                                     S_KEYID, S_SECRET, S_REGION })
+                obs_data_set_string(s, key, "");
+        }
+    }
+
+    S3Config s3;
+    s3.endpoint_host     = shared.endpoint_host;
+    s3.r2_account_id     = shared.r2_account_id;
+    s3.bucket            = shared.bucket;
+    s3.access_key_id     = shared.access_key_id;
+    s3.secret_access_key = shared.secret_access_key;
+    s3.region            = shared.region;
+
+    // Room and playback tuning stay per-source: two sources may legitimately
+    // watch different rooms, and buffering can differ per machine. They fall
+    // back to the dock's values when a source has not set its own.
     auto pick = [](const char* own, const std::string& fallback) {
         return (own && *own) ? std::string(own) : fallback;
     };
-
-    S3Config s3;
-    s3.endpoint_host     = pick(obs_data_get_string(s, S_ENDPOINT), shared.endpoint_host);
-    s3.r2_account_id     = pick(obs_data_get_string(s, S_ACCOUNT),  shared.r2_account_id);
-    s3.bucket            = pick(obs_data_get_string(s, S_BUCKET),   shared.bucket);
-    s3.access_key_id     = pick(obs_data_get_string(s, S_KEYID),    shared.access_key_id);
-    s3.secret_access_key = pick(obs_data_get_string(s, S_SECRET),   shared.secret_access_key);
-    s3.region            = pick(obs_data_get_string(s, S_REGION),   shared.region);
 
     DecoderConfig dc;
     dc.room_id              = pick(obs_data_get_string(s, S_ROOM), shared.room_id);
@@ -833,24 +921,17 @@ static void src_update(void* data, obs_data_t* s) {
     if (s3.bucket.empty() ||
         (s3.endpoint_host.empty() && s3.r2_account_id.empty())) {
         mlog_warn("source: not configured yet — enter storage details in the "
-                  "Multisite Decoder dock (or this source's properties)");
+                  "Multisite Decoder dock (Settings)");
         return;
     }
 
-    // Anything typed into the source becomes the machine default, so the next
-    // source (and the next OBS session) already has it.
-    if (!shared.configured() ||
-        shared.bucket != s3.bucket || shared.room_id != dc.room_id) {
+    // A room typed into a source becomes the machine default, so the next
+    // source and the next OBS session already have it.
+    if (dc.room_id != shared.room_id && !dc.room_id.empty()) {
         DecoderSettings upd = shared;
-        upd.endpoint_host     = s3.endpoint_host;
-        upd.r2_account_id     = s3.r2_account_id;
-        upd.bucket            = s3.bucket;
-        upd.access_key_id     = s3.access_key_id;
-        upd.secret_access_key = s3.secret_access_key;
-        upd.region            = s3.region;
-        upd.room_id           = dc.room_id;
-        upd.prebuffer_segments = dc.prebuffer_segments;
-        upd.poll_interval_ms   = ctx->poll_interval_ms;
+        upd.room_id              = dc.room_id;
+        upd.prebuffer_segments   = dc.prebuffer_segments;
+        upd.poll_interval_ms     = ctx->poll_interval_ms;
         upd.keep_behind_segments = dc.keep_behind_segments;
         set_decoder_settings(upd);
     }
@@ -916,7 +997,9 @@ static void src_destroy(void* data) {
 
 static void src_defaults(obs_data_t* s) {
     obs_data_set_default_string(s, S_ROOM, "main-auditorium");
-    obs_data_set_default_string(s, S_REGION, "auto");
+    // No default for the storage fields: they are no longer edited here, and a
+    // default would make every source look as though it carried a value to
+    // migrate.
     obs_data_set_default_int(s, S_POLL_MS, 3000);
     obs_data_set_default_int(s, S_PREBUF, 2);
     obs_data_set_default_int(s, S_KEEP, 200);
@@ -1054,6 +1137,10 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     }
     out.playing = playing.load();
     out.locked  = controls_locked.load();
+    out.loading        = loading_event.load();
+    out.seek_target_ms = seek_target_ms.load();
+    // Playing, but nothing has reached OBS yet — the buffer is still filling.
+    out.buffering      = playing.load() && awaiting_frames.load();
     // Prefer the frame-accurate playing clock; fall back to the segment.
     const long long tick = playing_at_ms.load();
     out.playhead_ms = tick > 0 ? tick : (long long)sess->playhead_wall_ms();
@@ -1093,6 +1180,12 @@ void SourceCtx::pin_event(const std::string& event_id) {
     sess->pin_event(event_id);
     playing = false;                  // an operator presses Play on cue
     playing_at_ms = 0;
+    // Say so before any network work starts. The dock reads these on its very
+    // next tick (500 ms), so the click is acknowledged whatever the store does
+    // afterwards.
+    loading_event   = true;
+    seek_target_ms  = 0;
+    poll_now        = true;           // apply the pin now, not in 3 seconds
     mlog_info("source: pinned event %s — playback will not follow a new "
               "service starting", event_id.c_str());
     events_refresh_wanted = true;     // so the list re-marks which row is playing
@@ -1104,6 +1197,9 @@ void SourceCtx::unpin_event() {
     sess->unpin();
     playing = false;
     playing_at_ms = 0;
+    loading_event   = true;
+    seek_target_ms  = 0;
+    poll_now        = true;
     mlog_info("source: unpinned — following whatever is live in the room");
     events_refresh_wanted = true;
 }
@@ -1173,14 +1269,34 @@ void SourceCtx::seek_to_time(long long wall_ms) {
     pause_started_ns = 0;
     paused = false;
     dq_cv.notify_all();
+
+    // Move the displayed time to where we are GOING, immediately. It used to
+    // keep reporting the old position until a frame had been fetched and
+    // decoded at the new one, so a jog looked like nothing had happened and
+    // then jumped. The dock marks this as provisional until frames arrive, so
+    // the operator sees the intent honoured at once without being told the
+    // picture has already moved.
+    seek_target_ms  = (long long)got;
+    playing_at_ms   = (long long)got;
+    awaiting_frames = true;
+    poll_now        = true;      // fetch what the new position needs now
+
     mlog_info("source: went to %lld (%.0fs behind live)",
               (long long)got, sess->behind_live_s());
 }
 
 void SourceCtx::jog(double seconds) {
-    const long long from = playing_at_ms.load();
+    long long from = playing_at_ms.load();
     if (from <= 0) {
-        mlog_warn("source: cannot jog until the playing time is known");
+        // Nothing has been delivered yet — a recording loaded but not yet
+        // played, which is exactly when an operator wants to move to the point
+        // they intend to start from. Jog from where the playhead SITS rather
+        // than refusing until something has gone to air.
+        auto sess = get_session(this);
+        if (sess) from = (long long)sess->playhead_wall_ms();
+    }
+    if (from <= 0) {
+        mlog_warn("source: cannot jog until the recording has loaded");
         return;
     }
     seek_to_time(from + (long long)(seconds * 1000.0));
@@ -1258,12 +1374,14 @@ static bool on_marker_selected(void* data, obs_properties_t*,
 
 static obs_properties_t* src_props(void* data) {
     obs_properties_t* p = obs_properties_create();
-    obs_properties_add_text(p, S_ENDPOINT, obs_module_text("EndpointHost"), OBS_TEXT_DEFAULT);
-    obs_properties_add_text(p, S_ACCOUNT,  obs_module_text("R2AccountID"),  OBS_TEXT_DEFAULT);
-    obs_properties_add_text(p, S_BUCKET,   obs_module_text("Bucket"),       OBS_TEXT_DEFAULT);
-    obs_properties_add_text(p, S_KEYID,    obs_module_text("AccessKeyID"),  OBS_TEXT_DEFAULT);
-    obs_properties_add_text(p, S_SECRET,   obs_module_text("SecretKey"),    OBS_TEXT_PASSWORD);
-    obs_properties_add_text(p, S_REGION,   obs_module_text("Region"),       OBS_TEXT_DEFAULT);
+
+    // Storage settings deliberately do NOT appear here. They are machine-wide
+    // and edited in the decoder dock; having a second editable copy per scene
+    // meant a dock edit could be silently overridden by a value saved in the
+    // scene file, with nothing on screen to explain it.
+    obs_properties_add_text(p, "storage_note",
+                            obs_module_text("StorageInDock"), OBS_TEXT_INFO);
+
     obs_properties_add_text(p, S_ROOM,     obs_module_text("RoomID"),       OBS_TEXT_DEFAULT);
     obs_properties_add_int_slider(p, S_PREBUF, obs_module_text("Prebuffer"), 0, 10, 1);
     obs_properties_add_int_slider(p, S_POLL_MS, obs_module_text("PollInterval"), 500, 10000, 500);

@@ -139,6 +139,16 @@ struct DecoderSnapshot {
     // pinned-playback case. The dock offers a jump rather than taking it.
     bool        live_elsewhere = false;
     std::string live_event_id;
+
+    // ── What has been asked for but not yet happened ─────────────────────────
+    // The dock answers a click from these, rather than waiting for the network
+    // to confirm it. Without them a Load or a jog looked like a dropped click
+    // for several seconds and then snapped into place.
+    bool        loading = false;        // an event is being switched to
+    // Non-zero while playback is heading somewhere it has not arrived at:
+    // the time shown is where it is GOING, not where the picture is.
+    long long   seek_target_ms = 0;
+    bool        buffering = false;      // playing, but nothing decoded yet
     long long   end_ms = 0;
     // Total length of the recording, once it has an end. 0 while live.
     long long   total_ms = 0;
