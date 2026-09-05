@@ -16,6 +16,7 @@ class QLabel;
 class QTimer;
 class QCheckBox;
 class QDialog;
+class QComboBox;
 
 namespace multisite_obs {
 
@@ -48,6 +49,7 @@ private:
     QCheckBox* m_tags = nullptr;
 
     // media
+    QComboBox* m_encoder = nullptr;
     QDoubleSpinBox* m_segDur = nullptr;
     QSpinBox* m_vBitrate = nullptr;
     QSpinBox* m_aBitrate = nullptr;

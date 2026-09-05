@@ -140,6 +140,24 @@ source tears the decoder down and restarts it from the re-sent init segment —
 feeding fragments across a jump would otherwise decode as out-of-order
 timestamps and a glitched picture.
 
+### Codecs and encoders
+
+Any video encoder OBS offers can be used: the dock lists what the machine
+actually has (x264, NVENC, QuickSync, AMF), hardware first. Two settings are
+applied whichever is chosen, because they are not optional here — the keyframe
+interval is pinned to the segment duration, and anything that inserts extra
+keyframes is disabled, or segments come out unevenly sized.
+
+**H.264 and HEVC are both tested end to end** (`cmaf` and `cmaf_hevc`): the
+muxer writes the matching sample entry, the manifest records the codec, and the
+decoder plays it back. HEVC matters beyond bandwidth — the Raspberry Pi 5
+decoder tier accelerates HEVC in hardware and has no H.264 block at all. AV1 is
+carried and muxed but has had less real-world exercise.
+
+If a saved encoder choice is missing on a given machine (different GPU, driver
+removed), the encoder falls back to x264 with a warning rather than failing to
+go live.
+
 ### Operator workflow
 
 Modelled on how a receive-only campus actually runs a service, and on the

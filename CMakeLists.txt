@@ -154,6 +154,15 @@ if(FFMPEG_FOUND)
                      -DTEST_EXE=$<TARGET_FILE:test_cmaf>
                      -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_cmaf_test.cmake)
 
+    # HEVC through the same muxer. The pipeline is codec-agnostic by design, so
+    # the guarantee is worth asserting rather than assuming — especially with
+    # the Raspberry Pi decoder tier depending on HEVC.
+    add_test(NAME cmaf_hevc
+             COMMAND ${CMAKE_COMMAND}
+                     -DTEST_EXE=$<TARGET_FILE:test_cmaf>
+                     -DCMAKE_CURRENT_BINARY_DIR=${CMAKE_CURRENT_BINARY_DIR}
+                     -P ${CMAKE_CURRENT_SOURCE_DIR}/cmake/run_hevc_test.cmake)
+
     # Round trip: decode the output the muxer test just produced. Generating
     # the fixture at test time keeps large media out of the repository while
     # still exercising encode -> decode on real bytes.

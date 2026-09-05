@@ -7,6 +7,7 @@
 #include <obs-module.h>
 
 #include <QCheckBox>
+#include <QComboBox>
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <media-io/audio-io.h>
@@ -156,6 +157,17 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_trackLabels   = new QLineEdit(mediaBox);
     m_channelLabels = new QLineEdit(mediaBox);
     m_markerLabels  = new QLineEdit(mediaBox);
+    // Encoder choice, populated from what OBS actually has here. A hardware
+    // encoder leaves the CPU free for everything else the main site is doing.
+    m_encoder = new QComboBox(mediaBox);
+    for (const auto& e : available_video_encoders()) {
+        QString label = QString::fromStdString(e.name);
+        if (e.hardware) label += tr_("Dock.HardwareSuffix");
+        m_encoder->addItem(label, QString::fromStdString(e.id));
+    }
+    m_encoder->setToolTip(tr_("Dock.EncoderHint"));
+    mform->addRow(tr_("Dock.Encoder"), m_encoder);
+
     mform->addRow(tr_("SegmentDuration"), m_segDur);
     mform->addRow(tr_("Dock.VideoBitrate"), m_vBitrate);
     mform->addRow(tr_("Dock.AudioBitrate"), m_aBitrate);
@@ -191,6 +203,8 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
         connect(e, &QLineEdit::editingFinished, this,
                 &EncoderDock::onSaveSettings);
     connect(m_tags, &QCheckBox::toggled, this, &EncoderDock::onSaveSettings);
+    connect(m_encoder, &QComboBox::currentIndexChanged, this,
+            [this](int) { onSaveSettings(); });
     connect(m_segDur, &QDoubleSpinBox::editingFinished, this,
             &EncoderDock::onSaveSettings);
     for (QSpinBox* sb : { m_vBitrate, m_aBitrate, m_tracks })
@@ -253,6 +267,11 @@ void EncoderDock::loadIntoFields() {
     m_region->setText(QString::fromStdString(cfg.region));
     m_room->setText(QString::fromStdString(cfg.room_id));
     m_tags->setChecked(cfg.use_object_tags);
+    {
+        const int idx = m_encoder->findData(
+            QString::fromStdString(cfg.video_encoder_id));
+        if (idx >= 0) m_encoder->setCurrentIndex(idx);
+    }
     m_segDur->setValue(cfg.segment_duration_s);
     m_vBitrate->setValue(cfg.video_bitrate_kbps);
     m_aBitrate->setValue(cfg.audio_bitrate_kbps);
@@ -275,6 +294,7 @@ void EncoderDock::onSaveSettings() {
     cfg.region            = m_region->text().trimmed().toStdString();
     cfg.room_id           = m_room->text().trimmed().toStdString();
     cfg.use_object_tags   = m_tags->isChecked();
+    cfg.video_encoder_id   = m_encoder->currentData().toString().toStdString();
     cfg.segment_duration_s = m_segDur->value();
     cfg.video_bitrate_kbps = m_vBitrate->value();
     cfg.audio_bitrate_kbps = m_aBitrate->value();

@@ -123,9 +123,14 @@ static bool build_tracks(OutputCtx* ctx, std::vector<CmafTrack>& tracks,
 
     CmafTrack vt;
     vt.kind = CmafTrack::Video;
-    vt.codec_id = AV_CODEC_ID_H264;           // codec-agnostic hook: HEVC/AV1 later
+    // Whatever OBS's chosen encoder produces. The pipeline is codec-agnostic:
+    // the muxer writes the matching sample entry (avc1/hvc1/av01) and the
+    // manifest records the codec so a satellite knows what it is receiving.
     const char* vcodec = obs_encoder_get_codec(venc);
-    if (vcodec && std::string(vcodec) == "hevc") vt.codec_id = AV_CODEC_ID_HEVC;
+    const std::string vc = vcodec ? vcodec : "h264";
+    if      (vc == "hevc") vt.codec_id = AV_CODEC_ID_HEVC;
+    else if (vc == "av1")  vt.codec_id = AV_CODEC_ID_AV1;
+    else                   vt.codec_id = AV_CODEC_ID_H264;
     vt.width  = (int)obs_encoder_get_width(venc);
     vt.height = (int)obs_encoder_get_height(venc);
 
@@ -155,7 +160,7 @@ static bool build_tracks(OutputCtx* ctx, std::vector<CmafTrack>& tracks,
     ctx->video_track = 0;
     tracks.push_back(vt);
 
-    vinfo.codec  = (vt.codec_id == AV_CODEC_ID_HEVC) ? "hevc" : "h264";
+    vinfo.codec  = vc;
     vinfo.width  = vt.width; vinfo.height = vt.height;
     vinfo.fps    = vt.fps_den ? (double)vt.fps_num / vt.fps_den : 0.0;
 
@@ -630,7 +635,9 @@ void register_output() {
     info.get_properties = out_props;
     info.get_defaults   = out_defaults;
     info.get_total_bytes = out_total_bytes;
-    info.encoded_video_codecs = "h264;hevc";
+    // AV1 is carried and muxed, but has had less real-world exercise than
+    // H.264 and HEVC.
+    info.encoded_video_codecs = "h264;hevc;av1";
     info.encoded_audio_codecs = "aac";
     obs_register_output(&info);
     mlog_info("registered output: multisite_output");

@@ -5,8 +5,48 @@
 #include <util/platform.h>
 
 #include <algorithm>
+#include <vector>
 
 namespace multisite_obs {
+
+// ── Encoder discovery ────────────────────────────────────────────────────────
+// Asks OBS what it has rather than assuming: the same plugin runs on machines
+// with NVENC, QuickSync, AMF or nothing but x264.
+std::vector<EncoderChoice> available_video_encoders() {
+    std::vector<EncoderChoice> out;
+    const char* id = nullptr;
+    for (size_t i = 0; obs_enum_encoder_types(i, &id); ++i) {
+        if (!id) continue;
+        if (obs_get_encoder_type(id) != OBS_ENCODER_VIDEO) continue;
+        const char* codec = obs_get_encoder_codec(id);
+        if (!codec) continue;
+        const std::string c = codec;
+        // Only codecs the CMAF muxer and the satellite decoder handle.
+        if (c != "h264" && c != "hevc" && c != "av1") continue;
+
+        EncoderChoice e;
+        e.id = id;
+        const char* disp = obs_encoder_get_display_name(id);
+        e.name  = disp ? disp : id;
+        e.codec = c;
+        // Hardware encoders are identified by name rather than by a flag,
+        // because OBS does not expose one.
+        e.hardware = (e.id.find("nvenc") != std::string::npos) ||
+                     (e.id.find("qsv")   != std::string::npos) ||
+                     (e.id.find("amf")   != std::string::npos) ||
+                     (e.id.find("_tex")  != std::string::npos) ||
+                     (e.id.find("vaapi") != std::string::npos) ||
+                     (e.id.find("videotoolbox") != std::string::npos);
+        out.push_back(e);
+    }
+    // Hardware first, then by codec, so the best option is the obvious one.
+    std::stable_sort(out.begin(), out.end(),
+        [](const EncoderChoice& a, const EncoderChoice& b) {
+            if (a.hardware != b.hardware) return a.hardware;
+            return a.codec > b.codec;      // hevc before h264
+        });
+    return out;
+}
 
 BroadcastController& BroadcastController::instance() {
     static BroadcastController c;
@@ -47,6 +87,8 @@ void BroadcastSettings::load() {
         channel_labels = obs_data_get_string(d, "channel_labels");
     if (obs_data_has_user_value(d, "marker_labels"))
         marker_labels = obs_data_get_string(d, "marker_labels");
+    if (obs_data_has_user_value(d, "video_encoder_id"))
+        video_encoder_id = obs_data_get_string(d, "video_encoder_id");
     obs_data_release(d);
 }
 
@@ -70,6 +112,7 @@ void BroadcastSettings::save() const {
     obs_data_set_string(d, "track_labels", track_labels.c_str());
     obs_data_set_string(d, "channel_labels", channel_labels.c_str());
     obs_data_set_string(d, "marker_labels", marker_labels.c_str());
+    obs_data_set_string(d, "video_encoder_id", video_encoder_id.c_str());
 
     char* path = obs_module_config_path("encoder.json");
     if (path) {
@@ -125,21 +168,61 @@ bool BroadcastController::go_live(std::string& error) {
         return false;
     }
 
-    // Video encoder. The keyframe interval MUST be <= the segment duration or
-    // the muxer can never cut a segment; scenecut is disabled so keyframes
-    // land on the interval and segment lengths stay even.
+    // Video encoder. Two settings are not optional whichever encoder is used:
+    //   * the keyframe interval must equal the segment duration, or the muxer
+    //     can never cut a segment;
+    //   * anything that inserts extra keyframes must be off, or segment
+    //     lengths vary (which is what produced 5.6-7.1 MB segments earlier).
+    std::string enc_id = m_cfg.video_encoder_id.empty() ? "obs_x264"
+                                                        : m_cfg.video_encoder_id;
+    // Fall back rather than fail if the chosen encoder has gone (different
+    // machine, driver removed, GPU changed).
+    {
+        bool found = false;
+        for (const auto& e : available_video_encoders())
+            if (e.id == enc_id) { found = true; break; }
+        if (!found) {
+            mlog_warn("video encoder '%s' is not available on this machine — "
+                      "falling back to x264", enc_id.c_str());
+            enc_id = "obs_x264";
+        }
+    }
+
     obs_data_t* vs = obs_data_create();
     obs_data_set_int(vs, "bitrate", m_cfg.video_bitrate_kbps);
     obs_data_set_int(vs, "keyint_sec",
                      (int)std::max(1.0, m_cfg.segment_duration_s + 0.5));
     obs_data_set_string(vs, "rate_control", "CBR");
-    obs_data_set_string(vs, "x264opts", "scenecut=0");
-    m_venc = obs_video_encoder_create("obs_x264", "multisite_v", vs, nullptr);
+
+    if (enc_id == "obs_x264") {
+        // scenecut inserts IDRs at scene changes, which breaks even spacing.
+        obs_data_set_string(vs, "x264opts", "scenecut=0");
+    } else if (enc_id.find("nvenc") != std::string::npos) {
+        // Look-ahead can move I-frames off the interval; B-frames are fine but
+        // adaptive I-frame placement is not.
+        obs_data_set_bool(vs, "lookahead", false);
+        obs_data_set_bool(vs, "repeat_headers", true);
+        obs_data_set_string(vs, "preset2", "p5");
+        obs_data_set_string(vs, "tune", "hq");
+        obs_data_set_string(vs, "multipass", "qres");
+    } else if (enc_id.find("qsv") != std::string::npos) {
+        obs_data_set_string(vs, "target_usage", "balanced");
+    } else if (enc_id.find("amf") != std::string::npos) {
+        obs_data_set_string(vs, "preset", "quality");
+    }
+
+    m_venc = obs_video_encoder_create(enc_id.c_str(), "multisite_v", vs, nullptr);
     obs_data_release(vs);
     if (!m_venc) {
-        error = "could not create the video encoder";
+        error = "could not create the video encoder '" + enc_id + "'";
         release_all();
         return false;
+    }
+    {
+        const char* codec = obs_encoder_get_codec(m_venc);
+        mlog_info("video encoder: %s (%s), keyframes every %.0fs",
+                  enc_id.c_str(), codec ? codec : "?",
+                  m_cfg.segment_duration_s);
     }
     obs_encoder_set_video(m_venc, obs_get_video());
     obs_output_set_video_encoder(m_output, m_venc);

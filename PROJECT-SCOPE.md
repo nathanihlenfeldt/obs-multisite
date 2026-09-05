@@ -318,8 +318,36 @@ boots into its job, restarts itself on failure, and presents one simple screen.
 
 **Shape**
 
-- **Hardware:** an inexpensive mini-PC with a Blackmagic DeckLink card for
-  SDI/HDMI output; or HDMI direct from the machine for a projector-only site.
+Two tiers, sharing one build:
+
+- **Low cost (ARM64 / Raspberry Pi):** HDMI out, for a site that needs the feed
+  on a screen and into a small console. This is the expected volume case.
+- **Production (x86 mini-PC + DeckLink):** SDI with embedded audio, genlock,
+  and a professional signal path for larger campuses.
+
+**ARM64 / Raspberry Pi notes**
+
+- The portable core cross-compiles for ARM64 today, and CI builds and tests it
+  on an ARM64 runner so a regression is caught before it reaches hardware.
+- **Video decode.** The Pi 5 (BCM2712) has **no H.264 hardware decoder** — only
+  HEVC 4K60. Its NEON software H.264 decoder is reportedly faster than the old
+  hardware block and handles 1080p comfortably, so a 1080p30 contribution feed
+  is well within it. The Pi 4 *does* have H.264 hardware decode, capped at
+  1080p. The decoder should therefore prefer a hardware decoder when one
+  exists (`h264_v4l2m2m` on Pi 4, HEVC on Pi 5) and fall back to software
+  rather than assuming either.
+- This also strengthens the HEVC step on the codec roadmap: HEVC is exactly
+  what the Pi 5 accelerates.
+- **Audio.** HDMI carries up to 8 channels of LPCM, which suits the packed
+  multi-channel layout: an inexpensive HDMI audio de-embedder recovers the
+  individual channels at the campus. That gives a third audio path alongside
+  ASIO and DeckLink, and is what makes the low-cost tier viable for production
+  audio rather than stereo only.
+- **Storage.** The segment cache writes roughly 3 GB per hour at 6 Mbps. That
+  will wear out an SD card, so a USB SSD is required rather than recommended,
+  and the cache location must be configurable.
+- **Thermals.** Sustained decode needs active cooling; a passively cooled case
+  will throttle during a long service.
 - **Output:** DeckLink (video plus embedded multichannel audio, which suits the
   packed channel layout), or DRM/KMS for direct display. Audio to ALSA/JACK or
   embedded in SDI, with the channel de-interleaver applied on the way out.

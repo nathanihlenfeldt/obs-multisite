@@ -28,6 +28,9 @@ struct BroadcastSettings {
     bool        use_object_tags = false;   // R2 rejects tagging
 
     // media
+    // Which OBS video encoder to use. Defaults to x264 because it exists on
+    // every machine; hardware encoders are offered when present.
+    std::string video_encoder_id = "obs_x264";
     double segment_duration_s = 6.0;
     int    video_bitrate_kbps = 6000;
     int    audio_bitrate_kbps = 160;
@@ -56,6 +59,19 @@ struct BroadcastStatus {
     std::string last_error;
     double      uptime_s = 0.0;
 };
+
+// A video encoder OBS actually has on this machine.
+struct EncoderChoice {
+    std::string id;        // e.g. "obs_nvenc_hevc_tex"
+    std::string name;      // e.g. "NVIDIA NVENC HEVC"
+    std::string codec;     // "h264" | "hevc" | "av1"
+    bool        hardware = false;
+};
+
+// Video encoders present on this machine that this plugin can carry. Ordered
+// hardware-first, since a hardware encoder frees the CPU for everything else
+// the main campus is doing.
+std::vector<EncoderChoice> available_video_encoders();
 
 class BroadcastController {
 public:
