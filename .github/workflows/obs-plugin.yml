@@ -3,6 +3,10 @@ name: obs plugin build
 on:
   push:
     branches: [ main, master ]
+    # A v* tag builds the same way and publishes the result as a release, so
+    # the binaries people download are provably the tagged commit rather than
+    # something uploaded by hand.
+    tags: [ 'v*' ]
   pull_request:
   workflow_dispatch:
 
@@ -352,3 +356,42 @@ jobs:
         with:
           name: obs-multisite-windows
           path: dist/
+
+  # Publishes the release only for a v* tag; ordinary pushes just build.
+  release:
+    needs: [ linux, windows ]
+    if: startsWith(github.ref, 'refs/tags/v')
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write        # required to create the release
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Collect the built plugins
+        uses: actions/download-artifact@v5
+        with:
+          path: artifacts
+
+      # One archive per platform, named for the tag so a downloaded file still
+      # says what it is months later.
+      - name: Package
+        run: |
+          VER="${GITHUB_REF_NAME}"
+          mkdir -p dist
+          # Windows: the staged tree (plugin + its runtime DLLs + locale data),
+          # laid out to be copied straight into the OBS install directory.
+          (cd artifacts/obs-multisite-windows && zip -r "../../dist/obs-multisite-${VER}-windows-x64.zip" .)
+          # Linux: the module alone. Distros vary too much for a staged tree to
+          # be useful, and the plugin links the system FFmpeg/curl.
+          (cd artifacts/obs-multisite-linux && tar czf "../../dist/obs-multisite-${VER}-linux-x86_64.tar.gz" .)
+          ls -lh dist
+
+      - name: Publish
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh release create "${GITHUB_REF_NAME}" dist/* \
+            --repo "${GITHUB_REPOSITORY}" \
+            --title "${GITHUB_REF_NAME}" \
+            --notes-file .github/RELEASE-NOTES.md \
+            --prerelease
