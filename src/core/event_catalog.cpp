@@ -108,6 +108,14 @@ bool EventCatalog::classify(const std::string& event_id, const LivePointer& live
         return false;
     }
 
+    // An event that never recorded anything: no start time, no segments, no
+    // live edge. A go-live that failed at the first hurdle leaves one behind,
+    // and it showed in the list as "(unknown time) 0 min" — a row that cannot
+    // be played and tells an operator nothing.
+    if (m.started_at_ms <= 0 && m.latest_seq == 0 && m.segments.empty() &&
+        m.status != "live")
+        return false;
+
     out.event_id            = event_id;
     out.room_id             = m_cfg.room_id;
     out.started_at_ms       = m.started_at_ms;
@@ -201,8 +209,8 @@ bool EventCatalog::refresh(int64_t now_override) {
     m_last_error.clear();
     if (skipped > 0)
         m_last_error = std::to_string(skipped) +
-                       " event(s) listed but not readable — retention may have "
-                       "removed them";
+                       " event(s) listed but not playable — either empty, or "
+                       "their content has been removed by retention";
     return true;
 }
 

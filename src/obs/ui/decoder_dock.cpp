@@ -605,20 +605,30 @@ void DecoderDock::refreshEvents(const DecoderSnapshot& s) {
     }
     m_refreshEvents->setEnabled(!listing.loading && !s.locked);
 
+    // Which row is playing comes from the live snapshot, not from the cached
+    // listing. It used to be stamped into each row during the listing refresh,
+    // which meant the marker showed whatever was playing at that instant — and
+    // if a refresh landed between pinning an event and the poll that applied
+    // it, the bold row stayed on the previous recording until the operator
+    // pressed Refresh.
+    const QString playing = QString::fromStdString(s.event_id);
+
     // Rebuild only on a real change, so a selection survives a refresh tick.
-    QString sig;
+    // The playing event is part of that: the marker must move when it does.
+    QString sig = playing + "#";
     for (const auto& e : listing.events)
         sig += QString::fromStdString(e.event_id) + ":" +
                QString::number(e.state) + ":" +
-               QString::number(e.duration_s) + (e.pinned ? "*" : "") + "|";
+               QString::number(e.duration_s) + "|";
     if (sig != m_events_signature) {
         const QString keep = m_events->currentItem()
             ? m_events->currentItem()->data(Qt::UserRole).toString() : QString();
         m_events_signature = sig;
         m_events->clear();
         for (const auto& e : listing.events) {
+            const QString id = QString::fromStdString(e.event_id);
             auto* item = new QListWidgetItem(event_row_text(e), m_events);
-            item->setData(Qt::UserRole, QString::fromStdString(e.event_id));
+            item->setData(Qt::UserRole, id);
             // Numeric rather than "#rrggbb": QColor's string constructor
             // differs between Qt 5 and 6, and the painter above already uses
             // this form.
@@ -626,12 +636,16 @@ void DecoderDock::refreshEvents(const DecoderSnapshot& s) {
                 item->setForeground(QColor(0xe5, 0x48, 0x4d));
             else if (e.state == 3)                                       // interrupted
                 item->setForeground(QColor(0xe0, 0xa0, 0x20));
-            if (e.pinned) {
+            // Bold alone was ambiguous against the selection highlight — the
+            // operator could not tell which row was SELECTED from which was
+            // LOADED, and they are often different rows on purpose.
+            if (!playing.isEmpty() && id == playing) {
                 QFont f = item->font();
                 f.setBold(true);
                 item->setFont(f);
+                item->setText(item->text() + "   " + tr_("Dock.EventPlaying"));
             }
-            if (!keep.isEmpty() && keep == QString::fromStdString(e.event_id))
+            if (!keep.isEmpty() && keep == id)
                 m_events->setCurrentItem(item);
         }
     }

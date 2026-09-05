@@ -253,6 +253,52 @@ int main() {
         CHECK(cat.skipped() == 1, "but it is counted, so the list is not silently short");
     }
 
+    // ── Events that never recorded anything ──────────────────────────────────
+    // A go-live that failed immediately leaves a manifest with no start time
+    // and no segments. It appeared in the list as "(unknown time) 0 min": a row
+    // that cannot be played and says nothing.
+    {
+        MemStore s;
+        make_event(s, "01AAA", "main", NOW - 60 * MIN, "ended", NOW - 30 * MIN);
+
+        Manifest empty;
+        empty.event_id = "01BBB"; empty.status = "ended";
+        empty.started_at_ms = 0; empty.updated_at_ms = NOW - 40 * MIN;
+        empty.latest_seq = 0; empty.first_available_seq = 0;
+        s.objects[event_prefix_for("01BBB") + "manifest.json"] = empty.to_json();
+        RoomEventEntry ix;
+        ix.event_id = "01BBB"; ix.room_id = "main"; ix.started_at_ms = 0;
+        s.objects[room_event_key("main", "01BBB")] = ix.to_json();
+
+        CatalogConfig cfg; cfg.room_id = "main";
+        EventCatalog cat(cfg, s);
+        cat.refresh(NOW);
+        CHECK(cat.events().size() == 1, "an event that recorded nothing is not listed");
+        CHECK(!cat.events().empty() && cat.events()[0].event_id == "01AAA",
+              "the real recording is still there");
+        CHECK(cat.skipped() == 1, "and it is counted rather than silently dropped");
+    }
+    {
+        // …but an event that has only just gone live has no segments YET, and
+        // must not be filtered out on that basis.
+        MemStore s;
+        Manifest fresh;
+        fresh.event_id = "01CCC"; fresh.status = "live";
+        fresh.started_at_ms = 0;            // not yet written through
+        fresh.updated_at_ms = NOW - 2000;
+        s.objects[event_prefix_for("01CCC") + "manifest.json"] = fresh.to_json();
+        RoomEventEntry ix;
+        ix.event_id = "01CCC"; ix.room_id = "main";
+        s.objects[room_event_key("main", "01CCC")] = ix.to_json();
+        set_live_pointer(s, "main", "01CCC", NOW - 2000);
+
+        CatalogConfig cfg; cfg.room_id = "main";
+        EventCatalog cat(cfg, s);
+        cat.refresh(NOW);
+        CHECK(cat.events().size() == 1,
+              "an event that just went live is kept, empty though it is");
+    }
+
     // ── The stale threshold ──────────────────────────────────────────────────
     std::printf("The live/interrupted boundary\n");
     {

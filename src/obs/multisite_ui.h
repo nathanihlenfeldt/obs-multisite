@@ -42,7 +42,6 @@ struct EventEntry {
     long long   started_ms = 0;
     long long   duration_s = 0;
     int         state = 0;        // 0 unknown, 1 live, 2 recording, 3 interrupted
-    bool        pinned = false;   // currently the event being played
 };
 
 // Everything the dock needs to draw the event list, including why it might be
@@ -132,6 +131,11 @@ struct DecoderSnapshot {
     // The encoder died rather than ending: the recording is complete up to
     // that point and plays, but it stops where the encoder stopped.
     bool        interrupted = false;
+    // The event actually loaded right now. The dock marks the matching row in
+    // the list from this rather than from anything cached with the listing:
+    // which row is playing is current state, and a value computed during a
+    // listing refresh goes stale the moment the played event changes.
+    std::string event_id;
     // Set when a specific past event is being played rather than the room's
     // live one.
     std::string pinned_event_id;

@@ -634,9 +634,6 @@ static void poll_loop(SourceCtx* ctx) {
             if (cat) {
                 ctx->events_refreshing = true;
                 cat->refresh();
-                auto sess3 = get_session(ctx);
-                const std::string playing_id = sess3 ? sess3->event_id() : std::string();
-
                 EventListing listing;
                 listing.listed_once   = true;
                 listing.fallback_scan = cat->used_fallback_scan();
@@ -648,7 +645,6 @@ static void poll_loop(SourceCtx* ctx) {
                     row.started_ms = (long long)e.started_at_ms;
                     row.duration_s = (long long)e.duration_s;
                     row.state      = (int)e.state;
-                    row.pinned     = (e.event_id == playing_id);
                     listing.events.push_back(std::move(row));
                 }
                 const size_t count = listing.events.size();
@@ -1114,6 +1110,7 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     out.at_end           = sess->at_end();
     out.was_live         = sess->was_live_this_session();
     out.interrupted      = sess->was_interrupted();
+    out.event_id         = sess->event_id();
     out.pinned_event_id  = sess->pinned_event();
     out.live_elsewhere   = sess->live_elsewhere();
     out.live_event_id    = sess->live_event_id();
