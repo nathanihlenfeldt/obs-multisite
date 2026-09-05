@@ -27,6 +27,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdlib>
 #include <chrono>
 #include <ctime>
 #include <condition_variable>
@@ -151,10 +152,15 @@ struct SourceCtx : DecoderControls {
     std::atomic<bool>      poll_now{false};
     // Where a seek is heading, until frames actually arrive there. 0 = settled.
     std::atomic<long long> seek_target_ms{0};
-    // An event has been chosen but its manifest has not been loaded yet.
+    // An event has been chosen but is not yet ready to play.
     std::atomic<bool>      loading_event{false};
-    // Cleared once the first frame after an action reaches OBS.
+    // Cleared once playback has actually arrived where it was sent.
     std::atomic<bool>      awaiting_frames{false};
+    // Both indications are bounded. If the thing being waited for never
+    // happens — an event with no retained content, a store that has gone away
+    // — the dock must fall back to reporting the real state rather than
+    // sitting on "LOADING…" for ever.
+    std::atomic<uint64_t>  action_started_ns{0};
 
     // ── Event list ───────────────────────────────────────────────────────────
     // The catalog makes one request per event, so a refresh runs on the poll
@@ -391,13 +397,34 @@ static void deliver_loop(SourceCtx* ctx) {
                 ctx->playing_at_ms = segstart + (pts - base) / 1000000LL;
         }
 
-        // A frame has reached OBS, so whatever was asked for has landed. This
-        // is what turns the dock's provisional readout back into a confirmed
-        // one, and it is deliberately keyed on delivery rather than on the
-        // seek returning: the seek is instant, arriving there is not.
-        if (ctx->awaiting_frames.exchange(false)) {
-            ctx->seek_target_ms = 0;
-            ctx->loading_event  = false;
+        // Has playback actually ARRIVED where it was sent?
+        //
+        // "Any frame was delivered" is not the same question, and answering
+        // that one made the whole indication useless: the decoder still holds
+        // already-decoded frames from the old position when a seek is issued,
+        // so the very next delivery — milliseconds later, long before the dock
+        // ticks — cleared the state and the operator saw nothing at all.
+        //
+        // Arrival means a frame whose own clock time is at the target.
+        {
+            const long long target = ctx->seek_target_ms.load();
+            if (target > 0) {
+                const long long at = ctx->playing_at_ms.load();
+                // Tighter than a segment (6 s): frames are dropped within the
+                // landing segment to reach the requested moment, so the first
+                // frame delivered there reads very close to the target. A whole
+                // segment's tolerance would accept a stale frame from the
+                // position just left — the mistake that made this invisible.
+                const uint64_t started = ctx->action_started_ns.load();
+                const bool timed_out = started != 0 &&
+                    os_gettime_ns() - started > 30000000000ULL;   // 30 s
+                if ((at > 0 && std::llabs(at - target) < 2500) || timed_out) {
+                    ctx->seek_target_ms  = 0;
+                    ctx->awaiting_frames = false;
+                }
+            } else {
+                ctx->awaiting_frames = false;
+            }
         }
 
         if (item.is_video) {
@@ -542,11 +569,25 @@ static void poll_loop(SourceCtx* ctx) {
             // poll() does network I/O and can take seconds; never under a lock.
             RoomState st = sess->poll();
 
-            // The chosen event is now loaded (or has definitively failed).
-            // Load does not go to air, so no frame will arrive to clear this —
-            // the poll that performed the switch has to.
-            if (ctx->loading_event.load() && st != RoomState::Unknown)
-                ctx->loading_event = false;
+            // Is the chosen event actually READY, not merely selected?
+            //
+            // Clearing this as soon as poll() returned a state was the bug the
+            // operator saw: the switch itself takes a moment, but the wait that
+            // matters is the download of the first segments afterwards — and
+            // the indication had already gone by then, so Load looked like it
+            // did nothing and then everything appeared at once.
+            //
+            // Load deliberately does not go to air, so no frame will arrive to
+            // answer this; having something buffered is what "ready" means.
+            if (ctx->loading_event.load() && st != RoomState::Unknown) {
+                const bool have_content = sess->buffered_ahead_s() > 0.1 ||
+                                          sess->cache().count() > 0;
+                const uint64_t started = ctx->action_started_ns.load();
+                const bool timed_out = started != 0 &&
+                    os_gettime_ns() - started > 30000000000ULL;   // 30 s
+                if (have_content || timed_out || st == RoomState::Offline)
+                    ctx->loading_event = false;
+            }
 
             if (st != ctx->last_room) {
                 ctx->last_room = st;
@@ -1180,9 +1221,10 @@ void SourceCtx::pin_event(const std::string& event_id) {
     // Say so before any network work starts. The dock reads these on its very
     // next tick (500 ms), so the click is acknowledged whatever the store does
     // afterwards.
-    loading_event   = true;
-    seek_target_ms  = 0;
-    poll_now        = true;           // apply the pin now, not in 3 seconds
+    loading_event     = true;
+    seek_target_ms    = 0;
+    action_started_ns = os_gettime_ns();
+    poll_now          = true;         // apply the pin now, not in 3 seconds
     mlog_info("source: pinned event %s — playback will not follow a new "
               "service starting", event_id.c_str());
     events_refresh_wanted = true;     // so the list re-marks which row is playing
@@ -1194,9 +1236,10 @@ void SourceCtx::unpin_event() {
     sess->unpin();
     playing = false;
     playing_at_ms = 0;
-    loading_event   = true;
-    seek_target_ms  = 0;
-    poll_now        = true;
+    loading_event     = true;
+    seek_target_ms    = 0;
+    action_started_ns = os_gettime_ns();
+    poll_now          = true;
     mlog_info("source: unpinned — following whatever is live in the room");
     events_refresh_wanted = true;
 }
@@ -1221,6 +1264,10 @@ void SourceCtx::play() {
     pause_started_ns = 0;
     paused = false;
     playing = true;
+    // Going to air takes as long as it takes to decode the first fragment, so
+    // say so until a frame has actually landed rather than looking inert.
+    awaiting_frames   = true;
+    action_started_ns = os_gettime_ns();
     sess->resume();
     resumed_at_ns = os_gettime_ns();
     frames_at_resume = frames_out.load();
@@ -1273,10 +1320,21 @@ void SourceCtx::seek_to_time(long long wall_ms) {
     // then jumped. The dock marks this as provisional until frames arrive, so
     // the operator sees the intent honoured at once without being told the
     // picture has already moved.
-    seek_target_ms  = (long long)got;
-    playing_at_ms   = (long long)got;
-    awaiting_frames = true;
-    poll_now        = true;      // fetch what the new position needs now
+    playing_at_ms     = (long long)got;
+    action_started_ns = os_gettime_ns();
+    poll_now          = true;    // fetch what the new position needs now
+
+    // "Going to…" only means something while there is a picture that has to
+    // catch up. Stopped or held, the move IS the whole event — the position
+    // and the timeline playhead update at once — and arming the indication
+    // would leave it on screen with no frames coming to answer it.
+    if (playing.load() && !paused.load()) {
+        seek_target_ms  = (long long)got;
+        awaiting_frames = true;
+    } else {
+        seek_target_ms  = 0;
+        awaiting_frames = false;
+    }
 
     mlog_info("source: went to %lld (%.0fs behind live)",
               (long long)got, sess->behind_live_s());
