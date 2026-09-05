@@ -227,6 +227,7 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         src/appliance/api.cpp
         src/appliance/sysinfo.cpp
         src/appliance/preview.cpp
+        src/appliance/splash.cpp
         src/appliance/outputs.cpp)
 
     target_link_libraries(multisite-player PRIVATE

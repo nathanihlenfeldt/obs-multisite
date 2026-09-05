@@ -1,5 +1,6 @@
 #include "player.h"
 #include "log.h"
+#include "sysinfo.h"
 
 #include <algorithm>
 #include <chrono>
@@ -408,6 +409,8 @@ void Player::deliver_loop() {
         if (item.is_video) {
             m_video.present(item.video);
             m_frames_out++;
+            m_last_frame_ns = now_ns();
+            m_idle_showing = false;
             // Keep the newest picture for the preview. Copied under its own
             // lock so a browser reading it can never stall the output.
             {
@@ -436,6 +439,104 @@ void Player::deliver_loop() {
         }
     }
     plog_info("delivery stopped");
+}
+
+// ── The idle screen ──────────────────────────────────────────────────────────
+
+void Player::update_screen() {
+    // Frames are reaching the display: there is a service on, and nothing
+    // here should touch the screen.
+    const uint64_t last = m_last_frame_ns.load();
+    if (last != 0 && now_ns() - last < 2000000000ULL) {
+        m_idle_showing = false;
+        return;
+    }
+
+    const Config cfg = config();
+
+    // Holding the last picture is the pause behaviour, so there is by
+    // definition nothing to draw: leave the screen exactly as it is.
+    if (cfg.idle_mode == IdleMode::HoldFrame && m_frames_out.load() > 0) return;
+
+    if (cfg.idle_mode == IdleMode::Black) {
+        if (!m_idle_showing) { m_video.blank(); m_idle_showing = true; }
+        return;
+    }
+
+    int width = 1920, height = 1080;
+    m_video.size(width, height);
+
+    if (cfg.idle_mode == IdleMode::Image) {
+        if (m_idle_showing) return;      // a still does not change
+        Canvas canvas(width, height);
+        std::string err;
+        if (load_still(cfg.idle_image_path, width, height, canvas, err)) {
+            m_video.present_bgrx(canvas.width(), canvas.height(),
+                                 canvas.stride(), canvas.pixels());
+            m_idle_showing = true;
+            return;
+        }
+        // A holding slide that cannot be read must not leave a black screen
+        // with no explanation — fall through to the splash, which at least
+        // says where the box is.
+        plog_warn("holding slide: %s", err.c_str());
+    }
+
+    SplashInfo info;
+    info.hostname   = hostname();
+    info.room       = cfg.room_id;
+    info.version    = player_version();
+    info.configured = cfg.configured();
+    for (const auto& n : network_interfaces()) {
+        if (n.ipv4.empty()) continue;
+        info.addresses.push_back("HTTP://" + n.ipv4 + ":" +
+                                 std::to_string(cfg.web_port));
+    }
+
+    // The state line, in the words an operator would use standing in front of
+    // the screen.
+    if (!cfg.configured()) {
+        // The splash already says the box has no storage details; repeating
+        // it as a state line would just be the same sentence twice.
+        info.state.clear();
+    } else if (auto sess = session_ref()) {
+        switch (sess->room_state()) {
+        case RoomState::Live:
+            info.state = m_playing.load() ? "STARTING" : "READY - NOT ON AIR";
+            break;
+        case RoomState::Ended:
+            info.state = "RECORDING READY";
+            break;
+        case RoomState::Interrupted:
+            info.state = "LAST SERVICE WAS CUT SHORT";
+            break;
+        case RoomState::Offline:
+            info.state = "WAITING FOR THE MAIN SITE";
+            break;
+        default:
+            info.state = "LOOKING FOR THE MAIN SITE";
+            break;
+        }
+        const double ahead = sess->buffered_ahead_s();
+        if (ahead > 1) {
+            info.detail = std::to_string((int)(ahead / 60)) +
+                          " MINUTES READY TO PLAY";
+        }
+    } else {
+        info.state = "WAITING FOR THE MAIN SITE";
+    }
+
+    // Nothing has changed, so nothing needs redrawing.
+    std::string signature = info.state + "|" + info.detail + "|" + info.room;
+    for (const auto& a : info.addresses) signature += "|" + a;
+    if (m_idle_showing && signature == m_idle_signature) return;
+    m_idle_signature = signature;
+
+    Canvas canvas(width, height);
+    render_splash(canvas, info);
+    m_video.present_bgrx(canvas.width(), canvas.height(), canvas.stride(),
+                         canvas.pixels());
+    m_idle_showing = true;
 }
 
 // ── Poll loop ────────────────────────────────────────────────────────────────
@@ -518,6 +619,8 @@ void Player::poll_loop() {
                               : "");
             }
         }
+
+        update_screen();
 
         if (now - last_status_log > 60000) {
             last_status_log = now;

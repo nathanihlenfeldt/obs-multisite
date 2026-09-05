@@ -448,13 +448,31 @@ same snapshot serialises to JSON, so the browser UI is that view rendered in
 HTML with a WebSocket for live updates. It should carry the same plain language
 — clock times, "hold picture", "catch up to now" — and never mention segments.
 
-**Open questions to settle before building**
+**Settled while building**
 
-- Which output path first: DeckLink SDI, or HDMI/DRM for the simplest sites?
-- Does the appliance need a local slate or holding image when the feed is
-  offline, and should it fall back to one automatically?
-- Distribution: a disk image for supported hardware, or a package plus an
-  install script on a stock distro?
+- **HDMI/DRM first.** The appliance claims the KMS connector itself and sets
+  the output mode, with no desktop involved. That is what gives exact control
+  of resolution and frame rate, removes a desktop that can be left in the
+  wrong state, and suits Raspberry Pi OS Lite, which is the right image for a
+  box that only ever does one thing. DeckLink SDI follows for the production
+  tier.
+- **Yes to a holding screen, and it is the default.** The first problem with
+  an appliance is finding it: until somebody knows its address there is
+  nothing to type into a phone. So the first thing it does with the display is
+  put its own address, name, room and state on it. Idle behaviour is
+  configurable — black, hold the last picture, the identity screen, or a
+  campus-supplied slide — because a screen a congregation can see is not
+  always best left showing the last frame of a service.
+- **A script on a stock distribution, not an image.** One command on stock
+  Raspberry Pi OS installs the dependencies, builds, installs the service and
+  enables it. It works from day one with no release infrastructure, updates
+  are the same command again, and it does not tie the project to particular
+  hardware. A prebuilt package can follow once the player has settled.
+- **The preview is decoupled from the output on purpose.** An operator lining
+  up a cue needs to see what is coming while the screen in the room holds the
+  last picture. If the preview were the output there would be no way to look
+  ahead without putting it to air — the thing a satellite campus most needs to
+  avoid.
 
 ## 9. Capability overview
 
@@ -466,7 +484,7 @@ HTML with a WebSocket for live updates. It should carry the same plain language
 | Pause & hold at a campus | yes | yes (timeslipping) |
 | Per-campus independent DVR position | partial | yes |
 | Multi-track production audio (main/ISOs/click) | partial | yes, up to 6 tracks |
-| Dedicated receive appliance | yes (hardware decoder) | planned (Phase 6) |
+| Dedicated receive appliance | yes (hardware decoder) | yes (Raspberry Pi / mini-PC) |
 | Self-hosted / own your storage | no (SaaS) | yes |
 | Open protocol, no vendor lock-in | no | yes |
 | Web/mobile simulcast from same files | yes | planned (CMAF makes it feasible) |
@@ -499,10 +517,14 @@ built; 6 and 7 are not started.
 - **Phase 5 — User interface.** ✅ Encoder and decoder Qt docks, hotkeys, and
   plain-language status. Event browsing (section 7.5.1) is the outstanding
   piece and needs bucket listing.
-- **Phase 6 — Satellite appliance.** ⬜ Headless Linux decoder with SDI/HDMI
-  output and a browser-based operator UI (section 8.1). Reuses the existing
-  receive core; adds the output layer, the channel de-interleaver, the web
-  control surface, and the boot/restart behaviour that makes it an appliance.
+- **Phase 6 — Satellite appliance.** 🟨 Headless Linux decoder with HDMI output
+  and a browser-based operator UI (section 8.1), built on the existing receive
+  core. Built: the player engine, DRM/KMS display output with its own
+  modesetting, ALSA multichannel audio, the splash and idle screens, the web
+  control surface (decoder controls, event list, storage and system settings,
+  decoupled preview), and the systemd/install path that makes it start on
+  power-up. Outstanding: the channel de-interleaver, DeckLink SDI output for
+  the production tier, and hardware-decoder selection on Pi 4.
 - **Phase 7 — Extensions.** ⬜ Web/mobile simulcast, scheduling, redundancy, and
   local insertion.
 

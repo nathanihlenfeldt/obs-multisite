@@ -27,6 +27,7 @@
 #include "config.h"
 #include "audio_output.h"
 #include "video_output.h"
+#include "splash.h"
 
 #include "../core/decoder_session.h"
 #include "../core/event_catalog.h"
@@ -180,6 +181,12 @@ private:
     void feed_loop();
     void deliver_loop();
 
+    // Puts the idle screen up when there is no programme going out, and
+    // takes it down again when there is. Driven from the poll loop rather
+    // than a timer of its own: it only ever needs to act a few times a
+    // minute, and never while frames are flowing.
+    void update_screen();
+
     void rebuild_session();          // under m_obj_mtx
     void teardown_decoder();
     void flush_delivery();
@@ -252,6 +259,14 @@ private:
     std::condition_variable  m_dq_cv;
 
     std::atomic<uint64_t> m_frames_out{0}, m_frames_dropped{0};
+    // Monotonic time of the last frame that reached the display. What
+    // separates "playing" from "nothing is arriving", which is the difference
+    // between leaving the picture alone and putting the splash back up.
+    std::atomic<uint64_t> m_last_frame_ns{0};
+    // What the idle screen currently says. Re-rendering identical text would
+    // page-flip the display for no reason.
+    std::string m_idle_signature;
+    bool        m_idle_showing = false;
 
     // Latest decoded picture, kept for the preview.
     mutable std::mutex m_frame_mtx;

@@ -1,0 +1,49 @@
+# multisite-player.service — the campus receive appliance.
+#
+# Starts on power-up and restarts on failure. A campus box that needed
+# somebody to log in and start it after a power cut would not be an appliance,
+# and the failure would be discovered five minutes before a service.
+
+[Unit]
+Description=Multisite campus player
+Documentation=https://github.com/StageAudioWorks/obs-multisite
+# The clock matters: every time this box reports comes from it, and a
+# timeline drawn against a wrong clock is worse than none.
+After=network-online.target time-sync.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart=/usr/local/bin/multisite-player --config /etc/multisite-player/config.json
+
+# Runs as root deliberately, and this is the one place it matters. The player
+# has to become DRM master to own the HDMI output, drive ALSA, and set the
+# system clock through timedatectl. Dropping to an unprivileged user means
+# either a box that cannot show a picture or a pile of polkit rules that break
+# on the next distribution upgrade — for a single-purpose appliance on a
+# church network, neither is a better trade.
+User=root
+
+Restart=always
+RestartSec=3
+# A box that fails to start must keep trying rather than give up after a few
+# attempts: the usual cause is a network that has not come up yet, or a USB
+# SSD that has not been noticed, and both fix themselves.
+StartLimitIntervalSec=0
+
+# The console must not draw over the picture the player is putting on screen.
+StandardOutput=journal
+StandardError=journal
+TTYPath=/dev/tty1
+StandardInput=tty-force
+TTYReset=yes
+TTYVHangup=yes
+
+# The segment cache lives here and is deliberately kept across reboots, so a
+# restart mid-service resumes rather than starting again.
+StateDirectory=multisite-player
+ConfigurationDirectory=multisite-player
+ConfigurationDirectoryMode=0700
+
+[Install]
+WantedBy=multi-user.target

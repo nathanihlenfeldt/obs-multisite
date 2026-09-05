@@ -24,7 +24,9 @@ has been exercised end to end between two Windows machines but **has not yet run
 a real service** — a full-length soak test is the most valuable outstanding
 task.
 
-The satellite appliance (Phase 6) and extensions (Phase 7) are not started.
+The satellite appliance (Phase 6) is built and installable on a Raspberry Pi —
+see below — but has not yet run a service either. Extensions (Phase 7) are not
+started.
 
 **What works**
 
@@ -124,17 +126,65 @@ appliance runs there, so a regression is caught in CI rather than on hardware.
 ## Repository layout
 
 ```
-src/core/     the portable engine: protocol, reliability, muxing, decoding.
-              No OBS, no Qt. Shared with the planned appliance.
-src/obs/      the OBS bindings: output, source, hotkeys, settings.
-src/obs/ui/   the Qt docks. The only place Qt appears.
-tests/        every guarantee above has a test.
-scripts/      optional Lua control script, superseded by the encoder dock.
+src/core/       the portable engine: protocol, reliability, muxing, decoding.
+                No OBS, no Qt. Shared with the appliance.
+src/obs/        the OBS bindings: output, source, hotkeys, settings.
+src/obs/ui/     the Qt docks. The only place Qt appears.
+src/appliance/  the headless campus player: DRM/KMS and ALSA output, the
+                splash and idle screens, and the web control surface.
+src/appliance/web/  the operator interface. No framework, no CDN — a campus
+                box often has no internet.
+tests/          every guarantee above has a test.
+scripts/player/ the install script and systemd unit for the appliance.
+scripts/        optional Lua control script, superseded by the encoder dock.
 ```
 
 **`src/core/` must stay free of OBS and Qt.** It is the shared engine behind
-both the plugin and the planned headless appliance, and a test enforces this on
-every build rather than trusting the convention.
+both the plugin and the headless appliance, and a test enforces this on every
+build rather than trusting the convention. The appliance is what proves the
+rule holds: it is a new output and control layer over the same receive core,
+not a second implementation.
+
+---
+
+## The campus player (satellite appliance)
+
+A small box at a campus that receives, decodes and plays out, with no
+operator-facing desktop software. On stock **Raspberry Pi OS Lite (64-bit)**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/StageAudioWorks/obs-multisite/main/scripts/player/install.sh | sudo bash
+```
+
+That installs the dependencies, builds the player, installs it as a service
+that starts on power-up, and puts a screen up on the HDMI output showing the
+box's own address. Everything else is done from a phone or tablet on the same
+network — storage credentials, which room to follow, the output resolution and
+frame rate, the sound device, the clock, and the transport controls during a
+service.
+
+- **It owns the display.** The player sets the KMS mode itself, so the output
+  resolution and frame rate are exactly what was asked for and there is no
+  desktop to be left in the wrong state. Pi OS Lite is the right image.
+- **Production audio over HDMI.** Up to eight channels of LPCM, recovered at
+  the campus with a de-embedder. If the device will not take every channel the
+  feed carries, it says so loudly rather than silently dropping the click.
+- **The preview is not the output.** The web UI shows the incoming picture at
+  a rate the browser chooses, independently of what is on the screen in the
+  room — so a cue can be lined up while the picture is held.
+- **The cache belongs on a USB SSD.** It writes roughly 3 GB an hour, which
+  will wear an SD card out. The installer looks for a USB drive and uses it;
+  if there is none, both it and the interface say so.
+
+Run it by hand while setting one up:
+
+```bash
+sudo multisite-player --config /etc/multisite-player/config.json --verbose
+```
+
+`journalctl -u multisite-player -f` is the whole diagnostic story; the last few
+hundred lines are also in the interface, under Log, for an operator with a
+phone and no SSH.
 
 ---
 
@@ -176,10 +226,9 @@ Nine suites, all runnable without OBS:
 
 ## Roadmap
 
-- **Phase 6 — Satellite appliance.** A headless Linux decoder with a browser UI,
-  in two tiers sharing one build: **ARM64 / Raspberry Pi with HDMI** for
-  low-cost sites, and **x86 + DeckLink SDI** for larger campuses. Reuses the
-  receive core unchanged.
+- **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
+  tier (see above). Still to come: the packed-channel de-interleaver, DeckLink
+  SDI output for the production tier, and hardware-decoder selection on Pi 4.
 - **Phase 7 — Extensions.** Web and mobile simulcast from the same files,
   scheduling, redundancy, and local insertion.
 
