@@ -42,6 +42,18 @@ static QString friendly_duration(double seconds) {
     return QObject::tr("%1 min %2 sec").arg(mins).arg(secs);
 }
 
+// A position within a recording, as an operator would read a media player:
+// "24:15" or "1:24:15". Distinct from clock_time(), which is the time of day.
+static QString position(long long ms) {
+    if (ms < 0) ms = 0;
+    const long long total = ms / 1000;
+    const long long h = total / 3600, m = (total % 3600) / 60, s = total % 60;
+    if (h > 0)
+        return QString("%1:%2:%3").arg(h).arg(m, 2, 10, QChar('0'))
+                                  .arg(s, 2, 10, QChar('0'));
+    return QString("%1:%2").arg(m).arg(s, 2, 10, QChar('0'));
+}
+
 // Clock time of a position in the service, e.g. "10:42:06".
 static QString clock_time(long long ms) {
     if (ms <= 0) return QString("--:--");
@@ -547,18 +559,23 @@ void DecoderDock::refresh() {
     if (s.ended) {
         // A finished recording: show where you are in it and how much is left.
         // "Behind live" is meaningless once there is no live edge to be behind.
+        // How far through the recording, out of its total length — the way a
+        // media player reads. "Behind live" means nothing once the event has
+        // finished, and the total length is what an operator actually wants
+        // when deciding whether it will fit the slot.
+        const long long elapsed = (s.started_ms > 0 && s.playhead_ms > s.started_ms)
+            ? (s.playhead_ms - s.started_ms) : 0;
+        const QString pos = position(elapsed) +
+            (s.total_ms > 0 ? "  /  " + position(s.total_ms) : QString());
         if (s.at_end) {
-            m_behind->setText(tr_("Dock.AtEnd"));
+            m_behind->setText(pos + "   " + tr_("Dock.AtEnd"));
             m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #8b9198;");
         } else {
-            const double left = (s.end_ms > s.playhead_ms)
-                ? (double)(s.end_ms - s.playhead_ms) / 1000.0 : 0.0;
-            m_behind->setText(tr_("Dock.Showing").arg(clock_time(s.playhead_ms))
-                              + "  —  "
-                              + tr_("Dock.Remaining")
-                                  .arg(friendly_duration(left)));
+            m_behind->setText(pos);
             m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #8fd3b4;");
         }
+        // The clock time of the recorded moment stays available, just smaller.
+        m_behind->setToolTip(tr_("Dock.Showing").arg(clock_time(s.playhead_ms)));
     } else if (s.head > s.live_edge && s.live_edge > 0) {
         // Caught right up: nothing new has been published yet. This is normal
         // and must not look like a fault.
@@ -576,10 +593,16 @@ void DecoderDock::refresh() {
     }
 
     // Timeline entirely in clock time now, with the real downloaded ranges.
-    // For a finished recording the span runs to its true end, not to the last
-    // segment's start time.
-    m_timeline->setSpan(s.earliest_ms,
-                        (s.ended && s.end_ms > 0) ? s.end_ms : s.live_ms);
+    // A finished recording spans its WHOLE length — from the moment it started
+    // to its true end — so the bar stops growing and the scale means something.
+    // While live, the right edge is the live edge and the bar necessarily grows
+    // with it.
+    if (s.ended && s.end_ms > 0) {
+        m_timeline->setSpan(s.started_ms > 0 ? s.started_ms : s.earliest_ms,
+                            s.end_ms);
+    } else {
+        m_timeline->setSpan(s.earliest_ms, s.live_ms);
+    }
     m_timeline->setPlayhead(s.playhead_ms);
     m_timeline->setDownloaded(s.cached_spans);
     {

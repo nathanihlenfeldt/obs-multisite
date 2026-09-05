@@ -96,6 +96,8 @@ struct DecoderSnapshot {
     bool        at_end = false;
     bool        was_live = false;   // seen live at some point since loading
     long long   end_ms = 0;
+    // Total length of the recording, once it has an end. 0 while live.
+    long long   total_ms = 0;
     // Contiguous downloaded ranges as clock times, so the timeline can show
     // exactly what is on disk.
     std::vector<std::pair<long long, long long>> cached_spans;

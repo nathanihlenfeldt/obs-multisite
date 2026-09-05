@@ -949,10 +949,14 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     { std::lock_guard<std::mutex> lk(obj_mtx); sess = session; }
     if (!sess) return;
     out.room_state       = (int)sess->room_state();
+    out.started_ms       = sess->event_started_ms();
     out.ended            = sess->event_ended();
     out.at_end           = sess->at_end();
     out.was_live         = sess->was_live_this_session();
     out.end_ms           = sess->end_wall_ms();
+    out.total_ms = (out.ended && out.end_ms > 0 && out.started_ms > 0 &&
+                    out.end_ms > out.started_ms)
+                     ? (out.end_ms - out.started_ms) : 0;
     out.head             = sess->playback_head();
     out.live_edge        = sess->live_edge();
     out.first_available  = sess->earliest_available();
@@ -983,7 +987,7 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     }
     out.live_ms     = sess->live_wall_ms();
     out.earliest_ms = sess->earliest_wall_ms();
-    out.started_ms  = sess->event_started_ms();
+
     if (auto cur = sess->current_marker()) out.current_marker = cur->label;
     for (const auto& m : sess->markers())
         out.markers.push_back({ m.label, m.id, (long long)m.at_ms });

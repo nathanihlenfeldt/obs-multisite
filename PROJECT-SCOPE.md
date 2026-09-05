@@ -305,9 +305,17 @@ happens not to be advancing.
   passes the last segment the playhead points at a position that does not
   exist; the displayed clock is clamped to the true end.
 - **The UI switches vocabulary.** For a live event it reports how far behind
-  live the campus is; for a finished one it reports the position and how much
-  is left, then "End of the recording". "Behind live" means nothing once there
-  is no live edge.
+  live the campus is. For a finished one it reports **position out of total
+  length** the way a media player does — "24:15 / 1:24:30" — because that is
+  what an operator needs when deciding whether a recording fits the slot.
+  "Behind live" means nothing once there is no live edge.
+- **A finished recording's timeline spans its whole length**, from the moment it
+  started to its true end, and does not move during playback. While live the
+  right edge is the live edge and necessarily grows; once ended it must not,
+  or positions on the bar mean nothing.
+- The manifest lists only a rolling window of segments, so neither the length
+  nor the timeline bounds may be derived from it. The event's start time and
+  last sequence give the true extent.
 - Distinguishing a *clean end* from a *lost connection* matters: a clean end is
   reported as a finished recording, while a manifest that simply stops
   advancing is reported as offline after the stale threshold.

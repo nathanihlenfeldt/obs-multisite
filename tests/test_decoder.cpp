@@ -756,7 +756,43 @@ int main() {
               "a different event starts with a clean slate");
     }
 
-    std::printf("== 19. Head never runs past the live edge ==\n");
+    std::printf("== 19. A finished recording reports its total length ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTLENGTHLENGTHLENGTH");
+        enc.publish_start();
+        for (int i = 0; i < 100; ++i) enc.publish_segment();   // 10 minutes
+        enc.end();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d21").string();
+        cfg.buffer_minutes = 2;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+
+        const int64_t total = dec.end_wall_ms() - dec.event_started_ms();
+        CHECK(total == 100 * 6000,
+              "total length is the whole recording, not the manifest window");
+        std::printf("     (reports %lld min %lld s)\n",
+                    (long long)(total / 60000), (long long)((total / 1000) % 60));
+
+        // The bounds a timeline is drawn from must not move during playback:
+        // an expanding bar makes positions meaningless.
+        for (int i = 0; i < 20; ++i) dec.pump_downloads(64);
+        dec.start();
+        const int64_t span_before = dec.end_wall_ms() - dec.event_started_ms();
+        for (int i = 0; i < 20; ++i) dec.next_segment();
+        const int64_t span_after = dec.end_wall_ms() - dec.event_started_ms();
+        CHECK(span_before == span_after,
+              "the timeline span is FIXED once the recording has ended");
+
+        // And the manifest only lists a rolling window, so the length must not
+        // be derived from it.
+        CHECK(dec.earliest_available() == 0,
+              "the whole recording is addressable from the first segment");
+    }
+
+    std::printf("== 20. Head never runs past the live edge ==\n");
     {
         FakeStore store;
         FakeEncoder enc(store, "r", "01EVENTIIIIIIIIIIIIIIIIIII");
