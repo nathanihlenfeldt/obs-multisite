@@ -2,7 +2,7 @@
 #
 # install.sh — turn a stock Raspberry Pi OS install into a campus player.
 #
-#   curl -fsSL https://raw.githubusercontent.com/StageAudioWorks/obs-multisite/main/scripts/player/install.sh | sudo bash
+#   curl -fsSL https://raw.githubusercontent.com/nathanihlenfeldt/obs-multisite/main/scripts/player/install.sh | sudo bash
 #
 # It installs the build dependencies, builds the player, installs it as a
 # service that starts on power-up, and leaves the box showing a screen with its
@@ -13,7 +13,7 @@
 
 set -euo pipefail
 
-REPO_URL="${REPO_URL:-https://github.com/StageAudioWorks/obs-multisite.git}"
+REPO_URL="${REPO_URL:-https://github.com/nathanihlenfeldt/obs-multisite.git}"
 BRANCH="${BRANCH:-main}"
 SRC_DIR="${SRC_DIR:-/opt/multisite-player/src}"
 PREFIX="${PREFIX:-/usr/local}"

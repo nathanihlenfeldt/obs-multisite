@@ -153,7 +153,7 @@ A small box at a campus that receives, decodes and plays out, with no
 operator-facing desktop software. On stock **Raspberry Pi OS Lite (64-bit)**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/StageAudioWorks/obs-multisite/main/scripts/player/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/nathanihlenfeldt/obs-multisite/main/scripts/player/install.sh | sudo bash
 ```
 
 That installs the dependencies, builds the player, installs it as a service

@@ -6,7 +6,7 @@
 
 [Unit]
 Description=Multisite campus player
-Documentation=https://github.com/StageAudioWorks/obs-multisite
+Documentation=https://github.com/nathanihlenfeldt/obs-multisite
 # The clock matters: every time this box reports comes from it, and a
 # timeline drawn against a wrong clock is worse than none.
 After=network-online.target time-sync.target
