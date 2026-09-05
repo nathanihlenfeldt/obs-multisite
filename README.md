@@ -14,6 +14,17 @@ Design priority, in order: **reliability**, then quality, then simplicity, and
 **latency last** — a satellite that is a minute behind but never drops is worth
 far more than one that is two seconds behind and stutters.
 
+> **⚠️ Alpha — development build.** This is pre-release software under active
+> development. It has been exercised end to end but has not yet carried a real
+> service. Interfaces, settings and the storage protocol may still change
+> without a migration path, and there is no support contract, warranty or
+> uptime guarantee of any kind.
+>
+> Production use comes with caveats. Run it only with a tested fallback in
+> place, a technical person on hand, and the assumption that any given service
+> may have to go ahead without it. Treat a successful rehearsal as necessary
+> rather than sufficient.
+
 ---
 
 ## Status
@@ -231,6 +242,85 @@ Nine suites, all runnable without OBS:
   SDI output for the production tier, and hardware-decoder selection on Pi 4.
 - **Phase 7 — Extensions.** Web and mobile simulcast from the same files,
   scheduling, redundancy, and local insertion.
+
+---
+
+## Why this exists
+
+This project is developed by the projects team at **Stage Audio Works**, a
+worship AVL integrator working across Africa, to support churches that are
+growing into multiple locations.
+
+Multisite streaming is a solved problem if you are a large church in a
+well-connected part of the world. The commercial platforms that solve it are
+good, and the teams behind them have earned their place. But they are largely
+unavailable outside the developed world, and where they are available the
+recurring cost is out of reach for a congregation whose entire annual AV budget
+is smaller than a year of subscription.
+
+### What this is not
+
+**It is not a managed service.** The commercial products are, and that is worth
+paying for. Someone answers the phone. Someone watches the infrastructure.
+Someone ships you a decoder that boots and works. If your church can afford one
+and it is available where you are, you should probably buy it.
+
+This is a set of tools instead. Setting it up requires a reasonably technical
+person, or support from an integrator with the relevant expertise. There is no
+support contract, no uptime guarantee, and no one to call. What there is
+instead: you own your storage, you own your content, your ongoing cost is a few
+dollars a month of object storage, and nothing can be taken away from you or
+priced beyond your reach later.
+
+**It is not low latency, and it is not two-way.** This carries a service from
+one site to others with a delay measured in tens of seconds. It cannot support a
+live conversation between campuses, a two-way interview, or anything else where
+people need to respond to each other in real time. For that, use SRT or WebRTC:
+both are in OBS already, and there are many good hardware products built on
+them. Those approaches trade differently, sitting much closer to the raw
+condition of the connection at the moment you need it.
+
+This project takes the opposite trade deliberately. Content is written to disk
+before it is sent, sent again until the storage confirms it, and buffered deeply
+at the far end before it is played. Minutes of the service can be held at the
+satellite in advance, so an outage part-way through is something the
+congregation never sees. Latency is the price, and for a service being relayed
+rather than a conversation being held, it is a price worth paying.
+
+### What it asks of your network
+
+Very little, and this is deliberate. Everything moves over ordinary HTTPS to
+object storage. There are no inbound connections, no port forwarding, no static
+IP, no VPN, and no firewall rules to negotiate with a building's IT.
+
+That means it works on connections that would defeat a direct stream: mobile
+data, LEO satellite, consumer fibre, and networks behind carrier-grade NAT. If a
+laptop at the site can load a web page, it can usually send or receive a
+service.
+
+### On intellectual property
+
+This is a clean-room implementation built on published, open standards: CMAF
+fragmented MP4, the S3 object API, and OBS Studio's public plugin interface. It
+is not derived from, and does not reverse-engineer, any commercial product.
+
+Where our design resembles existing products, it is because we are solving the
+same problem under the same constraints and arriving at similar answers, or
+because we have deliberately followed conventions that operators already
+understand. Familiarity is a feature in a room where a volunteer is running the
+service.
+
+It is released under the MIT licence in support of kingdom expansion and the
+enabling of local churches. There is no intent to tread on anyone's
+intellectual property. If you believe something here does, please raise it with
+us and we will address it properly.
+
+### Contributing
+
+If this is useful to your church, use it. If you improve it, we would be glad to
+see the change come back. If it fails you in an interesting way, a good bug
+report is a real contribution: much of what works well here was fixed because
+someone took the time to paste a log.
 
 ---
 
