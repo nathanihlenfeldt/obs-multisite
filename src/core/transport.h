@@ -28,6 +28,29 @@ struct GetResult {
     std::vector<uint8_t> body;
 };
 
+// One object returned by a listing. `size` is -1 when the store omitted it.
+struct ListEntry {
+    std::string key;
+    int64_t     size = -1;
+    std::string last_modified;   // ISO-8601, as the store reported it
+};
+
+struct ListResult {
+    bool        success = false;
+    long        http_status = 0;
+    bool        retryable = true;
+    std::string error;
+    // Directory-style groupings when a delimiter was supplied, each still
+    // carrying the delimiter (e.g. "events/01J8ZK.../"). This is how event IDs
+    // are discovered without listing every segment beneath them.
+    std::vector<std::string> common_prefixes;
+    std::vector<ListEntry>   keys;
+    // A page is a page: a store may cap results well below max_keys, so callers
+    // must follow the token rather than assume one request sees everything.
+    bool        truncated = false;
+    std::string next_continuation_token;
+};
+
 // Abstract object-store transport.
 class Transport {
 public:
@@ -47,6 +70,23 @@ public:
     // unimplemented.
     virtual GetResult get(const std::string& /*key*/) {
         GetResult r; r.error = "get() not implemented by this transport";
+        r.retryable = false;
+        return r;
+    }
+
+    // List objects under `prefix`. With a `delimiter` ("/"), keys sharing a
+    // path component collapse into common_prefixes instead of being returned
+    // individually — the cheap way to enumerate events without walking their
+    // segments. Pass a previous result's next_continuation_token to page.
+    //
+    // Note this needs the s3:ListBucket permission, which object-scoped or
+    // read-only credentials often lack; implementations should say so plainly
+    // rather than returning an empty list that looks like "no events".
+    virtual ListResult list(const std::string& /*prefix*/,
+                            const std::string& /*delimiter*/ = "",
+                            const std::string& /*continuation_token*/ = "",
+                            int /*max_keys*/ = 1000) {
+        ListResult r; r.error = "list() not implemented by this transport";
         r.retryable = false;
         return r;
     }

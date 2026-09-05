@@ -62,7 +62,7 @@ Session::~Session() {
 }
 
 std::string Session::event_prefix() const {
-    return "events/" + m_event_id + "/";
+    return event_prefix_for(m_event_id);
 }
 std::string Session::segment_key(uint64_t seq) const {
     return event_prefix() + "segments/" + seq_name(seq) + ".m4s";
@@ -102,6 +102,19 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
     ev.video              = video;
     ev.audio_tracks       = tracks;
     if (!put_json(event_prefix() + "event.json", ev.to_json())) return false;
+
+    // rooms/{room}/events/{id}.json — the per-room index the event list reads.
+    // Deliberately NOT fatal: this only makes a past event easier to find, and
+    // refusing to go live because an index entry failed to write would be a
+    // service off the air for the sake of a listing convenience. A satellite
+    // falls back to scanning events/ when the entry is missing.
+    RoomEventEntry idx;
+    idx.event_id      = m_event_id;
+    idx.room_id       = m_cfg.room_id;
+    idx.started_at_ms = ev.started_at_ms;
+    if (!put_json(room_event_key(m_cfg.room_id, m_event_id), idx.to_json())) {
+        m_last_error.clear();   // reported above; not a go-live failure
+    }
 
     // init.mp4 — must exist before any segment is referenced
     if (!put_bytes(event_prefix() + "init.mp4", init, "video/mp4")) return false;
@@ -187,7 +200,7 @@ void Session::on_confirmed(const SpooledSegment& seg) {
         lp.event_id = m_event_id;
         lp.status = "live";
         lp.updated_at_ms = t;
-        put_json("rooms/" + m_cfg.room_id + "/live.json", lp.to_json());
+        put_json(live_pointer_key(m_cfg.room_id), lp.to_json());
     }
   }
 }
@@ -207,7 +220,7 @@ void Session::publish_live(const std::string& status) {
     lp.status        = status;
     lp.updated_at_ms = now_ms();
     m_last_heartbeat_ms = lp.updated_at_ms;
-    put_json("rooms/" + m_cfg.room_id + "/live.json", lp.to_json());
+    put_json(live_pointer_key(m_cfg.room_id), lp.to_json());
 }
 
 void Session::heartbeat() { publish_live("live"); }

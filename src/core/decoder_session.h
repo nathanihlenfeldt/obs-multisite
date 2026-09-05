@@ -25,12 +25,22 @@
 
 namespace multisite {
 
+// NOTE: the OBS layer carries this across as an int, so new states are
+// appended rather than inserted.
 enum class RoomState {
     Unknown,    // nothing fetched yet
-    Offline,    // no live event, or the manifest has gone stale
+    Offline,    // nothing to play: no live event, or nothing could be fetched
     Live,       // event is live and updating
     Ended,      // the encoder finished cleanly
+    Interrupted,// the encoder died mid-service: still marked live, not advancing
 };
+
+// Whether a state means "this event is not growing any more, so play it as
+// video-on-demand". A recording and an interrupted service differ in how they
+// should be DESCRIBED, not in how they play.
+inline bool is_vod(RoomState s) {
+    return s == RoomState::Ended || s == RoomState::Interrupted;
+}
 
 enum class PlayState { Stopped, Playing, Paused };
 
@@ -50,9 +60,14 @@ struct DecoderConfig {
     int    max_cached_segments = 2000;
     // Keep this many segments behind the head on disk (scrub-back room).
     int    keep_behind_segments = 200;
-    // Treat the room as Offline if the manifest hasn't updated within this.
+    // Treat the room as no-longer-live if the manifest hasn't updated within
+    // this.
     int    stale_after_ms = 600000;      // 10 minutes
     int    max_download_retries = 5;
+    // Play this specific event instead of whatever live.json names. Set when
+    // an operator picks a past service from the event list; empty means
+    // "follow the room", which is the live behaviour.
+    std::string pinned_event_id;
 };
 
 // A decoded-ready fragment handed to the host: init + media, in order.
@@ -82,6 +97,25 @@ public:
 
     RoomState room_state() const { return m_room.load(); }
     const std::string& event_id() const { return m_event_id; }
+
+    // ── Pinning ──────────────────────────────────────────────────────────────
+    // Play one specific event and stop following the room. Pinning an event
+    // that is not the live one is how a past service is watched.
+    //
+    // A pinned session deliberately does NOT switch when a new service starts:
+    // being yanked out of a recording someone is watching, because a rehearsal
+    // began in the room, would be far worse than staying put. live_elsewhere()
+    // reports that something is on air so the host can offer the jump instead
+    // of taking it.
+    void pin_event(const std::string& event_id);
+    void unpin();                       // follow the room again
+    std::string pinned_event() const;
+    bool is_pinned() const;
+
+    // The event live.json currently names, whether or not it is being played.
+    std::string live_event_id() const;
+    // True when the room is live but a different event is pinned.
+    bool live_elsewhere() const;
     // Why the last operation failed. Returned by value under its own small
     // lock, so it never contends with the download path.
     std::string last_error() const;
@@ -132,7 +166,10 @@ public:
 
     // A finished recording behaves as video-on-demand: it has an end, a
     // duration, and a position within it — "behind live" is meaningless.
-    bool    event_ended() const { return m_room.load() == RoomState::Ended; }
+    bool    event_ended() const { return is_vod(m_room.load()); }
+    // Distinguishes the two ways an event stops: ended cleanly, or the encoder
+    // died. Both play; only the wording differs.
+    bool    was_interrupted() const { return m_room.load() == RoomState::Interrupted; }
     // Whether this event was seen LIVE at any point since it was loaded.
     // "The broadcast just ended" and "this is a recording of a past service"
     // are different things to an operator, and only this distinguishes them.
@@ -185,6 +222,9 @@ private:
     std::unique_ptr<SegmentCache> m_cache;
 
     std::string m_event_id;
+    std::string m_pinned_event_id;     // guarded by m_mtx
+    std::string m_live_event_id;       // what live.json last named
+    std::atomic<bool> m_room_is_live{false};   // …and whether it was advancing
     std::atomic<RoomState> m_room{RoomState::Unknown};
     std::atomic<PlayState> m_play{PlayState::Stopped};
     std::string m_last_error;

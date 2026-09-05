@@ -23,6 +23,10 @@
 #include <QStringList>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QListWidget>
+#include <QListWidgetItem>
+#include <QColor>
+#include <QFont>
 
 namespace multisite_obs {
 
@@ -341,6 +345,50 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     connect(m_jumpMarker, &QPushButton::clicked,
             this, &DecoderDock::onJumpMarker);
 
+    // ── Recordings ──────────────────────────────────────────────────────────
+    // Everything the room still holds, newest first, with anything live at the
+    // top. Choosing one plays it instead of the live feed; the decoder stays on
+    // it even if a service starts, and says so rather than switching.
+    {
+        auto* evBox = new QGroupBox(tr_("Dock.Recordings"), this);
+        auto* evRoot = new QVBoxLayout(evBox);
+
+        m_liveElsewhere = new QLabel(QString(), evBox);
+        m_liveElsewhere->setWordWrap(true);
+        m_liveElsewhere->setStyleSheet("color: #e5484d; font-weight: bold;");
+        m_liveElsewhere->hide();
+        evRoot->addWidget(m_liveElsewhere);
+
+        m_events = new QListWidget(evBox);
+        m_events->setAlternatingRowColors(true);
+        // Deep enough to show a Sunday's worth without scrolling, shallow
+        // enough to leave the transport controls above the fold.
+        m_events->setMinimumHeight(110);
+        m_events->setMaximumHeight(180);
+        evRoot->addWidget(m_events);
+        connect(m_events, &QListWidget::itemDoubleClicked,
+                this, &DecoderDock::onEventActivated);
+
+        m_eventsNote = new QLabel(QString(), evBox);
+        m_eventsNote->setWordWrap(true);
+        m_eventsNote->setStyleSheet("color: palette(text); opacity: 0.75;");
+        evRoot->addWidget(m_eventsNote);
+
+        auto* evRow = new QHBoxLayout();
+        m_loadEvent     = new QPushButton(tr_("Dock.LoadRecording"), evBox);
+        m_returnLive    = new QPushButton(tr_("Dock.ReturnToLive"), evBox);
+        m_refreshEvents = new QPushButton(tr_("Dock.Refresh"), evBox);
+        evRow->addWidget(m_loadEvent, 1);
+        evRow->addWidget(m_returnLive);
+        evRow->addWidget(m_refreshEvents);
+        evRoot->addLayout(evRow);
+        connect(m_loadEvent,     &QPushButton::clicked, this, &DecoderDock::onLoadEvent);
+        connect(m_returnLive,    &QPushButton::clicked, this, &DecoderDock::onReturnToLive);
+        connect(m_refreshEvents, &QPushButton::clicked, this, &DecoderDock::onRefreshEvents);
+
+        root->addWidget(evBox);
+    }
+
     // detail
     auto* box = new QGroupBox(tr_("Dock.Status"), this);
     auto* grid = new QGridLayout(box);
@@ -492,6 +540,139 @@ void DecoderDock::onSeek(long long wall_ms) {
     decoder_seek_time(wall_ms);
 }
 
+// ── Recordings ───────────────────────────────────────────────────────────────
+void DecoderDock::onRefreshEvents() { decoder_refresh_events(); }
+
+void DecoderDock::onLoadEvent() {
+    if (!m_events) return;
+    auto* item = m_events->currentItem();
+    if (!item) return;
+    const QString id = item->data(Qt::UserRole).toString();
+    if (id.isEmpty()) return;
+    // Loading buffers; it does not go to air. Play is a separate, deliberate
+    // press — the same rule as loading the live feed.
+    decoder_pin_event(id.toStdString());
+}
+
+void DecoderDock::onEventActivated() { onLoadEvent(); }
+
+void DecoderDock::onReturnToLive() {
+    decoder_unpin_event();
+}
+
+// Build one row: the time an operator would recognise, what state it is in,
+// and how long it runs.
+static QString event_row_text(const EventEntry& e) {
+    QString when = e.started_ms > 0
+        ? QDateTime::fromMSecsSinceEpoch(e.started_ms).toString("ddd d MMM  HH:mm")
+        : QString("(unknown time)");
+
+    QString state;
+    switch (e.state) {
+        case 1: state = tr_("Dock.EventLive");        break;
+        case 2: state = QString();                    break;  // an ordinary recording needs no label
+        case 3: state = tr_("Dock.EventInterrupted"); break;
+        default: state = tr_("Dock.EventUnknown");    break;
+    }
+
+    QString len;
+    if (e.duration_s > 0) {
+        const long long mins = e.duration_s / 60;
+        len = mins >= 60
+            ? QString("%1h %2m").arg(mins / 60).arg(mins % 60, 2, 10, QChar('0'))
+            : QString("%1 min").arg(mins);
+    }
+
+    QString row = when;
+    if (!len.isEmpty())   row += "   " + len;
+    if (!state.isEmpty()) row += "   " + state;
+    return row;
+}
+
+void DecoderDock::refreshEvents(const DecoderSnapshot& s) {
+    if (!m_events) return;
+
+    EventListing listing;
+    if (!decoder_event_listing(listing)) {
+        m_events->clear();
+        m_events_signature.clear();
+        m_eventsNote->setText(QString());
+        m_loadEvent->setEnabled(false);
+        m_returnLive->setEnabled(false);
+        m_refreshEvents->setEnabled(false);
+        if (m_liveElsewhere) m_liveElsewhere->hide();
+        return;
+    }
+    m_refreshEvents->setEnabled(!listing.loading && !s.locked);
+
+    // Rebuild only on a real change, so a selection survives a refresh tick.
+    QString sig;
+    for (const auto& e : listing.events)
+        sig += QString::fromStdString(e.event_id) + ":" +
+               QString::number(e.state) + ":" +
+               QString::number(e.duration_s) + (e.pinned ? "*" : "") + "|";
+    if (sig != m_events_signature) {
+        const QString keep = m_events->currentItem()
+            ? m_events->currentItem()->data(Qt::UserRole).toString() : QString();
+        m_events_signature = sig;
+        m_events->clear();
+        for (const auto& e : listing.events) {
+            auto* item = new QListWidgetItem(event_row_text(e), m_events);
+            item->setData(Qt::UserRole, QString::fromStdString(e.event_id));
+            // Numeric rather than "#rrggbb": QColor's string constructor
+            // differs between Qt 5 and 6, and the painter above already uses
+            // this form.
+            if (e.state == 1)                                            // live
+                item->setForeground(QColor(0xe5, 0x48, 0x4d));
+            else if (e.state == 3)                                       // interrupted
+                item->setForeground(QColor(0xe0, 0xa0, 0x20));
+            if (e.pinned) {
+                QFont f = item->font();
+                f.setBold(true);
+                item->setFont(f);
+            }
+            if (!keep.isEmpty() && keep == QString::fromStdString(e.event_id))
+                m_events->setCurrentItem(item);
+        }
+    }
+
+    // Why the list might be short or empty. "No recordings" and "this key
+    // cannot list the bucket" look identical without this.
+    QString note;
+    if (listing.loading) {
+        note = tr_("Dock.EventsLoading");
+    } else if (!listing.error.empty()) {
+        note = QString::fromStdString(listing.error);
+    } else if (!listing.listed_once) {
+        note = tr_("Dock.EventsLoading");
+    } else if (listing.events.empty()) {
+        note = tr_("Dock.EventsNone");
+    } else if (listing.fallback_scan) {
+        // Worth saying: these were recorded before the room index existed, so
+        // the list cost a request per event to build.
+        note = tr_("Dock.EventsFallback");
+    }
+    m_eventsNote->setText(note);
+    m_eventsNote->setVisible(!note.isEmpty());
+    if (!listing.error.empty())
+        m_eventsNote->setStyleSheet("color: #e5484d;");
+    else
+        m_eventsNote->setStyleSheet("color: palette(text); opacity: 0.75;");
+
+    const bool ctl = !s.locked;
+    m_loadEvent->setEnabled(ctl && m_events->currentItem() != nullptr);
+    m_returnLive->setEnabled(ctl && !s.pinned_event_id.empty());
+
+    // A service has started while a recording is pinned. The decoder stays
+    // where it is on purpose — being pulled out of a recording mid-watch would
+    // be worse — so the dock offers the switch rather than taking it.
+    if (m_liveElsewhere) {
+        const bool show = s.live_elsewhere && !s.pinned_event_id.empty();
+        m_liveElsewhere->setVisible(show);
+        if (show) m_liveElsewhere->setText(tr_("Dock.LiveElsewhere"));
+    }
+}
+
 void DecoderDock::refresh() {
     DecoderSnapshot s;
     if (!decoder_snapshot(s)) {
@@ -503,6 +684,7 @@ void DecoderDock::refresh() {
         m_resume->setEnabled(false);
         m_live->setEnabled(false);
         m_jumpMarker->setEnabled(false);
+        refreshEvents(s);
         return;
     }
 
@@ -535,10 +717,16 @@ void DecoderDock::refresh() {
                                             : "color: #e5484d; font-weight: bold;");
             break;
         case 3:
-            // Two different situations, and an operator needs to tell them
-            // apart: the service they were watching has just finished, versus
-            // this was already a recording when they loaded it.
-            if (s.was_live) {
+            // Three different situations, and an operator needs to tell them
+            // apart: the encoder died mid-service, the service they were
+            // watching has just finished, or this was already a recording when
+            // they loaded it.
+            if (s.interrupted) {
+                // Not a fault at this end, and the recording is complete up to
+                // the moment the encoder went — it simply stops there.
+                m_state->setText(tr_("Dock.Interrupted"));
+                m_state->setStyleSheet("color: #e0a020; font-weight: bold;");
+            } else if (s.was_live) {
                 m_state->setText(tr_("Dock.BroadcastEnded"));
                 m_state->setStyleSheet("color: #e0a020; font-weight: bold;");
             } else {
@@ -676,6 +864,8 @@ void DecoderDock::refresh() {
     } else {
         m_error->hide();
     }
+
+    refreshEvents(s);
 }
 
 } // namespace multisite_obs

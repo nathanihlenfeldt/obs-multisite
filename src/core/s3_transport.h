@@ -40,6 +40,12 @@ public:
     // Signed GET. Used by the decoder to fetch manifests and segments.
     GetResult get(const std::string& key) override;
 
+    // Signed ListObjectsV2. Used to enumerate events for the event list.
+    ListResult list(const std::string& prefix,
+                    const std::string& delimiter = "",
+                    const std::string& continuation_token = "",
+                    int max_keys = 1000) override;
+
     // Simple connectivity/credential check: PUT then GET a tiny probe object.
     // Returns an empty string on success, or a human-readable error.
     std::string self_test();

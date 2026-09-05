@@ -305,7 +305,7 @@ int main() {
         CHECK(dec.cache().count() > 0, "good segments cached on retry");
     }
 
-    std::printf("== 6. A dead encoder is detected as Offline ==\n");
+    std::printf("== 6. A dead encoder is INTERRUPTED, and still watchable ==\n");
     {
         FakeStore store;
         FakeEncoder enc(store, "r", "01EVENTFFFFFFFFFFFFFFFFFFF");
@@ -320,9 +320,71 @@ int main() {
         CHECK(dec.poll(enc.clock_ms) == RoomState::Live, "live while updating");
         // Wall clock moves on but the encoder publishes nothing more.
         RoomState later = dec.poll(enc.clock_ms + 700000);
-        CHECK(later == RoomState::Offline,
-              "stale manifest -> Offline (doesn't poll a dead event forever)");
+        CHECK(later == RoomState::Interrupted,
+              "stale manifest -> Interrupted (the encoder died without ending)");
+        CHECK(dec.was_interrupted(),
+              "and it is distinguishable from a clean end");
+
+        // The point of the state. Everything up to the moment the encoder went
+        // is recorded and complete; reporting this as Offline (as it once did)
+        // made a crashed service permanently unplayable, which is exactly when
+        // you would want to watch it back.
+        CHECK(dec.event_ended(), "an interrupted event behaves as video-on-demand");
+        dec.pump_downloads(10);
+        CHECK(dec.start(), "and playback can actually start");
+        CHECK(dec.playback_head() == 0,
+              "from the beginning, like any recording");
         std::printf("     (%s)\n", dec.last_error().c_str());
+    }
+
+    std::printf("== 6b. Pinning a past event ==\n");
+    {
+        FakeStore store;
+        // An old service, finished cleanly.
+        FakeEncoder past(store, "r", "01EVENTOLDAAAAAAAAAAAAAAAA");
+        past.publish_start();
+        for (int i = 0; i < 4; ++i) past.publish_segment();
+        past.end();
+
+        // …and a new one now on air in the same room.
+        FakeEncoder now(store, "r", "01EVENTNEWBBBBBBBBBBBBBBBB");
+        now.publish_start();
+        for (int i = 0; i < 3; ++i) now.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d6b").string();
+        DecoderSession dec(cfg, store);
+
+        // Unpinned, it follows the room.
+        CHECK(dec.poll(now.clock_ms) == RoomState::Live, "unpinned: follows live.json");
+        CHECK(dec.event_id() == "01EVENTNEWBBBBBBBBBBBBBBBB", "playing the live event");
+        CHECK(!dec.live_elsewhere(), "nothing is live elsewhere when playing live");
+
+        // Pin the old service.
+        const uint64_t disc_before = dec.discontinuity_id();
+        dec.pin_event("01EVENTOLDAAAAAAAAAAAAAAAA");
+        RoomState st = dec.poll(now.clock_ms);
+        CHECK(dec.event_id() == "01EVENTOLDAAAAAAAAAAAAAAAA", "pinned event is played");
+        CHECK(st == RoomState::Ended, "the pinned recording reports as a recording");
+        CHECK(dec.discontinuity_id() != disc_before,
+              "the host is told to restart its decoder: new event, new timeline");
+
+        // The whole point of the second design question: a service starting
+        // must not yank the operator out of what they are watching.
+        for (int i = 0; i < 3; ++i) now.publish_segment();
+        dec.poll(now.clock_ms);
+        CHECK(dec.event_id() == "01EVENTOLDAAAAAAAAAAAAAAAA",
+              "a new service going live does NOT steal a pinned playback");
+        CHECK(dec.live_elsewhere(),
+              "but the operator is told something is live now");
+        CHECK(dec.live_event_id() == "01EVENTNEWBBBBBBBBBBBBBBBB",
+              "and which event that is, so a jump can be offered");
+
+        // Unpinning returns to the room.
+        dec.unpin();
+        dec.poll(now.clock_ms);
+        CHECK(dec.event_id() == "01EVENTNEWBBBBBBBBBBBBBBBB", "unpin follows the room again");
+        CHECK(!dec.live_elsewhere(), "and is no longer live-elsewhere");
     }
 
     std::printf("== 7. Clean end is reported as Ended ==\n");

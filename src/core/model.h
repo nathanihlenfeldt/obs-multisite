@@ -53,6 +53,24 @@ struct EventInfo {
     static EventInfo from_json(const std::string&);
 };
 
+// rooms/{room_id}/events/{event_id}.json — a per-room index entry, written once
+// at Go Live alongside event.json.
+//
+// Events live in a flat global events/ namespace, so nothing in an object key
+// says which room an event belongs to; only event.json does, inside the body.
+// Without this index, listing a room's events would mean listing every event
+// ever recorded and fetching event.json for each just to discard most of them.
+// The entry is small and duplicates a few fields on purpose: listing one room
+// then costs a single request, and the start time needed to label the event is
+// already in the key listing.
+struct RoomEventEntry {
+    std::string event_id;
+    std::string room_id;
+    int64_t     started_at_ms = 0;
+    std::string to_json() const;
+    static RoomEventEntry from_json(const std::string&);
+};
+
 struct ManifestSegment {
     uint64_t    seq = 0;
     double      duration_s = 6.0;
@@ -104,5 +122,18 @@ struct MarkerList {
     std::string to_json() const;
     static MarkerList from_json(const std::string&);
 };
+
+// ── Object-key layout ────────────────────────────────────────────────────────
+// Written by the encoder, read by every satellite. Both sides build keys from
+// these rather than from string literals, so a change cannot be applied to one
+// end and forgotten at the other.
+std::string live_pointer_key(const std::string& room_id);
+std::string room_events_prefix(const std::string& room_id);
+std::string room_event_key(const std::string& room_id, const std::string& event_id);
+std::string event_prefix_for(const std::string& event_id);
+
+// Recover the event id from a room-index key or a listing's common prefix,
+// whichever form the caller has. Returns "" if the string is neither.
+std::string event_id_from_index_key(const std::string& key);
 
 } // namespace multisite

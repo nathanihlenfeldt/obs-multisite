@@ -1,5 +1,6 @@
 #include "s3_transport.h"
 #include "aws_sigv4.h"
+#include "s3_list_xml.h"
 
 #include <curl/curl.h>
 
@@ -79,8 +80,12 @@ struct S3Transport::Impl {
         return acct + ".r2.cloudflarestorage.com";
     }
     std::string url_for(const std::string& key) const {
+        return bucket_url() + "/" + key;
+    }
+    // The bucket itself, with no trailing slash — what a listing addresses.
+    std::string bucket_url() const {
         return std::string(cfg.use_https ? "https://" : "http://") +
-               host() + "/" + clean_segment(cfg.bucket) + "/" + key;
+               host() + "/" + clean_segment(cfg.bucket);
     }
 
     // x-amz-tagging value: url-encoded key=value pairs joined by &
@@ -224,6 +229,89 @@ GetResult S3Transport::get(const std::string& key) {
     out.retryable   = !(r.http_status >= 400 && r.http_status < 500) ||
                       r.http_status == 408 || r.http_status == 429;
     out.body        = std::move(body);
+    return out;
+}
+
+ListResult S3Transport::list(const std::string& prefix,
+                             const std::string& delimiter,
+                             const std::string& continuation_token,
+                             int max_keys) {
+    ensure_curl();
+    ListResult out;
+
+    CURL* curl = curl_easy_init();
+    if (!curl) { out.error = "curl_easy_init failed"; return out; }
+
+    // Values are percent-encoded here (a continuation token is base64 and
+    // routinely contains '+', '/' and '='; a room name may contain anything an
+    // operator typed). The signer decodes before canonicalising, so the
+    // signature is computed over the same values the store will parse out.
+    auto q = [](const std::string& k, const std::string& v) {
+        return "&" + k + "=" + SigV4Signer::uri_encode(v, true);
+    };
+    std::string url = d->bucket_url() + "/?list-type=2";
+    if (!prefix.empty())             url += q("prefix", prefix);
+    if (!delimiter.empty())          url += q("delimiter", delimiter);
+    if (!continuation_token.empty()) url += q("continuation-token", continuation_token);
+    if (max_keys > 0)                url += q("max-keys", std::to_string(max_keys));
+
+    SigV4Signer signer(d->cfg.access_key_id, d->cfg.secret_access_key,
+                       d->cfg.region, "s3");
+    auto sr = signer.sign("GET", url, {}, {});
+
+    struct curl_slist* h = nullptr;
+    for (const auto& l : sr.header_lines()) h = curl_slist_append(h, l.c_str());
+
+    std::vector<uint8_t> body;
+    curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+    curl_easy_setopt(curl, CURLOPT_HTTPHEADER, h);
+    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_to_vec);
+    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &body);
+    curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)d->cfg.connect_timeout_ms);
+    curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)d->cfg.request_timeout_ms);
+    curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+
+    CURLcode cc = curl_easy_perform(curl);
+    if (cc != CURLE_OK) {
+        out.retryable = true;                  // network-level: the outage case
+        out.error = curl_easy_strerror(cc);
+        curl_slist_free_all(h);
+        curl_easy_cleanup(curl);
+        return out;
+    }
+
+    long code = 0;
+    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+    curl_slist_free_all(h);
+    curl_easy_cleanup(curl);
+
+    out.http_status = code;
+    out.retryable   = !(code >= 400 && code < 500) || code == 408 || code == 429;
+
+    const std::string xml(body.begin(), body.end());
+    if (code < 200 || code >= 300) {
+        // Parse the error document for its Code/Message, which say far more
+        // than the status does.
+        ListResult err;
+        parse_list_objects_v2(xml, err);
+        out.error = "HTTP " + std::to_string(code);
+        if (!err.error.empty()) out.error += " " + err.error;
+        // The failure an operator will actually hit: a token scoped to objects
+        // rather than the bucket. An empty event list would look like "no
+        // recordings" instead of "the key cannot list".
+        if (code == 403)
+            out.error += " — listing requires the s3:ListBucket permission; "
+                         "this key appears to be object-scoped";
+        return out;
+    }
+
+    if (!parse_list_objects_v2(xml, out)) {
+        out.retryable = false;
+        if (out.error.empty()) out.error = "unparseable listing response";
+        return out;
+    }
+
+    out.success = true;
     return out;
 }
 

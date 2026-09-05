@@ -35,6 +35,28 @@ struct EncoderControls {
 // Implemented by each decoder source.
 struct DecoderSnapshot;   // defined below
 
+// One row of the event list. `state` matches multisite::EventState, kept as an
+// int for the same reason room_state is: this header stays free of the core.
+struct EventEntry {
+    std::string event_id;
+    long long   started_ms = 0;
+    long long   duration_s = 0;
+    int         state = 0;        // 0 unknown, 1 live, 2 recording, 3 interrupted
+    bool        pinned = false;   // currently the event being played
+};
+
+// Everything the dock needs to draw the event list, including why it might be
+// empty — "no recordings" and "this key cannot list the bucket" look identical
+// otherwise.
+struct EventListing {
+    std::vector<EventEntry> events;
+    bool        loading = false;
+    bool        listed_once = false;   // false until the first refresh completes
+    bool        fallback_scan = false; // events predating the room index
+    int         skipped = 0;
+    std::string error;
+};
+
 struct DecoderControls {
     virtual ~DecoderControls() = default;
     virtual void pause() = 0;
@@ -61,6 +83,18 @@ struct DecoderControls {
     virtual void set_delay_from_live(double seconds) = 0;
     virtual void set_locked(bool locked) = 0;
     virtual bool locked() const = 0;
+
+    // ── Event list ───────────────────────────────────────────────────────────
+    // Ask for a refresh; it runs on the source's worker, never on the UI
+    // thread — listing plus one manifest per event is far too much to do while
+    // the operator waits.
+    virtual void refresh_events() = 0;
+    virtual void event_listing(EventListing& out) const = 0;
+    // Play one specific event. Pinning does NOT follow the room afterwards: a
+    // service starting must not drag an operator out of the recording they are
+    // watching. `unpin_event` returns to following live.json.
+    virtual void pin_event(const std::string& event_id) = 0;
+    virtual void unpin_event() = 0;
 };
 
 void register_encoder_controls(EncoderControls* e);
@@ -95,6 +129,16 @@ struct DecoderSnapshot {
     bool        ended = false;
     bool        at_end = false;
     bool        was_live = false;   // seen live at some point since loading
+    // The encoder died rather than ending: the recording is complete up to
+    // that point and plays, but it stops where the encoder stopped.
+    bool        interrupted = false;
+    // Set when a specific past event is being played rather than the room's
+    // live one.
+    std::string pinned_event_id;
+    // Something IS live in this room, but it is not what is playing — the
+    // pinned-playback case. The dock offers a jump rather than taking it.
+    bool        live_elsewhere = false;
+    std::string live_event_id;
     long long   end_ms = 0;
     // Total length of the recording, once it has an end. 0 while live.
     long long   total_ms = 0;
@@ -122,5 +166,11 @@ void decoder_set_delay(double seconds);
 void decoder_set_locked(bool locked);
 void decoder_jump_to_marker(const std::string& id);
 void decoder_seek(unsigned long long seq);
+
+// Event list, from the same source the dock's snapshot follows.
+void decoder_refresh_events();
+bool decoder_event_listing(EventListing& out);
+void decoder_pin_event(const std::string& event_id);
+void decoder_unpin_event();
 
 } // namespace multisite_obs

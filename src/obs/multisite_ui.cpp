@@ -155,6 +155,31 @@ void decoder_seek(unsigned long long seq) {
     for (auto* d : g_decoders) d->seek(seq);
 }
 
+// The event list belongs to one source, not all of them: it is a list of what
+// THIS room recorded, and the dock follows the first source exactly as the
+// snapshot does.
+void decoder_refresh_events() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (g_decoders.empty()) return;
+    g_decoders.front()->refresh_events();
+}
+bool decoder_event_listing(EventListing& out) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (g_decoders.empty()) return false;
+    g_decoders.front()->event_listing(out);
+    return true;
+}
+void decoder_pin_event(const std::string& event_id) {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (g_decoders.empty()) return;
+    g_decoders.front()->pin_event(event_id);
+}
+void decoder_unpin_event() {
+    std::lock_guard<std::mutex> lk(g_mtx);
+    if (g_decoders.empty()) return;
+    g_decoders.front()->unpin_event();
+}
+
 // ── Encoder: drop a marker ───────────────────────────────────────────────────
 static void drop_marker(const std::string& label) {
     std::lock_guard<std::mutex> lk(g_mtx);

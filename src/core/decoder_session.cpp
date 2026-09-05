@@ -15,10 +15,42 @@ static std::string seq_name(uint64_t seq) {
 DecoderSession::DecoderSession(DecoderConfig cfg, Transport& transport)
     : m_cfg(std::move(cfg)), m_tx(transport) {
     m_cache = std::make_unique<SegmentCache>(m_cfg.cache_dir, "pending");
+    m_pinned_event_id = m_cfg.pinned_event_id;
+}
+
+// ── Pinning ──────────────────────────────────────────────────────────────────
+// Changing what is being played is the same upheaval as the room switching
+// events: the cache, the playhead and the decoder timeline all belong to the
+// old event. poll() performs that reset when it sees the target change, so
+// these only record the intent.
+void DecoderSession::pin_event(const std::string& event_id) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    m_pinned_event_id = event_id;
+}
+void DecoderSession::unpin() {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    m_pinned_event_id.clear();
+}
+std::string DecoderSession::pinned_event() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_pinned_event_id;
+}
+bool DecoderSession::is_pinned() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return !m_pinned_event_id.empty();
+}
+std::string DecoderSession::live_event_id() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_live_event_id;
+}
+bool DecoderSession::live_elsewhere() const {
+    if (!m_room_is_live.load()) return false;
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return !m_live_event_id.empty() && m_live_event_id != m_event_id;
 }
 
 std::string DecoderSession::event_prefix() const {
-    return "events/" + m_event_id + "/";
+    return event_prefix_for(m_event_id);
 }
 std::string DecoderSession::segment_key(uint64_t seq) const {
     return event_prefix() + "segments/" + seq_name(seq) + ".m4s";
@@ -42,29 +74,42 @@ RoomState DecoderSession::poll(int64_t now_override) {
     // protects state only, and is never held across I/O.
     const int64_t now = now_override ? now_override : now_ms();
 
-    // 1. Which event is live in this room?
-    auto lp = m_tx.get("rooms/" + m_cfg.room_id + "/live.json");
-    if (!lp.success) {
+    // 1. Which event is live in this room? Read even when an event is pinned:
+    //    the answer is not what to play, but it is what tells an operator
+    //    watching a recording that a service has started.
+    std::string pinned;
+    {
         std::lock_guard<std::mutex> lk(m_mtx);
-        { std::lock_guard<std::mutex> elk(m_err_mtx); m_last_error = "live.json: HTTP " + std::to_string(lp.http_status) +
-                       " " + lp.error; }
-        m_room = RoomState::Offline;
-        return m_room;
+        pinned = m_pinned_event_id;
     }
 
     LivePointer live;
-    try {
-        live = LivePointer::from_json(
-            std::string(lp.body.begin(), lp.body.end()));
-    } catch (...) {
-        std::lock_guard<std::mutex> lk(m_mtx);
-        { std::lock_guard<std::mutex> elk(m_err_mtx); m_last_error = "live.json is not valid JSON"; }
-        m_room = RoomState::Offline;
-        return m_room;
+    std::string live_error;
+    auto lp = m_tx.get(live_pointer_key(m_cfg.room_id));
+    if (!lp.success) {
+        live_error = "live.json: HTTP " + std::to_string(lp.http_status) +
+                     " " + lp.error;
+    } else {
+        try {
+            live = LivePointer::from_json(
+                std::string(lp.body.begin(), lp.body.end()));
+        } catch (...) {
+            live_error = "live.json is not valid JSON";
+            live = LivePointer{};
+        }
     }
 
-    if (live.event_id.empty()) {
+    // A pinned event plays whatever the room is doing — including when the
+    // room pointer cannot be read at all. Only an unpinned session depends on
+    // live.json to know what to play.
+    const std::string target = pinned.empty() ? live.event_id : pinned;
+    if (target.empty()) {
         std::lock_guard<std::mutex> lk(m_mtx);
+        m_live_event_id = live.event_id;
+        m_room_is_live = false;
+        if (!live_error.empty()) {
+            std::lock_guard<std::mutex> elk(m_err_mtx); m_last_error = live_error;
+        }
         m_room = RoomState::Offline;
         return m_room;
     }
@@ -74,8 +119,9 @@ RoomState DecoderSession::poll(int64_t now_override) {
     bool need_markers = false;
     {
         std::lock_guard<std::mutex> lk(m_mtx);
-        if (live.event_id != m_event_id) {
-            m_event_id = live.event_id;
+        m_live_event_id = live.event_id;
+        if (target != m_event_id) {
+            m_event_id = target;
             m_cache->set_event(m_event_id);
             m_head_set = false;
             m_init_sent = false;
@@ -91,7 +137,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
             need_markers = true;
         }
     }
-    const std::string prefix = "events/" + event_id + "/";
+    const std::string prefix = event_prefix_for(event_id);
 
     // 3. Manifest, fetched without the lock.
     auto mf = m_tx.get(prefix + "manifest.json");
@@ -162,19 +208,28 @@ RoomState DecoderSession::poll(int64_t now_override) {
         m_segment_duration_s = seg_hint;
 
     // Stale detection: an encoder that died leaves live.json pointing at an
-    // event whose manifest stops advancing. Don't poll a corpse forever.
+    // event whose manifest stops advancing. Stop treating it as live — but
+    // it is still a recording of everything that happened up to the moment the
+    // encoder went, and that is exactly the material someone wants afterwards.
+    // Reporting it as Offline (as this once did) made a crashed service
+    // permanently unwatchable, since nothing offline can be played.
     const int64_t age = now - m_manifest_updated_ms;
     if (m_manifest.status == "ended") {
         m_room = RoomState::Ended;
     } else if (m_manifest_updated_ms > 0 && age > m_cfg.stale_after_ms) {
         { std::lock_guard<std::mutex> elk(m_err_mtx); m_last_error = "manifest last updated " + std::to_string(age / 1000) +
-                       "s ago — treating the room as offline"; }
-        m_room = RoomState::Offline;
+                       "s ago — the encoder stopped without ending the event"; }
+        m_room = RoomState::Interrupted;
     } else {
         m_room = RoomState::Live;
         m_saw_live = true;          // remembered for the rest of this event
         { std::lock_guard<std::mutex> elk(m_err_mtx); m_last_error.clear(); }
     }
+    // Whether the ROOM is live, which is not the same as whether the event
+    // being played is: a pinned recording sits alongside a live service.
+    m_room_is_live = (!live.event_id.empty() && live.status == "live" &&
+                      (m_cfg.stale_after_ms <= 0 ||
+                       now - live.updated_at_ms <= (int64_t)m_cfg.stale_after_ms));
     return m_room;
 }
 
@@ -193,12 +248,12 @@ int DecoderSession::pump_downloads(int max) {
     {
         std::lock_guard<std::mutex> lk(m_mtx);
         if (m_event_id.empty()) return 0;
-        prefix = "events/" + m_event_id + "/";
+        prefix = event_prefix_for(m_event_id);
         need_init = !m_cache->has_init();
 
         if (m_head_set.load()) {
             from = m_head.load();
-        } else if (m_room.load() == RoomState::Ended) {
+        } else if (is_vod(m_room.load())) {
             // A finished recording plays from the beginning, so fetch from the
             // beginning. Downloading from the live edge while playback intends
             // to start at segment zero left the first segment missing and
@@ -303,12 +358,12 @@ int DecoderSession::pump_downloads(int max) {
 bool DecoderSession::start() {
     std::lock_guard<std::mutex> lk(m_mtx);
     const RoomState rs = m_room.load();
-    if (rs != RoomState::Live && rs != RoomState::Ended) return false;
+    if (rs != RoomState::Live && !is_vod(rs)) return false;
     if (!m_cache->has_init()) return false;
 
     if (!m_head_set.load()) {
         uint64_t want;
-        if (rs == RoomState::Ended) {
+        if (is_vod(rs)) {
             // A recording that has already finished is video-on-demand: start
             // at the beginning. Starting near the end (which is what treating
             // it as "live" does) means loading a finished service and landing

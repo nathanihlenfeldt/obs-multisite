@@ -20,7 +20,9 @@ add_library(multisite_core STATIC
     src/core/session.cpp
     src/core/segment_cache.cpp
     src/core/decoder_session.cpp
-    src/core/aws_sigv4.cpp)
+    src/core/aws_sigv4.cpp
+    src/core/s3_list_xml.cpp
+    src/core/event_catalog.cpp)
 target_include_directories(multisite_core PUBLIC src src/core)
 # Must be position-independent: this static lib gets linked into the shared
 # OBS plugin module.
@@ -77,6 +79,19 @@ add_test(NAME snapshot COMMAND test_snapshot)
 add_executable(test_responsive tests/test_responsive.cpp)
 target_link_libraries(test_responsive PRIVATE multisite_core)
 add_test(NAME responsive COMMAND test_responsive)
+
+# Event listing reads a ListObjectsV2 response and signs a query string — the
+# two things nothing else in the protocol does. Both are checked against
+# captured response shapes rather than a live bucket.
+add_executable(test_s3_list tests/test_s3_list.cpp)
+target_link_libraries(test_s3_list PRIVATE multisite_core)
+add_test(NAME s3_list COMMAND test_s3_list)
+
+# What the event list shows an operator: which event is on air, which are
+# finished recordings, and which were cut off by an encoder that died.
+add_executable(test_event_catalog tests/test_event_catalog.cpp)
+target_link_libraries(test_event_catalog PRIVATE multisite_core)
+add_test(NAME event_catalog COMMAND test_event_catalog)
 
 # ── Optional: S3 transport (needs libcurl) ────────────────────────────────────
 find_package(CURL QUIET)

@@ -90,19 +90,54 @@ std::string trim(const std::string& s) {
     return s.substr(a, b - a + 1);
 }
 
-// Canonicalise a query string: split on &, encode each key and value,
-// then sort by encoded key (then value).
-std::string canonical_query(const std::string& query) {
+// Percent-decode, so canonicalisation is independent of how the caller chose to
+// write the URL.
+std::string percent_decode(const std::string& s) {
+    std::string out;
+    out.reserve(s.size());
+    auto hexval = [](char c) -> int {
+        if (c >= '0' && c <= '9') return c - '0';
+        if (c >= 'a' && c <= 'f') return c - 'a' + 10;
+        if (c >= 'A' && c <= 'F') return c - 'A' + 10;
+        return -1;
+    };
+    for (size_t i = 0; i < s.size(); ++i) {
+        if (s[i] == '%' && i + 2 < s.size()) {
+            const int hi = hexval(s[i + 1]), lo = hexval(s[i + 2]);
+            if (hi >= 0 && lo >= 0) {
+                out.push_back((char)((hi << 4) | lo));
+                i += 2;
+                continue;
+            }
+        }
+        out.push_back(s[i]);
+    }
+    return out;
+}
+} // namespace
+
+// Canonicalise a query string: split on &, DECODE then re-encode each key and
+// value, then sort by encoded key (then value).
+//
+// The decode step matters. S3 canonicalises the query it receives after
+// decoding it, so a request whose URL carries an already-encoded value (a
+// listing prefix such as "rooms/main/events/", where the slashes must be
+// %2F for the URL to be well-formed for arbitrary room names) would otherwise
+// be signed over a double-encoded string and rejected as SignatureDoesNotMatch.
+// Encoding without decoding first only happens to work while every value is
+// already free of reserved characters.
+std::string SigV4Signer::canonical_query(const std::string& query) {
     if (query.empty()) return "";
     std::vector<std::pair<std::string,std::string>> params;
     std::stringstream ss(query);
     std::string item;
     while (std::getline(ss, item, '&')) {
+        if (item.empty()) continue;
         auto eq = item.find('=');
         std::string k = (eq == std::string::npos) ? item : item.substr(0, eq);
         std::string v = (eq == std::string::npos) ? "" : item.substr(eq + 1);
-        params.emplace_back(SigV4Signer::uri_encode(k, true),
-                            SigV4Signer::uri_encode(v, true));
+        params.emplace_back(uri_encode(percent_decode(k), true),
+                            uri_encode(percent_decode(v), true));
     }
     std::sort(params.begin(), params.end());
     std::string out;
@@ -112,7 +147,6 @@ std::string canonical_query(const std::string& query) {
     }
     return out;
 }
-} // namespace
 
 // ── Signing key derivation ───────────────────────────────────────────────────
 std::vector<uint8_t> SigV4Signer::signing_key(const std::string& datestamp) const {

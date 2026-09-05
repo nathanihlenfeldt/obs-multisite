@@ -140,6 +140,18 @@ int main() {
         LivePointer lp = LivePointer::from_json(store.text("rooms/main-auditorium/live.json"));
         CHECK(lp.event_id == event_id && lp.status == "live",
               "live.json points at the event");
+
+        // The per-room index a satellite lists to find past events. Nothing in
+        // an event's own key says which room it belongs to, so without this
+        // entry the event list can only be built by reading every event.json in
+        // the bucket.
+        const std::string ix_key = room_event_key("main-auditorium", event_id);
+        CHECK(store.has(ix_key), "the room index entry is published at go-live");
+        RoomEventEntry ix = RoomEventEntry::from_json(store.text(ix_key));
+        CHECK(ix.event_id == event_id && ix.room_id == "main-auditorium",
+              "the index entry names its event and room");
+        CHECK(ix.started_at_ms == ev.started_at_ms,
+              "and agrees with event.json about when the event started");
         ses.end();
     }
 

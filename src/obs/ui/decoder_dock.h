@@ -18,8 +18,11 @@ class QTimer;
 class QLineEdit;
 class QSpinBox;
 class QDialog;
+class QListWidget;
 
 namespace multisite_obs {
+
+struct DecoderSnapshot;
 
 // Timeline strip: retained window, buffered region, playhead, live edge and
 // marker ticks. Clicking seeks.
@@ -78,8 +81,16 @@ private slots:
     void onLockToggled(bool);
     void onJog(double seconds);
     void onGoToDelay();
+    void onRefreshEvents();
+    void onLoadEvent();
+    void onReturnToLive();
+    void onEventActivated();
 
 private:
+    // Rebuilds the recordings list from the current listing. Separate from
+    // refresh() only because that function is already long.
+    void refreshEvents(const DecoderSnapshot& s);
+
     QLabel* m_room = nullptr;
     QLabel* m_state = nullptr;
     QLabel* m_behind = nullptr;
@@ -101,6 +112,18 @@ private:
     QLabel*      m_hint = nullptr;
     QComboBox* m_markers = nullptr;
     QPushButton* m_jumpMarker = nullptr;
+
+    // ── Recordings ───────────────────────────────────────────────────────────
+    // The list is rebuilt only when its contents actually change: it refreshes
+    // twice a second alongside everything else, and replacing the rows every
+    // tick would discard the operator's selection as they reached for Load.
+    QListWidget* m_events = nullptr;
+    QPushButton* m_refreshEvents = nullptr;
+    QPushButton* m_loadEvent = nullptr;
+    QPushButton* m_returnLive = nullptr;
+    QLabel*      m_eventsNote = nullptr;
+    QLabel*      m_liveElsewhere = nullptr;
+    QString      m_events_signature;
     QTimer* m_timer = nullptr;
     size_t m_marker_count = 0;
 

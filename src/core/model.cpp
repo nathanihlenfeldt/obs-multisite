@@ -87,6 +87,58 @@ EventInfo EventInfo::from_json(const std::string& s) {
     return e;
 }
 
+// ── Object-key layout ─────────────────────────────────────────────────────────
+std::string live_pointer_key(const std::string& room_id) {
+    return "rooms/" + room_id + "/live.json";
+}
+std::string room_events_prefix(const std::string& room_id) {
+    return "rooms/" + room_id + "/events/";
+}
+std::string room_event_key(const std::string& room_id, const std::string& event_id) {
+    return room_events_prefix(room_id) + event_id + ".json";
+}
+std::string event_prefix_for(const std::string& event_id) {
+    return "events/" + event_id + "/";
+}
+
+std::string event_id_from_index_key(const std::string& key) {
+    // Accepts "rooms/{room}/events/{id}.json" (an index key) or
+    // "events/{id}/" (a common prefix from listing the flat namespace).
+    if (key.empty()) return "";
+    size_t last = key.find_last_not_of('/');
+    if (last == std::string::npos) return "";
+    const bool had_slash = (last + 1 < key.size());
+    size_t start = key.find_last_of('/', last);
+    std::string tail = (start == std::string::npos)
+                     ? key.substr(0, last + 1)
+                     : key.substr(start + 1, last - start);
+    if (!had_slash) {
+        // An index key ends in .json; a prefix does not.
+        const std::string ext = ".json";
+        if (tail.size() > ext.size() &&
+            tail.compare(tail.size() - ext.size(), ext.size(), ext) == 0)
+            tail = tail.substr(0, tail.size() - ext.size());
+        else
+            return "";
+    }
+    return tail;
+}
+
+// ── RoomEventEntry ────────────────────────────────────────────────────────────
+std::string RoomEventEntry::to_json() const {
+    json j = { {"event_id", event_id}, {"room_id", room_id},
+               {"started_at_ms", started_at_ms} };
+    return j.dump();
+}
+RoomEventEntry RoomEventEntry::from_json(const std::string& s) {
+    json j = json::parse(s);
+    RoomEventEntry e;
+    e.event_id      = j.value("event_id", "");
+    e.room_id       = j.value("room_id", "");
+    e.started_at_ms = j.value("started_at_ms", (int64_t)0);
+    return e;
+}
+
 // ── Manifest ──────────────────────────────────────────────────────────────────
 void Manifest::push(const ManifestSegment& s, size_t window) {
     // De-duplicate: a crash between publishing the manifest and clearing the

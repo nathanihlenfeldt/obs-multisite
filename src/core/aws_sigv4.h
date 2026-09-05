@@ -48,6 +48,10 @@ public:
     // Exposed for unit testing — normally internal.
     static std::string sha256_hex(const uint8_t* data, size_t len);
     static std::string uri_encode(const std::string& s, bool encode_slash);
+    // Canonicalise a query string the way S3 does: decode what the URL carries,
+    // re-encode it to the AWS rules, sort by encoded key. Listing requests are
+    // the only signed requests here that have a query at all.
+    static std::string canonical_query(const std::string& query);
 
 private:
     std::string m_access_key;

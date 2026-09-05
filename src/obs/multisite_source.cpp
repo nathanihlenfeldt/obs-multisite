@@ -21,6 +21,7 @@
 #include "decoder_settings.h"
 
 #include "../core/decoder_session.h"
+#include "../core/event_catalog.h"
 #include "../core/cmaf_decoder.h"
 #include "../core/s3_transport.h"
 
@@ -135,6 +136,17 @@ struct SourceCtx : DecoderControls {
     std::atomic<uint64_t> frames_dropped{0};
     std::atomic<uint64_t> last_resync_log_ns{0};
 
+    // ── Event list ───────────────────────────────────────────────────────────
+    // The catalog makes one request per event, so a refresh runs on the poll
+    // thread. The dock only ever sets a flag and reads the last result — it
+    // must never wait on the network.
+    std::shared_ptr<EventCatalog>   catalog;
+    std::atomic<bool>               events_refresh_wanted{false};
+    std::atomic<bool>               events_refreshing{false};
+    std::atomic<bool>               events_listed_once{false};
+    mutable std::mutex              events_mtx;
+    EventListing                    events_cache;
+
     // DecoderControls — driven by hotkeys and the Tools menu.
     void pause() override;
     void resume() override;
@@ -153,6 +165,10 @@ struct SourceCtx : DecoderControls {
     void set_delay_from_live(double seconds) override;
     void set_locked(bool l) override { controls_locked = l; }
     bool locked() const override { return controls_locked.load(); }
+    void refresh_events() override { events_refresh_wanted = true; }
+    void event_listing(EventListing& out) const override;
+    void pin_event(const std::string& event_id) override;
+    void unpin_event() override;
 
     // Marker chosen in the properties dialog, acted on by the Jump button.
     std::string pending_marker_id;
@@ -499,11 +515,17 @@ static void poll_loop(SourceCtx* ctx) {
                   : st == RoomState::Ended ? (sess->was_live_this_session()
                         ? "BROADCAST ENDED — playing out the recording"
                         : "a finished recording (was not live when loaded)")
+                  // An event whose encoder died rather than ending. It is still
+                  // a complete recording of everything up to that point, so it
+                  // plays; the wording says why it stops where it does.
+                  : st == RoomState::Interrupted
+                        ? "INTERRUPTED — the encoder stopped without ending; "
+                          "playing what was recorded"
                   : st == RoomState::Offline ? "offline"
                                              : "unknown";
                 mlog_info("source: room is %s%s", name,
                           st == RoomState::Offline ? " (encoder stopped or unreachable)" : "");
-                if ((st == RoomState::Offline || st == RoomState::Ended) &&
+                if ((st == RoomState::Offline || is_vod(st)) &&
                     !sess->last_error().empty())
                     mlog_warn("source: %s", sess->last_error().c_str());
             }
@@ -560,6 +582,46 @@ static void poll_loop(SourceCtx* ctx) {
                     mlog_info("source: resume delivered %llu frames in 2s — "
                               "playing", (unsigned long long)delivered);
                 }
+            }
+        }
+
+        // Event list refresh, on this thread rather than the operator's. A
+        // listing plus one manifest per event is seconds of network work; the
+        // dock sets a flag and reads the result whenever it arrives.
+        if (ctx->events_refresh_wanted.exchange(false)) {
+            std::shared_ptr<EventCatalog> cat;
+            { std::lock_guard<std::mutex> lk(ctx->obj_mtx); cat = ctx->catalog; }
+            if (cat) {
+                ctx->events_refreshing = true;
+                cat->refresh();
+                auto sess3 = get_session(ctx);
+                const std::string playing_id = sess3 ? sess3->event_id() : std::string();
+
+                EventListing listing;
+                listing.listed_once   = true;
+                listing.fallback_scan = cat->used_fallback_scan();
+                listing.skipped       = cat->skipped();
+                listing.error         = cat->last_error();
+                for (const auto& e : cat->events()) {
+                    EventEntry row;
+                    row.event_id   = e.event_id;
+                    row.started_ms = (long long)e.started_at_ms;
+                    row.duration_s = (long long)e.duration_s;
+                    row.state      = (int)e.state;
+                    row.pinned     = (e.event_id == playing_id);
+                    listing.events.push_back(std::move(row));
+                }
+                const size_t count = listing.events.size();
+                {
+                    std::lock_guard<std::mutex> lk(ctx->events_mtx);
+                    ctx->events_cache = std::move(listing);
+                }
+                ctx->events_listed_once = true;
+                ctx->events_refreshing  = false;
+                mlog_info("source: event list refreshed — %zu event(s)%s", count,
+                          cat->used_fallback_scan()
+                              ? " (scanned events/: these predate the room index)"
+                              : "");
             }
         }
 
@@ -800,10 +862,25 @@ static void src_update(void* data, obs_data_t* s) {
     {
         auto tx  = std::make_shared<S3Transport>(s3);
         auto ses = std::make_shared<DecoderSession>(dc, *tx);
+        // The catalog shares the transport and, deliberately, the same
+        // staleness rule as the decoder: the list and the player must never
+        // disagree about whether a service is still running.
+        CatalogConfig cc;
+        cc.room_id        = dc.room_id;
+        cc.stale_after_ms = dc.stale_after_ms;
+        auto cat = std::make_shared<EventCatalog>(cc, *tx);
         std::lock_guard<std::mutex> lk(ctx->obj_mtx);
         ctx->transport = tx;
         ctx->session   = ses;
+        ctx->catalog   = cat;
     }
+    {
+        // Start with a clean list: this may be a different room entirely.
+        std::lock_guard<std::mutex> lk(ctx->events_mtx);
+        ctx->events_cache = EventListing{};
+    }
+    ctx->events_listed_once = false;
+    ctx->events_refresh_wanted = true;   // populate the dock without a click
 
     register_decoder_controls(ctx);      // hotkeys act on this source
     ctx->running = true;
@@ -953,6 +1030,10 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     out.ended            = sess->event_ended();
     out.at_end           = sess->at_end();
     out.was_live         = sess->was_live_this_session();
+    out.interrupted      = sess->was_interrupted();
+    out.pinned_event_id  = sess->pinned_event();
+    out.live_elsewhere   = sess->live_elsewhere();
+    out.live_event_id    = sess->live_event_id();
     out.end_ms           = sess->end_wall_ms();
     out.total_ms = (out.ended && out.end_ms > 0 && out.started_ms > 0 &&
                     out.end_ms > out.started_ms)
@@ -990,6 +1071,41 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     if (auto cur = sess->current_marker()) out.current_marker = cur->label;
     for (const auto& m : sess->markers())
         out.markers.push_back({ m.label, m.id, (long long)m.at_ms });
+}
+
+void SourceCtx::event_listing(EventListing& out) const {
+    {
+        std::lock_guard<std::mutex> lk(events_mtx);
+        out = events_cache;
+    }
+    // Reported outside the cached copy so the dock can show "refreshing" the
+    // moment the button is pressed, not one refresh later.
+    out.loading = events_refreshing.load() || events_refresh_wanted.load();
+}
+
+void SourceCtx::pin_event(const std::string& event_id) {
+    auto sess = get_session(this);
+    if (!sess) return;
+    // Playing a different event is the same upheaval as the room switching:
+    // the cache, playhead and decoder timeline all belong to the old event.
+    // poll() performs that reset when it notices the target changed, and the
+    // discontinuity counter makes the host rebuild its decoder.
+    sess->pin_event(event_id);
+    playing = false;                  // an operator presses Play on cue
+    playing_at_ms = 0;
+    mlog_info("source: pinned event %s — playback will not follow a new "
+              "service starting", event_id.c_str());
+    events_refresh_wanted = true;     // so the list re-marks which row is playing
+}
+
+void SourceCtx::unpin_event() {
+    auto sess = get_session(this);
+    if (!sess) return;
+    sess->unpin();
+    playing = false;
+    playing_at_ms = 0;
+    mlog_info("source: unpinned — following whatever is live in the room");
+    events_refresh_wanted = true;
 }
 
 void SourceCtx::jump_to_marker(const std::string& id) {
