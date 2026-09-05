@@ -64,6 +64,17 @@ This ranking is the tie-breaker for every design choice.
   tablet over the local network. No OBS to learn, nothing to misconfigure, and
   it starts on power-up. Campuses that also mix local cameras or graphics run
   the OBS source plugin instead; both share the same core.
+- **The origin is not tied to hardware.** Encoder and decoder ship in one module,
+  so any machine running OBS can take either role, and what originates a service
+  is a laptop with OBS on it. A broadcast can come from a guest speaker's laptop, a
+  conference venue for one week, a campus hosting this week's combined service,
+  or a site set up at short notice; adding an origin costs a room name and a key
+  that can write to it. Nothing ships, clears customs, or is licensed per
+  location. Store-and-forward matters *more* for an occasional origin than a
+  permanent one: a speaker on hotel wifi or a phone hotspot has the worst
+  connection in the chain and can least afford a dropout mid-sermon, and a
+  broadcast written to disk and resent survives a link that would kill a direct
+  stream.
 
 ---
 

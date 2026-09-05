@@ -248,6 +248,38 @@ multi-channel audio currently arrives as a single multi-channel stream — routi
 individual channels to separate destinations needs the de-interleaver, which is
 not built (see [Known gaps](#known-gaps)).
 
+### Any location can be the origin
+
+Both plugins are one module, so any machine running OBS can take either role.
+What originates a service is a laptop with OBS on it, so a broadcast can start
+anywhere someone can run it:
+
+- a guest speaker or travelling pastor, publishing from wherever they are;
+- a conference or camp venue, for a week, and then never again;
+- a second campus hosting this week's combined service, with the usual main
+  site receiving for once;
+- a temporary or overflow site set up at short notice.
+
+Adding an origin costs a room name and a key that can write to it. There is no
+hardware to specify a year ahead, nothing to ship or clear through customs, and
+nothing licensed per location — which matters most in exactly the places this
+project is for.
+
+The reliability argument is *stronger* for an occasional origin than for a
+permanent one. A speaker broadcasting from a hotel, a phone hotspot or a venue
+nobody surveyed has the worst connection anyone in the chain will have, and can
+least afford a dropout halfway through a sermon. Because segments are written to
+disk and resent until storage confirms them, that broadcast survives a link
+which would kill a direct stream — it arrives whole or visibly incomplete, never
+broken in the middle.
+
+The latency rule is unchanged: tens of seconds each way means this relays a
+service, it does not hold a conversation between sites.
+
+Keep rooms separate — a guest publishes to `guest-speaker`, not to
+`main-auditorium` — so an occasional broadcast can never be mistaken for the
+main programme.
+
 ### When the appliance is the better answer
 
 The appliance gives all of that up on purpose. No scene, no overlays, no local
