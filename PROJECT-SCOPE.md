@@ -511,19 +511,27 @@ HTML with a WebSocket for live updates. It should carry the same plain language
 
 ## 9. Capability overview
 
-| Capability | Commercial multisite platforms | This project |
-|---|---|---|
-| Resilient store-and-forward | yes | yes |
-| Multisite to many campuses | yes | yes (unlimited; storage-cost only) |
-| Markers / service cues | yes | yes |
-| Pause & hold at a campus | yes | yes (timeslipping) |
-| Per-campus independent DVR position | partial | yes |
-| Multi-track production audio (main/ISOs/click) | partial | yes, up to 6 tracks |
-| Dedicated receive appliance | yes (hardware decoder) | yes (Raspberry Pi / mini-PC) |
-| Self-hosted / own your storage | no (SaaS) | yes |
-| Open protocol, no vendor lock-in | no | yes |
-| Web/mobile simulcast from same files | yes | planned (CMAF makes it feasible) |
-| Scheduling / auto-go-live | yes | planned |
+What this project does, and where each piece stands. Status is against the
+codebase, not against anything else on the market — where a commercial platform
+is the better answer for a given church, section 12 says so plainly.
+
+| Capability | Status |
+|---|---|
+| Resilient store-and-forward upload | built |
+| Multisite to any number of campuses (storage cost only) | built |
+| Markers / service cues | built |
+| Pause & hold at a campus, resuming exactly where it stopped | built |
+| Per-campus independent DVR position | built |
+| Multi-track production audio (main / ISOs / click), up to 6 tracks | built (packed multi-channel; see §4.3) |
+| Event browsing with live / recording / interrupted state | built |
+| Video-on-demand playback of past and interrupted services | built |
+| Any OBS machine can originate a broadcast | built |
+| Dedicated receive appliance (Raspberry Pi / mini-PC) | built, not yet run through a service |
+| Self-hosted, on storage you own | built |
+| Open protocol, no vendor lock-in | by design — the whole protocol is §4 |
+| Per-channel routing of packed audio (de-interleaver) | not built |
+| Web / mobile simulcast from the same files | planned; CMAF makes it feasible |
+| Scheduling / auto-go-live | planned |
 
 Further directions to explore: web/mobile simulcast served directly from the
 bucket, multi-bucket mirroring for redundancy, and local insertion windows for
