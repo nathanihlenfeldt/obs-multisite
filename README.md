@@ -400,6 +400,39 @@ With the operator docks (adds Qt6 and obs-frontend-api):
 cmake -S . -B build -DBUILD_OBS_PLUGIN=ON -DENABLE_QT=ON
 ```
 
+### macOS
+
+Apple Silicon only, and the core needs no OpenSSL — it uses CommonCrypto from
+libSystem, so a built plugin loads on a Mac that has never had Homebrew.
+`ctest` should pass 13/13 with nothing installed but CMake and FFmpeg.
+
+To build the plugin against an installed OBS, you need headers matching it
+(they are not in the app) and `simde`, which OBS vendors as a submodule that
+the source tarball omits:
+
+```sh
+brew install simde ffmpeg
+curl -L https://github.com/obsproject/obs-studio/archive/refs/tags/32.2.2.tar.gz | tar xz
+printf '#pragma once\n#define OBS_RELEASE_CANDIDATE 0\n#define OBS_BETA 0\n' > obsconfig.h
+cmake -S . -B build -DBUILD_OBS_PLUGIN=ON \
+  -DLIBOBS_INCLUDE_DIR=$PWD/obs-studio-32.2.2/libobs \
+  -DLIBOBS_CONFIG_INCLUDE_DIR=$PWD \
+  -DLIBOBS_LIBRARY=/Applications/OBS.app/Contents/Frameworks/libobs.framework/libobs \
+  -DCMAKE_CXX_FLAGS=-I/opt/homebrew/include
+cmake --build build --target obs-multisite
+```
+
+That produces `obs-multisite.plugin`, which goes in
+`~/Library/Application Support/obs-studio/plugins/`. libobs resolves from
+OBS.app at load time through `@rpath`, so the plugin carries no copy of it.
+
+**One caveat before distributing such a build:** it will link Homebrew's
+FFmpeg by absolute path, so it only loads on a machine with that exact
+version installed. OBS ships its own FFmpeg in `OBS.app/Contents/Frameworks`,
+and a release build has to link those instead — which is what obs-deps
+provides and what a release job must use.
+
+
 With the public simulcast relay (adds SQLite; needs the `ffmpeg` command at
 run time, not at build time):
 

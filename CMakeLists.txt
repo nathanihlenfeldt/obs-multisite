@@ -6,6 +6,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 option(BUILD_OBS_PLUGIN "Build the OBS plugin module (needs libobs)" OFF)
 
+# ── macOS build settings ─────────────────────────────────────────────────────
+# Apple Silicon only, by decision rather than by omission: an Intel slice would
+# double the build and the download for machines this project is unlikely to
+# meet. Override CMAKE_OSX_ARCHITECTURES to build otherwise.
+#
+# The deployment target matches what OBS 30 and later require, so the plugin
+# cannot claim to run on a system the host application does not.
+if(APPLE)
+    if(NOT CMAKE_OSX_ARCHITECTURES)
+        set(CMAKE_OSX_ARCHITECTURES "arm64" CACHE STRING "" FORCE)
+    endif()
+    if(NOT CMAKE_OSX_DEPLOYMENT_TARGET)
+        set(CMAKE_OSX_DEPLOYMENT_TARGET "13.0" CACHE STRING "" FORCE)
+    endif()
+endif()
+
 # ── Reliability core: no OBS, no FFmpeg. Builds everywhere. ───────────────────
 # Windows: keep <windows.h> from defining min/max macros that break std::min /
 # std::max, and trim the header surface.
@@ -443,7 +459,42 @@ if(BUILD_OBS_PLUGIN)
     # FFmpeg comes through multisite_cmaf's INTERFACE link (ffmpeg_iface).
     set_target_properties(obs-multisite PROPERTIES PREFIX "")
 
-    if(WIN32)
+    if(APPLE)
+        # macOS OBS loads plugins as .plugin BUNDLES, not bare shared objects:
+        # a loose .so in the plugins directory is ignored silently. The bundle
+        # carries the binary in Contents/MacOS and the locale files in
+        # Contents/Resources, which is where obs_module_text looks.
+        set_target_properties(obs-multisite PROPERTIES
+            BUNDLE TRUE
+            BUNDLE_EXTENSION "plugin"
+            OUTPUT_NAME "obs-multisite"
+            MACOSX_BUNDLE_INFO_PLIST
+                "${CMAKE_CURRENT_SOURCE_DIR}/cmake/macos/Info.plist.in")
+
+        # libobs is linked from OBS.app at runtime, so the plugin must not
+        # carry a copy and must resolve it through the host application.
+        target_link_options(obs-multisite PRIVATE
+            -Wl,-undefined,dynamic_lookup)
+
+        # The data directory becomes Contents/Resources inside the bundle.
+        file(GLOB_RECURSE _ms_data RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/data"
+             "${CMAKE_CURRENT_SOURCE_DIR}/data/*")
+        foreach(_f ${_ms_data})
+            get_filename_component(_d "${_f}" DIRECTORY)
+            target_sources(obs-multisite PRIVATE
+                "${CMAKE_CURRENT_SOURCE_DIR}/data/${_f}")
+            set_source_files_properties(
+                "${CMAKE_CURRENT_SOURCE_DIR}/data/${_f}" PROPERTIES
+                MACOSX_PACKAGE_LOCATION "Resources/${_d}"
+                HEADER_FILE_ONLY TRUE)
+        endforeach()
+
+        # LIBRARY, not BUNDLE: the BUNDLE keyword is for MACOSX_BUNDLE
+        # executables. A MODULE library that is a CFBundle installs under
+        # LIBRARY, and CMake fails at configure time if only BUNDLE is given.
+        install(TARGETS obs-multisite
+            LIBRARY DESTINATION "$ENV{HOME}/Library/Application Support/obs-studio/plugins")
+    elseif(WIN32)
         # A MODULE library installs under LIBRARY on every platform, including
         # Windows — RUNTIME applies to executables and DLLs from SHARED targets.
         install(TARGETS obs-multisite
