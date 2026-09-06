@@ -1,8 +1,10 @@
 //
-// crypto_openssl.cpp — OpenSSL backend (macOS / Linux).
-// Compiled only when NOT targeting Windows.
+// crypto_openssl.cpp — OpenSSL backend (Linux, and any Unix that is not macOS).
 //
-#if !defined(_WIN32)
+// Windows uses CNG and macOS uses CommonCrypto, both part of the OS. This is
+// the backend for platforms where the system crypto is OpenSSL anyway.
+//
+#if !defined(_WIN32) && !defined(__APPLE__)
 
 #include "crypto.h"
 #include <openssl/sha.h>
@@ -40,4 +42,4 @@ std::string sha256_hex(const uint8_t* data, size_t len) {
 } // namespace crypto
 } // namespace multisite
 
-#endif // !_WIN32
+#endif // !_WIN32 && !__APPLE__

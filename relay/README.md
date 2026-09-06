@@ -239,7 +239,12 @@ command at runtime. The relay is off by default in the main build: it is a
 server-side service, and a plugin build should not be made to find SQLite for
 something it does not use.
 
-Run the tests with `ctest -R "stream_plan|relay_state"`. They cover what can be
+Run the tests with `ctest -R "stream_plan|relay_state|config_store"`. CI also
+builds the image and drives the running container — that it answers on its
+published port, that the interface loads, and that nothing behind the login is
+reachable without one. Every relay fault that has reached a user so far got
+through by not being run rather than by failing to compile, so that job exists
+to run it. They cover what can be
 proved without a destination: which feeds may be sent and which must be
 refused, the audio-track mapping, and the whole lifecycle including the stall
 grace period and reconnection. What they deliberately do not cover is ffmpeg

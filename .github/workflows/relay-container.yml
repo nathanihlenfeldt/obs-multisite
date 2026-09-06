@@ -1,0 +1,137 @@
+name: relay container
+
+# Builds the relay's image and proves the container actually works, because
+# every relay failure that reached a user so far got through by not being run:
+# a Dockerfile that had never been built, and an image that started, listened
+# on its own loopback, and answered nobody through its published port. Neither
+# is visible from a compile, and both are obvious the moment something curls it.
+
+on:
+  push:
+    branches: [ main, master ]
+    tags: [ 'v*' ]
+    paths:
+      - 'relay/**'
+      - 'src/core/**'
+      - 'src/appliance/http_server.*'
+      - 'CMakeLists.txt'
+      - '.github/workflows/relay-container.yml'
+  pull_request:
+    paths:
+      - 'relay/**'
+      - 'src/core/**'
+      - 'src/appliance/http_server.*'
+      - 'CMakeLists.txt'
+      - '.github/workflows/relay-container.yml'
+  workflow_dispatch:
+
+jobs:
+  container:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+
+      # The context is the repository root, matching docker-compose.yml. This
+      # is the step that would have caught the Dockerfile that could not
+      # configure because tests/ was never copied into it.
+      #
+      # The image build also runs the relay's own test suites, so a build that
+      # gets this far has passed them.
+      - name: Build the image
+        run: docker build -f relay/Dockerfile -t multisite-relay:ci .
+
+      # Published the way docker-compose.yml publishes it: bound to the host's
+      # loopback. If the process inside binds its own loopback instead of every
+      # interface, nothing reaches it and every check below fails — which is
+      # exactly the bug this exists to catch.
+      - name: Start it
+        run: |
+          docker run -d --name relay-ci \
+            -p 127.0.0.1:8080:8080 \
+            -e RELAY_ROOM=main-auditorium \
+            multisite-relay:ci
+
+      - name: Wait for it to answer
+        run: |
+          for i in $(seq 1 30); do
+            if curl -fsS -m 3 http://127.0.0.1:8080/api/session > /dev/null 2>&1; then
+              echo "answered after ${i}s"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "::error::The container never answered on its published port."
+          docker logs relay-ci || true
+          exit 1
+
+      - name: It serves the interface
+        run: |
+          curl -fsS -m 5 http://127.0.0.1:8080/ | grep -q "Public streaming" \
+            || { echo "::error::The page did not come back."; exit 1; }
+
+      # The relay can change where a church broadcasts. An unauthenticated
+      # request must never be answered, and this is the check that says so
+      # rather than trusting that every route was remembered.
+      - name: Nothing is reachable without signing in
+        run: |
+          fail=0
+          for endpoint in /api/status /api/config /api/destinations /api/log \
+                          /api/events /api/rebroadcast; do
+            code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' "http://127.0.0.1:8080${endpoint}")
+            echo "  GET ${endpoint} -> ${code}"
+            if [ "${code}" = "200" ]; then
+              echo "::error::${endpoint} answered without a session."
+              fail=1
+            fi
+          done
+          for endpoint in /api/config /api/destinations/update /api/destinations; do
+            code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST \
+                     -H 'Content-Type: application/json' \
+                     -d '{"url":"rtmp://elsewhere/live","bucket":"elsewhere"}' \
+                     "http://127.0.0.1:8080${endpoint}")
+            echo "  POST ${endpoint} -> ${code}"
+            if [ "${code}" = "200" ]; then
+              echo "::error::${endpoint} accepted a change without a session."
+              fail=1
+            fi
+          done
+          exit $fail
+
+      - name: Signing in works, and then it does answer
+        run: |
+          # A password under the minimum must be refused, or the floor is not a
+          # floor.
+          code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -X POST \
+                   -H 'Content-Type: application/json' \
+                   -d '{"username":"ci","password":"short"}' \
+                   http://127.0.0.1:8080/api/session)
+          [ "${code}" = "200" ] && { echo "::error::A short password was accepted."; exit 1; }
+
+          curl -fsS -m 5 -c /tmp/jar -X POST \
+            -H 'Content-Type: application/json' \
+            -d '{"username":"ci","password":"a-long-enough-password"}' \
+            http://127.0.0.1:8080/api/session > /dev/null
+
+          code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' -b /tmp/jar \
+                   http://127.0.0.1:8080/api/status)
+          echo "  GET /api/status with a session -> ${code}"
+          [ "${code}" = "200" ] || { echo "::error::Signing in did not grant access."; exit 1; }
+
+          # ...and a forged cookie does not.
+          code=$(curl -s -o /dev/null -m 5 -w '%{http_code}' \
+                   -H 'Cookie: relay_session=notarealtoken' \
+                   http://127.0.0.1:8080/api/status)
+          echo "  GET /api/status with a forged cookie -> ${code}"
+          [ "${code}" = "200" ] && { echo "::error::A forged session was accepted."; exit 1; }
+          exit 0
+
+      - name: It is still running, and said nothing alarming
+        run: |
+          docker inspect -f '{{.State.Running}}' relay-ci | grep -q true \
+            || { echo "::error::The container fell over during the checks."; docker logs relay-ci; exit 1; }
+          echo "--- container log ---"
+          docker logs relay-ci
+
+      - name: Stop it
+        if: always()
+        run: docker rm -f relay-ci || true

@@ -28,9 +28,18 @@ target_include_directories(multisite_core PUBLIC src src/core)
 # OBS plugin module.
 set_target_properties(multisite_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
 
+# Crypto backend: the platform's own, never a shipped dependency. The signer
+# needs SHA-256 and HMAC-SHA256 and nothing else, which every one of these
+# provides — so a plugin is never the reason a church has to install a library.
 if(WIN32)
     target_sources(multisite_core PRIVATE src/core/crypto_bcrypt.cpp)
     target_link_libraries(multisite_core PUBLIC bcrypt)
+elseif(APPLE)
+    # CommonCrypto lives in libSystem, which is already linked. Nothing to find
+    # and nothing to ship: an OpenSSL build would fail to load on any Mac
+    # without Homebrew, which is most of them.
+    target_sources(multisite_core PRIVATE src/core/crypto_apple.cpp)
+    message(STATUS "crypto backend: CommonCrypto (macOS)")
 else()
     find_package(OpenSSL REQUIRED)
     target_sources(multisite_core PRIVATE src/core/crypto_openssl.cpp)
@@ -55,6 +64,14 @@ if(UNIX)
              COMMAND sh ${CMAKE_CURRENT_SOURCE_DIR}/tests/test_core_portable.sh
                         ${CMAKE_CURRENT_SOURCE_DIR}/src/core)
 endif()
+
+# The signer's entire output derives from these two functions, and each
+# platform uses a different implementation of them. A wrong digest fails as
+# SignatureDoesNotMatch, which reads as a mistyped secret key — so every
+# backend is checked against published vectors rather than against itself.
+add_executable(test_crypto tests/test_crypto.cpp)
+target_link_libraries(test_crypto PRIVATE multisite_core)
+add_test(NAME crypto COMMAND test_crypto)
 
 add_executable(test_session tests/test_session.cpp)
 target_link_libraries(test_session PRIVATE multisite_core)
