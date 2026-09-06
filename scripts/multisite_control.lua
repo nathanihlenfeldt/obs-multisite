@@ -130,7 +130,7 @@ function go_live()
   obs.obs_data_set_string(s, "room_id", cfg.room_id)
   obs.obs_data_set_double(s, "segment_duration_s", cfg.seg_dur)
   obs.obs_data_set_string(s, "track_labels", cfg.track_labels)
-  obs.obs_data_set_bool(s, "use_object_tags", false)  -- R2 rejects tagging
+  obs.obs_data_set_bool(s, "send_expiry_tag", false)  -- R2 rejects tagging
 
   output = obs.obs_output_create("multisite_output", "multisite_out", s, nil)
   obs.obs_data_release(s)

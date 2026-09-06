@@ -38,7 +38,13 @@ struct SessionConfig {
     // Object tagging: S3 supports it, but Cloudflare R2 does NOT and rejects
     // requests carrying x-amz-tagging. R2 users should instead configure a
     // bucket lifecycle rule by prefix/age. Default off for broad compatibility.
-    bool        use_object_tags = false;
+    // Whether to attach the expiry tag to each PUT. Named for what it does,
+    // not for what it might appear to achieve: it does NOT expire anything.
+    // A tag only gives a bucket lifecycle rule something to match, and the
+    // rule is what deletes. Off by default because Cloudflare R2 rejects
+    // x-amz-tagging outright, and because prefix-and-age rules are the
+    // portable mechanism (see scope §4.6).
+    bool        send_expiry_tag = false;
     std::string expiry_tag_key = "MultisiteExpiry";
     std::string expiry_tag_val = "7d";
     int         heartbeat_interval_s = 10; // live.json refresh cadence

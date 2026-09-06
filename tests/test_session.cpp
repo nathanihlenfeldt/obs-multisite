@@ -261,7 +261,7 @@ int main() {
         // Simulate a store that REJECTS tagged requests, the way R2 does.
         SessionConfig cfg;
         cfg.spool_dir = (base / "s5t").string();
-        cfg.use_object_tags = false;          // R2 mode
+        cfg.send_expiry_tag = false;          // R2 mode
         store.expect_tags = false;
         Session ses(cfg, store);
         CHECK(ses.start_new(blob(0), video, tracks), "session starts without tags");

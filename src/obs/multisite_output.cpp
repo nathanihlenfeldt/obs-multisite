@@ -43,7 +43,10 @@ static constexpr char S_REGION[]    = "region";
 static constexpr char S_ROOM[]      = "room_id";
 static constexpr char S_SEGDUR[]    = "segment_duration_s";
 static constexpr char S_TRACKLBL[]  = "track_labels";   // comma-separated
-static constexpr char S_TAGS[]      = "use_object_tags";
+static constexpr char S_TAGS[]      = "send_expiry_tag";
+// The key this setting used to use. Read as a fallback so a scene saved
+// with tagging switched on keeps sending the tag after the rename.
+static constexpr char S_TAGS_OLD[]  = "use_object_tags";
 static constexpr char S_CHANLBL[]   = "channel_labels";
 static constexpr char S_MARKERS[]   = "marker_labels";
 
@@ -330,7 +333,7 @@ static obs_properties_t* out_props(void*) {
     // Packed multi-channel mode: what each channel of the audio track carries.
     obs_properties_add_text(p, S_CHANLBL, obs_module_text("ChannelLabels"), OBS_TEXT_DEFAULT);
     // R2 rejects x-amz-tagging; leave off unless the store supports tagging.
-    obs_properties_add_bool(p, S_TAGS, obs_module_text("UseObjectTags"));
+    obs_properties_add_bool(p, S_TAGS, obs_module_text("SendExpiryTag"));
     obs_properties_add_text(p, S_MARKERS, obs_module_text("MarkerLabels"),
                             OBS_TEXT_DEFAULT);
     return p;
@@ -394,7 +397,8 @@ static bool out_start(void* data) {
     sc.segment_duration_s = obs_data_get_double(s, S_SEGDUR);
     std::string labels     = obs_data_get_string(s, S_TRACKLBL);
     std::string chan_labels = obs_data_get_string(s, S_CHANLBL);
-    sc.use_object_tags     = obs_data_get_bool(s, S_TAGS);
+    sc.send_expiry_tag     = obs_data_get_bool(s, S_TAGS) ||
+                             obs_data_get_bool(s, S_TAGS_OLD);
     ctx->marker_label_csv  = obs_data_get_string(s, S_MARKERS);
     obs_data_release(s);
 

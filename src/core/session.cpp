@@ -40,7 +40,7 @@ Session::Session(SessionConfig cfg, Transport& transport)
 
     UploaderConfig ucfg;
     ucfg.content_type = "video/mp4";
-    if (m_cfg.use_object_tags)
+    if (m_cfg.send_expiry_tag)
         ucfg.tags = { { m_cfg.expiry_tag_key, m_cfg.expiry_tag_val } };
     else
         ucfg.tags.clear();
@@ -71,7 +71,7 @@ std::string Session::segment_key(uint64_t seq) const {
 bool Session::put_bytes(const std::string& key, const std::vector<uint8_t>& b,
                         const std::string& content_type) {
     std::map<std::string, std::string> tags;
-    if (m_cfg.use_object_tags)
+    if (m_cfg.send_expiry_tag)
         tags[m_cfg.expiry_tag_key] = m_cfg.expiry_tag_val;
     PutResult r = m_tx.put(key, b, content_type, tags);
     if (!r.success) {

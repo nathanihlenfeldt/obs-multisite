@@ -126,7 +126,7 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_secret->setEchoMode(QLineEdit::Password);
     m_region    = new QLineEdit(storeBox);
     m_room      = new QLineEdit(storeBox);
-    m_tags      = new QCheckBox(tr_("UseObjectTags"), storeBox);
+    m_tags      = new QCheckBox(tr_("SendExpiryTag"), storeBox);
     form->addRow(tr_("R2AccountID"), m_accountId);
     form->addRow(tr_("EndpointHost"), m_endpoint);
     form->addRow(tr_("Bucket"), m_bucket);
@@ -270,7 +270,7 @@ void EncoderDock::loadIntoFields() {
     m_secret->setText(QString::fromStdString(cfg.secret_access_key));
     m_region->setText(QString::fromStdString(cfg.region));
     m_room->setText(QString::fromStdString(cfg.room_id));
-    m_tags->setChecked(cfg.use_object_tags);
+    m_tags->setChecked(cfg.send_expiry_tag);
     {
         const int idx = m_encoder->findData(
             QString::fromStdString(cfg.video_encoder_id));
@@ -297,7 +297,7 @@ void EncoderDock::onSaveSettings() {
     cfg.secret_access_key = m_secret->text().trimmed().toStdString();
     cfg.region            = m_region->text().trimmed().toStdString();
     cfg.room_id           = m_room->text().trimmed().toStdString();
-    cfg.use_object_tags   = m_tags->isChecked();
+    cfg.send_expiry_tag   = m_tags->isChecked();
     cfg.video_encoder_id   = m_encoder->currentData().toString().toStdString();
     cfg.segment_duration_s = m_segDur->value();
     cfg.video_bitrate_kbps = m_vBitrate->value();

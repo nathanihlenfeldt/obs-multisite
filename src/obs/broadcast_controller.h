@@ -25,7 +25,7 @@ struct BroadcastSettings {
     std::string secret_access_key;
     std::string region = "auto";
     std::string room_id = "main-auditorium";
-    bool        use_object_tags = false;   // R2 rejects tagging
+    bool        send_expiry_tag = false;   // R2 rejects tagging; a tag deletes nothing
 
     // media
     // Which OBS video encoder to use. Defaults to x264 because it exists on
