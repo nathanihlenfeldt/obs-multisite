@@ -15,10 +15,11 @@ Design priority, in order: **reliability**, then quality, then simplicity, and
 far more than one that is two seconds behind and stutters.
 
 > **⚠️ Alpha — development build.** This is pre-release software under active
-> development. It has been exercised end to end but has not yet carried a real
-> service. Interfaces, settings and the storage protocol may still change
-> without a migration path, and there is no support contract, warranty or
-> uptime guarantee of any kind.
+> development. A six-hour continuous soak has been run end to end (see
+> [Status](#status)), but it has not yet carried a real congregation's service.
+> Interfaces, settings and the storage protocol may still change without a
+> migration path, and there is no support contract, warranty or uptime
+> guarantee of any kind.
 >
 > Production use comes with caveats. Run it only with a tested fallback in
 > place, a technical person on hand, and the assumption that any given service
@@ -110,9 +111,16 @@ someone took the time to paste a log.
 
 Phases 1–5 are built and running against real Cloudflare R2: capture, upload,
 the storage protocol, receive, timeslipping, markers, and the operator UI. It
-has been exercised end to end between two Windows machines but **has not yet run
-a real service** — a full-length soak test is the most valuable outstanding
-task.
+has been run between two Windows machines through a **six-hour continuous soak
+test**: 3,661 segments, over 15 GB uploaded, **zero retries and zero upload
+failures**, and 10 lagged frames out of 658,837 (0.0%). Six audio tracks were
+carried throughout, timeslipping held a campus a steady two and then three
+minutes behind live for hours, a scrub back nearly three hours and a return to
+live both recovered cleanly, and the satellite played out to the end of the
+recording when the broadcast stopped.
+
+It has still **not carried a real congregation's service** — a soak test on
+looping media is not a Sunday morning with people in the room.
 
 A campus can receive in either of two ways — the OBS decoder on a PC, or the
 Raspberry Pi appliance — and both are built. See
@@ -530,8 +538,11 @@ Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
   straight trade against streaming publicly.
 - **The relay cannot split packed multi-channel audio**, and cannot start
   itself on a schedule or when the encoder goes live.
-- **No soak test yet.** Sustained behaviour over a full service is untested and
-  is the highest-value thing that is not code. The relay has run 44 minutes
+- **Not yet used for a real service.** A six-hour soak has been run (see
+  [Status](#status)) but no congregation has watched anything through this. The
+  soak covered sustained upload, timeslipping and playout; it did not cover a
+  room full of people, a volunteer under pressure, or a venue's actual network
+  on a Sunday. The relay has run 44 minutes
   unattended without a fault, which is encouraging and is not a service.
 
 ---

@@ -8,10 +8,11 @@ database, no vendor. Intelligence lives entirely in the edge plugins; the bucket
 is a dumb file store.
 
 > **⚠️ Alpha — development build.** This is pre-release software under active
-> development. It has been exercised end to end but has not yet carried a real
-> service. Interfaces, settings and the storage protocol may still change
-> without a migration path, and there is no support contract, warranty or
-> uptime guarantee of any kind.
+> development. A six-hour continuous soak has been run end to end (see
+> the README's Status section), but it has not yet carried a real congregation's service.
+> Interfaces, settings and the storage protocol may still change without a
+> migration path, and there is no support contract, warranty or uptime
+> guarantee of any kind.
 >
 > Production use comes with caveats. Run it only with a tested fallback in
 > place, a technical person on hand, and the assumption that any given service

@@ -19,6 +19,7 @@ extern "C" {
 #include <libavcodec/avcodec.h>
 }
 
+#include <algorithm>
 #include <atomic>
 #include <condition_variable>
 #include <deque>
@@ -224,20 +225,31 @@ static bool build_tracks(OutputCtx* ctx, std::vector<CmafTrack>& tracks,
     }
     mlog_info("configured %d video + %d audio track(s)", 1, audio_n);
 
-    // If the operator has named more than two channels but OBS is running in a
-    // narrower layout, the extra content never reaches the encoder at all.
+    // The packed-mode warning, and ONLY for packed mode.
+    //
+    // It used to fire whenever more than two channel names were filled in,
+    // regardless of what was actually being sent. A six-track multi-track
+    // setup — the primary mode, and correct at a stereo global layout — was
+    // therefore told to switch OBS to 7.1, which is the wrong advice: it would
+    // have widened every track for no reason. Channel names left over in the
+    // settings are not evidence of intent.
+    //
+    // Packed means a track that actually carries more than two channels. That
+    // is the only case where the global layout can silently destroy content.
     {
-        auto cl = split_csv(channel_label_csv);
-        size_t named = 0;
-        for (auto& c : cl) if (!trim(c).empty()) ++named;
+        bool packed = false;
+        for (const auto& a : ainfo) if (a.channels > 2) { packed = true; break; }
         struct obs_audio_info oai = {};
-        if (named > 2 && obs_get_audio_info(&oai)) {
+        if (packed && obs_get_audio_info(&oai)) {
             const int global_ch = (int)get_audio_channels(oai.speakers);
-            if (global_ch <= 2)
-                mlog_warn("%zu channels are named but OBS is set to %d "
-                          "channel(s) — set Settings -> Audio -> Channels to "
-                          "7.1 to send packed multi-channel audio",
-                          named, global_ch);
+            int widest = 0;
+            for (const auto& a : ainfo) widest = std::max(widest, a.channels);
+            if (widest > global_ch)
+                mlog_warn("a track carries %d channels but OBS is set to %d — "
+                          "the extra channels are DOWNMIXED and lost. Set "
+                          "Settings -> Audio -> Channels to 7.1, or send the "
+                          "channels as separate tracks instead.",
+                          widest, global_ch);
         }
     }
     return true;
@@ -544,16 +556,29 @@ static void out_stop(void* data, uint64_t) {
     writer_shutdown(ctx);
 
     if (ctx->session) {
+        auto before = ctx->session->status();
+        if (before.pending)
+            mlog_info("draining %zu queued segment(s) before stopping",
+                      before.pending);
+
+        ctx->session->end();                    // drains spool, marks ended
+
+        // Reported AFTER the drain. The old order printed the queue depth as
+        // it stood before end() ran, so a clean shutdown that uploaded its
+        // last fragments still signed off with "2 pending" — which reads as
+        // two segments lost when nothing had been.
         auto st = ctx->session->status();
-        mlog_info("stopping: %llu confirmed, %zu pending, %llu retries, "
-                  "%llu segments muxed",
-                  (unsigned long long)st.confirmed_total, st.pending,
+        mlog_info("stopped: %llu confirmed, %llu retries, %llu segments muxed",
+                  (unsigned long long)st.confirmed_total,
                   (unsigned long long)st.retries,
                   (unsigned long long)ctx->segments_muxed);
+        if (st.pending)
+            mlog_warn("%zu segment(s) were still unsent when the drain "
+                      "deadline passed — they remain in the spool and will be "
+                      "uploaded if this event is resumed", st.pending);
         if (ctx->segments_muxed == 0)
             mlog_warn("no segments were produced — check that the video "
                       "encoder's keyframe interval is <= the segment duration");
-        ctx->session->end();                    // drains spool, marks ended
     }
     unregister_encoder_controls(ctx);
     ctx->started = false;

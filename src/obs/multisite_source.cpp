@@ -1624,6 +1624,7 @@ static obs_properties_t* src_props(void* data) {
 // is stated in the properties rather than left to be discovered.
 struct AudioCtx {
     AudioSub sub;
+    bool     registered = false;
 };
 
 static const char* aud_name(void*) {
@@ -1632,12 +1633,25 @@ static const char* aud_name(void*) {
 
 static void aud_update(void* data, obs_data_t* s) {
     auto* c = static_cast<AudioCtx*>(data);
-    unregister_audio_sub(&c->sub);
     DecoderSettings shared = decoder_settings();
     const char* room = obs_data_get_string(s, S_ROOM);
-    c->sub.room_id = (room && *room) ? std::string(room) : shared.room_id;
-    c->sub.track   = (int)obs_data_get_int(s, S_ATRACK);
+    const std::string want_room = (room && *room) ? std::string(room)
+                                                  : shared.room_id;
+    const int want_track = (int)obs_data_get_int(s, S_ATRACK);
+
+    // OBS calls update on every keystroke in a text field, so typing a room
+    // name arrives as one call per character. Re-registering each time is
+    // harmless but logging each time is not: a soak test showed fifteen lines
+    // for one room name, which buries the entries that matter.
+    if (c->registered && c->sub.room_id == want_room &&
+        c->sub.track == want_track)
+        return;
+
+    unregister_audio_sub(&c->sub);
+    c->sub.room_id = want_room;
+    c->sub.track   = want_track;
     register_audio_sub(&c->sub);
+    c->registered = true;
     mlog_info("audio source: room '%s', track %d",
               c->sub.room_id.c_str(), c->sub.track + 1);
 }
@@ -1652,6 +1666,7 @@ static void* aud_create(obs_data_t* settings, obs_source_t* source) {
 static void aud_destroy(void* data) {
     auto* c = static_cast<AudioCtx*>(data);
     unregister_audio_sub(&c->sub);
+    c->registered = false;
     delete c;
 }
 
