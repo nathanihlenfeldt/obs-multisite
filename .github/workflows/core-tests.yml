@@ -11,7 +11,11 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        os: [ ubuntu-latest, windows-latest ]
+        # macos-14 is Apple Silicon. It is here to keep the CommonCrypto
+        # decision true: a Mac has no OpenSSL, so a regression reintroducing
+        # that dependency would build on the other two runners and fail only
+        # on the platform nobody was testing.
+        os: [ ubuntu-latest, windows-latest, macos-14 ]
     runs-on: ${{ matrix.os }}
     steps:
       - uses: actions/checkout@v5
@@ -31,6 +35,15 @@ jobs:
           pkg-config --modversion libavformat
           pkg-config --modversion libcurl
 
+      - name: Install FFmpeg (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          brew install ffmpeg
+          echo "--- dependency versions ---"
+          ffmpeg -version | head -1
+          # Deliberately no OpenSSL: the point of this leg is that the core
+          # needs none on a Mac.
+
       - name: Configure
         run: cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
 
@@ -39,5 +52,18 @@ jobs:
 
       # -V prints the CMAF driver's diagnostics (ffmpeg version, encoder used,
       # fixture streams, per-fragment frame counts) so any failure is legible.
+      # "It compiled" is not the property that matters here. "It will load on
+      # a Mac that has never had Homebrew" is, and that means no libcrypto.
+      - name: Verify no OpenSSL is linked (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          echo "--- linked libraries ---"
+          otool -L build/test_crypto
+          if otool -L build/test_crypto | grep -qiE 'libcrypto|libssl'; then
+            echo "::error::the core linked OpenSSL on macOS; CommonCrypto should be used"
+            exit 1
+          fi
+          echo "no OpenSSL linked, as intended"
+
       - name: Test
         run: ctest --test-dir build -C Release -V --output-on-failure
