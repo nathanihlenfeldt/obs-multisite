@@ -524,9 +524,10 @@ Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
 - **AV1 is carried but lightly exercised**, unlike H.264 and HEVC.
 - **Seeking is accurate to about a second**, not to a frame.
 - **The relay will not send an HEVC feed.** Streaming sites want H.264 over
-  RTMP, and re-encoding on the way out is not built. This sits awkwardly beside
-  the advice to prefer HEVC for Raspberry Pi campuses: a church that follows it
-  cannot also stream publicly without changing the encoder.
+  RTMP, and re-encoding on the way out is not built. H.264 is the default and
+  decodes fine everywhere, Raspberry Pi campuses included, so this only bites a
+  site that has chosen HEVC to save bandwidth — for which it is currently a
+  straight trade against streaming publicly.
 - **The relay cannot split packed multi-channel audio**, and cannot start
   itself on a schedule or when the encoder goes live.
 - **No soak test yet.** Sustained behaviour over a full service is untested and

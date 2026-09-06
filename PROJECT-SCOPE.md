@@ -564,11 +564,17 @@ put the wrong thing on air:
 - **HEVC and AV1.** RTMP wants H.264. ffmpeg will mux either of the others into
   FLV and report success, producing a well-formed stream the destination then
   rejects — measured, not assumed — so nothing downstream can be relied on to
-  notice. The relay refuses and says which encoder setting to change. This is
-  in tension with §8.1, which pushes a Pi-heavy site toward HEVC: a church that
-  optimises its feed for its campuses produces exactly the feed a streaming
-  site will not take. Re-encoding on the way out is the eventual answer and is
-  not built; it would also end the $5-a-month claim.
+  notice. The relay refuses and says which encoder setting to change.
+  Re-encoding on the way out is the eventual answer, is not built, and would
+  end the $5-a-month claim when it is.
+
+  This costs less than it might appear. H.264 is the default and the roadmap's
+  first codec precisely because it decodes everywhere, a Pi 5 included (§8.1:
+  software decode handles 1080p comfortably), so a site that has not gone out
+  of its way to change codec can stream publicly with nothing to reconsider.
+  What it does mean is that HEVC is not a free bandwidth saving for a site that
+  also streams to the public: choosing it for the campuses currently costs the
+  public stream.
 - **Packed multi-channel audio (§4.3.1),** where the mix, the ISOs and the
   click share one track. Selecting a pair out of it is not built, and sending
   it unchanged would put a mic ISO or the click out to the public. Multi-track
