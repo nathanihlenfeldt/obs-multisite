@@ -550,6 +550,23 @@ Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
   Not started at all: web and mobile simulcast served straight from the bucket,
   redundancy, and local insertion.
 
+- **Phase 8 — External control API.** So a service can be run from a physical
+  button rather than a dock. The plan: both plugins expose their commands as
+  **obs-websocket vendor requests**, using the same names and payloads as the
+  appliance's existing HTTP routes — one API, two transports, and a control
+  surface written against either works against both. obs-websocket ships with
+  OBS 28 and later, so there is nothing extra to install, and the plugin gains
+  no dependency: if it is absent, control simply is not there. Then a
+  **Bitfocus Companion** module for buttons that light up and displays that show
+  how far behind live a campus is — that needs a real module, because
+  Companion's generic vendor-request action can send commands but cannot read
+  state back.
+
+  **Already possible, today:** the plugins register ten named hotkeys, and
+  Companion's OBS module can trigger hotkeys by id — so play, stop, hold,
+  resume, catch-up, jog and drop-marker work from a Stream Deck now, without
+  parameters or feedback. Worth wiring up before any of the above is built.
+
 ---
 
 ## License

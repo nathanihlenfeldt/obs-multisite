@@ -611,6 +611,59 @@ intended trigger is `live.json` actually going live, optionally bounded by a
 time window, and `markers.json` makes "start the public stream at Sermon
 Start" possible.
 
+## 8.3 External control API (planned)
+
+Operators reach for a physical button, not a dock. A volunteer running a
+service on a Stream Deck should be able to hold, resume and catch up without
+finding a window, and the main site should be able to go live from a button.
+The target is **Bitfocus Companion**, which is what churches in this bracket
+actually use.
+
+**One surface, two transports.** The appliance already exposes its controls as
+HTTP routes (§8.1): `/api/play`, `/api/hold`, `/api/seek`, `/api/status` and the
+rest. The OBS plugins will expose *the same command names with the same
+payloads* over **obs-websocket vendor requests**. One API to learn and document,
+two ways in, and a control surface written against either works against both.
+
+**Why vendor requests rather than a server inside the plugin.** obs-websocket
+ships with OBS 28 and later, so there is nothing for a church to install. Its
+`obs-websocket-api.h` is header-only and works through OBS's proc handler, so
+the plugin gains no link dependency, and if obs-websocket is absent every call
+returns false after one log line — control disappears, nothing breaks.
+Authentication, the listening socket and TLS are already solved there. A
+bespoke HTTP server inside the plugin would duplicate all of it and open a
+second port on a machine we have otherwise been careful to keep closed.
+
+**Both ends, equal weight.** The encoder needs go-live, stop, drop-marker and
+status; the decoder needs play, stop, hold, resume, catch-up, seek, jog, delay,
+load-event, follow-live, audio-track selection, status and the event list. The
+command set already exists as `EncoderControls` and `DecoderControls`, so the
+API layer is an adapter over what the docks and hotkeys already call — no new
+control logic, and no second path to keep in step.
+
+**Two phases, because Companion needs more than actions.**
+
+1. **The vendor API.** Every command registered as a vendor request, plus vendor
+   events on state change and a `status` request for polling. Companion can
+   drive all of it immediately through its OBS module's *Custom Vendor Request*
+   action, and so can any obs-websocket client — scripts, Stream Deck plugins,
+   another automation system.
+2. **A Companion module.** *Custom Vendor Request* is an action only: it cannot
+   light a button red while a service is live, or show "12 s behind" on a
+   display. Feedbacks, variables and presets need a purpose-built Companion
+   module (Node.js, submitted to Bitfocus) subscribing to the vendor events.
+   That is a separate deliverable in a separate repository, and it depends on
+   phase 1 existing first.
+
+**Available before any of this:** the plugins already register ten named
+hotkeys, and Companion's OBS module can trigger hotkeys by id. Play, stop, hold,
+resume, catch-up, jog and drop-marker are therefore controllable from a Stream
+Deck today, without parameters or feedback. Worth wiring up before building
+anything, both because it is free and because it will show which commands
+operators actually reach for.
+
+---
+
 ## 9. Capability overview
 
 What this project does, and where each piece stands. Status is against the
@@ -634,6 +687,9 @@ is the better answer for a given church, section 12 says so plainly.
 | Public simulcast to YouTube / Facebook / RTMP | built, not yet run through a service — H.264 feeds only (§8.2) |
 | Per-channel routing of packed audio (de-interleaver) | not built |
 | Re-encoding an HEVC feed for a streaming site | not built (§8.2) |
+| External control API (obs-websocket vendor requests, §8.3) | planned |
+| Bitfocus Companion module (buttons, feedbacks, variables) | planned; needs the API first |
+| Control from a Stream Deck via OBS hotkey triggers | available now, no parameters or feedback |
 | Web / mobile simulcast from the same files | planned; CMAF makes it feasible |
 | Scheduling / auto-go-live | planned — for the relay as well as the encoder |
 
@@ -680,6 +736,12 @@ built; 6 and 7 are not started.
   not yet carried a service, and it will not send an HEVC feed. Not started:
   web/mobile simulcast served from the bucket, scheduling and auto-go-live,
   redundancy, and local insertion.
+
+- **Phase 8 — External control API.** ⬜ The command surface of both plugins as
+  obs-websocket vendor requests, mirroring the appliance's existing HTTP routes
+  name for name (§8.3), then a Bitfocus Companion module for buttons with
+  feedbacks and variables. Hotkey-based control from Companion already works
+  and needs nothing.
 
 ---
 
