@@ -59,6 +59,12 @@ This ranking is the tie-breaker for every design choice.
 - **Crash & outage resilience.** OBS crash or power loss at either end is
   recoverable: the encoder resumes the same event and sequence; decoders hold the
   last frame and resume seamlessly when the feed returns.
+- **Out to the public, from the same upload.** A small self-hosted service
+  reads the segments already in the bucket and pushes them to YouTube, Facebook
+  or any RTMP destination, so the main site uploads once whether the service is
+  going to two campuses or to two campuses and the internet. It runs a few
+  minutes behind on purpose, so a wobble at the main site delays the public
+  stream rather than breaking it (§8.2).
 - **Bring-your-own storage.** Works with any S3-compatible endpoint — Cloudflare
   R2, AWS S3, Backblaze B2, Wasabi, or self-hosted MinIO. Cost is just storage.
 - **Satellites can be appliances.** A campus that only needs to *receive* runs a
@@ -529,6 +535,76 @@ HTML with a WebSocket for live updates. It should carry the same plain language
   ahead without putting it to air — the thing a satellite campus most needs to
   avoid.
 
+## 8.2 Public simulcast relay
+
+The same segments that feed the campuses, pushed out to YouTube, Facebook or
+any RTMP destination. A separate sub-project in `relay/`, deployed as one
+Docker container on a small VPS. It is not part of the plugins and the core
+knows nothing about it.
+
+**Why relay from the bucket rather than add a second OBS output.** The main
+site uploads once however many places the service goes, which is what makes
+this possible at all on a venue connection that will not carry a second
+upload. The public stream also inherits the buffering the campus feed already
+has: the relay deliberately runs a configurable time behind the service —
+three minutes by default — so a dropout at the main site is absorbed instead
+of reaching air. It is the same trade as §1, applied to the public stream:
+latency spent to buy resilience.
+
+**Why RTMP.** Every destination accepts it, so one mechanism covers YouTube,
+Facebook and a church's own server without two code paths. The cost is that
+RTMP is H.264 in practice, which the codec rule below exists to handle.
+
+**Copy remux, never a silent transcode.** Segments are pushed on unchanged: no
+decode, no encode, no quality loss, and little enough CPU that the cheapest VPS
+tier is the target rather than a stretch. What cannot be sent that way is
+refused rather than adapted, in the two cases where adapting it silently would
+put the wrong thing on air:
+
+- **HEVC and AV1.** RTMP wants H.264. ffmpeg will mux either of the others into
+  FLV and report success, producing a well-formed stream the destination then
+  rejects — measured, not assumed — so nothing downstream can be relied on to
+  notice. The relay refuses and says which encoder setting to change. This is
+  in tension with §8.1, which pushes a Pi-heavy site toward HEVC: a church that
+  optimises its feed for its campuses produces exactly the feed a streaming
+  site will not take. Re-encoding on the way out is the eventual answer and is
+  not built; it would also end the $5-a-month claim.
+- **Packed multi-channel audio (§4.3.1),** where the mix, the ISOs and the
+  click share one track. Selecting a pair out of it is not built, and sending
+  it unchanged would put a mic ISO or the click out to the public. Multi-track
+  events (§4.3, the primary mode) are handled: each destination carries one
+  track, chosen by the label the main site published.
+
+**Supervision is the point, not a refinement.** Most destinations end a
+broadcast after roughly a minute without data, so an unattended relay that
+cannot recover is worse than none. Each destination has one ffmpeg child and
+one thread that owns it; a child that dies is restarted and resumes from the
+segment it was on, so nothing is skipped. A silence shorter than 45 seconds is
+ridden out without dropping the connection at all — fragment timestamps are
+absolute, so content resumes exactly where it stopped and a destination that
+tolerates the pause never knows. Beyond that the connection is dropped
+deliberately and rebuilt, which splits the recording at the far end and is
+reported as such.
+
+Detecting that silence is the relay's own job: ffmpeg given a pipe that stops
+producing blocks quietly and holds the socket open indefinitely without
+reporting anything, so waiting for the child to complain is waiting for ever.
+
+**What it reuses.** The receive path, unchanged: event discovery, the durable
+cache, checksum verification, and the live/ended/interrupted classification of
+§7.5. It is the same code a campus runs, so the relay and a campus can never
+disagree about whether a service is still running — and an event that ends
+cleanly is played out to its last segment and then closed deliberately, rather
+than being cut off or left to time out.
+
+**Not built.** Re-encoding; splitting packed audio; signing in to YouTube (a
+stream key is pasted, and the broadcast is still created in YouTube's own
+page); and starting by itself, either on a schedule or when the encoder goes
+live. Scheduling matters most of the three, because services start late — the
+intended trigger is `live.json` actually going live, optionally bounded by a
+time window, and `markers.json` makes "start the public stream at Sermon
+Start" possible.
+
 ## 9. Capability overview
 
 What this project does, and where each piece stands. Status is against the
@@ -549,13 +625,16 @@ is the better answer for a given church, section 12 says so plainly.
 | Dedicated receive appliance (Raspberry Pi / mini-PC) | built, not yet run through a service |
 | Self-hosted, on storage you own | built |
 | Open protocol, no vendor lock-in | by design — the whole protocol is §4 |
+| Public simulcast to YouTube / Facebook / RTMP | built, not yet run through a service — H.264 feeds only (§8.2) |
 | Per-channel routing of packed audio (de-interleaver) | not built |
+| Re-encoding an HEVC feed for a streaming site | not built (§8.2) |
 | Web / mobile simulcast from the same files | planned; CMAF makes it feasible |
-| Scheduling / auto-go-live | planned |
+| Scheduling / auto-go-live | planned — for the relay as well as the encoder |
 
 Further directions to explore: web/mobile simulcast served directly from the
-bucket, multi-bucket mirroring for redundancy, and local insertion windows for
-campus announcements.
+bucket (which needs no relay at all — the CMAF objects are already the right
+shape for it), multi-bucket mirroring for redundancy, and local insertion
+windows for campus announcements.
 
 ---
 
@@ -588,8 +667,13 @@ built; 6 and 7 are not started.
   decoupled preview), and the systemd/install path that makes it start on
   power-up. Outstanding: the channel de-interleaver, DeckLink SDI output for
   the production tier, and hardware-decoder selection on Pi 4.
-- **Phase 7 — Extensions.** ⬜ Web/mobile simulcast, scheduling, redundancy, and
-  local insertion.
+- **Phase 7 — Extensions.** 🟨 Built: the public simulcast relay (§8.2), as a
+  separate container in `relay/` — copy remux to one or more RTMP
+  destinations, per-destination audio selection, a delay buffer, and
+  supervised reconnection, with its own browser UI. Like the appliance it has
+  not yet carried a service, and it will not send an HEVC feed. Not started:
+  web/mobile simulcast served from the bucket, scheduling and auto-go-live,
+  redundancy, and local insertion.
 
 ---
 

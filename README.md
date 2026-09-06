@@ -117,7 +117,11 @@ task.
 A campus can receive in either of two ways — the OBS decoder on a PC, or the
 Raspberry Pi appliance — and both are built. See
 [Choosing a satellite](#choosing-a-satellite). The appliance has not run a
-service either. Extensions (Phase 7) are not started.
+service either.
+
+The public simulcast relay is built and is the first piece of Phase 7. It has
+been run end to end and survives having its encoder killed mid-stream, but it
+has not carried a real service, and it will not send an HEVC feed.
 
 **What works**
 
@@ -136,6 +140,9 @@ service either. Extensions (Phase 7) are not started.
 - Finished *and interrupted* events play as video-on-demand from the beginning —
   a service whose encoder crashed is still watchable afterwards.
 - Operator docks in plain language, plus hotkeys.
+- **Public simulcast.** A separate container reads the same segments and pushes
+  them to YouTube, Facebook or any RTMP destination, a few minutes behind on
+  purpose. See [Streaming to the public](#streaming-to-the-public).
 
 **What does not, yet** — see [Known gaps](#known-gaps).
 
@@ -343,6 +350,21 @@ With the operator docks (adds Qt6 and obs-frontend-api):
 cmake -S . -B build -DBUILD_OBS_PLUGIN=ON -DENABLE_QT=ON
 ```
 
+With the public simulcast relay (adds SQLite; needs the `ffmpeg` command at
+run time, not at build time):
+
+```sh
+cmake -S . -B build -DMULTISITE_BUILD_RELAY=ON -DBUILD_PLAYER=OFF
+cmake --build build --target multisite-relay
+```
+
+Or build the container, which runs the relay's tests as part of the image so a
+broken build cannot become something somebody deploys:
+
+```sh
+docker build -f relay/Dockerfile -t multisite-relay .
+```
+
 CI builds and tests the core on Linux x86, **Linux ARM64** and Windows, and
 produces an installable Windows plugin. The ARM64 job exists because the planned
 appliance runs there, so a regression is caught in CI rather than on hardware.
@@ -360,6 +382,9 @@ src/appliance/  the headless campus player: DRM/KMS and ALSA output, the
                 splash and idle screens, and the web control surface.
 src/appliance/web/  the operator interface. No framework, no CDN — a campus
                 box often has no internet.
+relay/          the public simulcast relay: a container that pushes the same
+                segments to YouTube, Facebook or any RTMP destination. Uses
+                the core; the core knows nothing about it.
 tests/          every guarantee above has a test.
 scripts/player/ the install script and systemd unit for the appliance.
 scripts/        optional Lua control script, superseded by the encoder dock.
@@ -370,6 +395,11 @@ both the plugin and the headless appliance, and a test enforces this on every
 build rather than trusting the convention. The appliance is what proves the
 rule holds: it is a new output and control layer over the same receive core,
 not a second implementation.
+
+The relay is the same rule again, one step further out: it is a separate
+sub-project that depends on the core and is never depended on by it. It builds
+only when asked (`-DMULTISITE_BUILD_RELAY=ON`), so a plugin build is not made
+to find SQLite for something it does not use.
 
 ---
 
@@ -420,6 +450,50 @@ phone and no SSH.
 
 ---
 
+## Streaming to the public
+
+The campuses are not always the only audience. `relay/` is a small self-hosted
+service that reads the same segments and pushes them out to YouTube, Facebook,
+or any RTMP destination.
+
+It relays from the bucket rather than adding a second output to OBS, which
+matters twice over. The main site uploads once whether the service is going to
+two campuses or to two campuses and the internet — often the difference between
+possible and not on a venue connection. And the public stream inherits the
+buffering the campus feed already has: it runs a few minutes behind on purpose,
+so a dropout at the main site delays it rather than breaking it.
+
+```bash
+docker run -d --name multisite-relay \
+  -p 8080:8080 \
+  -v multisite-relay-data:/data \
+  -e RELAY_ROOM=main-auditorium \
+  ghcr.io/stageaudioworks/multisite-relay:latest
+```
+
+Then open it in a browser, put in the bucket details, and add a destination.
+A $5/month VPS is the target rather than a stretch, because nothing is being
+re-encoded.
+
+- **One chosen sound feed per destination**, picked by the name the main site
+  gave it — "Main Mix", "Sermon ISO" — never a track number. A future
+  "clean feed to Facebook, main mix to YouTube" is just two destinations.
+- **A delay you choose**, three minutes by default. This is the setting worth
+  understanding: it is how much of the service the relay holds in hand, and so
+  how long an outage at the main site can last before the public sees it.
+- **It reconnects by itself** and resumes from where it stopped, so nothing is
+  skipped. A silence under 45 seconds is ridden out without even dropping the
+  connection.
+- **It refuses rather than guesses.** An HEVC feed and packed multi-channel
+  audio are both declined with a plain explanation, because sending either
+  onward would mean a stream the destination rejects, or a mic ISO going out to
+  the public.
+
+Full deployment notes, including bandwidth and disk, are in
+[relay/README.md](relay/README.md).
+
+---
+
 ## What the tests cover
 
 Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
@@ -449,8 +523,15 @@ Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
   already its own source.
 - **AV1 is carried but lightly exercised**, unlike H.264 and HEVC.
 - **Seeking is accurate to about a second**, not to a frame.
+- **The relay will not send an HEVC feed.** Streaming sites want H.264 over
+  RTMP, and re-encoding on the way out is not built. This sits awkwardly beside
+  the advice to prefer HEVC for Raspberry Pi campuses: a church that follows it
+  cannot also stream publicly without changing the encoder.
+- **The relay cannot split packed multi-channel audio**, and cannot start
+  itself on a schedule or when the encoder goes live.
 - **No soak test yet.** Sustained behaviour over a full service is untested and
-  is the highest-value thing that is not code.
+  is the highest-value thing that is not code. The relay has run 44 minutes
+  unattended without a fault, which is encouraging and is not a service.
 
 ---
 
@@ -460,8 +541,13 @@ Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
   Raspberry Pi HDMI tier (see above), but not yet run through a service. Still
   to come: the packed-channel de-interleaver, DeckLink SDI output for the
   production tier, and hardware-decoder selection on Pi 4.
-- **Phase 7 — Extensions.** Web and mobile simulcast from the same files,
-  scheduling, redundancy, and local insertion.
+- **Phase 7 — Extensions.** The public simulcast relay is built (see
+  [Streaming to the public](#streaming-to-the-public)) and has not yet carried
+  a service. Still to come there: re-encoding, so an HEVC feed can be streamed;
+  splitting packed multi-channel audio; signing in to YouTube instead of
+  pasting a stream key; and starting automatically when the encoder goes live.
+  Not started at all: web and mobile simulcast served straight from the bucket,
+  redundancy, and local insertion.
 
 ---
 
