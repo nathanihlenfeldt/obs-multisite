@@ -1,6 +1,7 @@
 #include "config_store.h"
 #include "log.h"
 
+#include <cstdint>
 #include <sqlite3.h>
 #include <sys/stat.h>
 

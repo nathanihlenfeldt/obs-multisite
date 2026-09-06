@@ -21,6 +21,7 @@
 #include "s3_transport.h"
 
 #include <atomic>
+#include <cstdint>
 #include <memory>
 #include <mutex>
 #include <optional>

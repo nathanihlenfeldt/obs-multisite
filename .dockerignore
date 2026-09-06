@@ -1,0 +1,12 @@
+# Build context for relay/Dockerfile. The context is the repository root, so
+# without this every local build directory is uploaded to the daemon — which
+# on a machine that has built the plugins is hundreds of megabytes of object
+# files the image will never use.
+build/
+build-*/
+.git/
+.github/
+.DS_Store
+
+# Large fixtures for the core tests; the relay build does not read them.
+test-data/

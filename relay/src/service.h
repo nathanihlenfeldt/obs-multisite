@@ -12,6 +12,7 @@
 #include "relay_session.h"
 #include "room_feeder.h"
 
+#include <cstdint>
 #include <map>
 #include <set>
 #include <memory>

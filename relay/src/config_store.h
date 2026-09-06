@@ -18,6 +18,7 @@
 #include "destination.h"
 #include "s3_transport.h"
 
+#include <cstdint>
 #include <mutex>
 #include <optional>
 #include <string>

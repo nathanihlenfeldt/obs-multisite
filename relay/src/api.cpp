@@ -4,6 +4,9 @@
 
 #include "nlohmann/json.hpp"
 
+#include <cstdint>
+#include <string>
+
 using json = nlohmann::json;
 using multisite_player::HttpRequest;
 using multisite_player::HttpResponse;

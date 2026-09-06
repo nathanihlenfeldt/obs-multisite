@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cerrno>
 #include <csignal>
+#include <cstdint>
 #include <cstring>
 #include <fcntl.h>
 #include <poll.h>

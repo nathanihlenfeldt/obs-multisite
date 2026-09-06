@@ -8,7 +8,7 @@
 FROM debian:bookworm AS build
 
 RUN apt-get update && apt-get install -y --no-install-recommends \
-        build-essential cmake pkg-config git \
+        build-essential cmake pkg-config \
         libcurl4-openssl-dev libssl-dev libsqlite3-dev \
     && rm -rf /var/lib/apt/lists/*
 
@@ -17,6 +17,11 @@ COPY CMakeLists.txt ./
 COPY cmake ./cmake
 COPY src ./src
 COPY relay ./relay
+# The test sources are needed to CONFIGURE, not just to run: the top-level
+# build declares the core test targets unconditionally, so cmake fails before
+# it reaches the relay if they are missing. They cost a few kilobytes and earn
+# their place below by being run.
+COPY tests ./tests
 
 # The plugins and the CMAF muxer are not built here: the relay needs the core
 # receive path and the S3 transport, and nothing else. That is what keeps the
@@ -26,6 +31,14 @@ RUN cmake -B build -DCMAKE_BUILD_TYPE=Release \
         -DBUILD_OBS_PLUGIN=OFF \
         -DBUILD_PLAYER=OFF \
     && cmake --build build --target multisite-relay -j"$(nproc)"
+
+# Run the relay's own tests as part of the image build, so a broken build
+# cannot quietly become an image somebody deploys on a Sunday morning. They
+# need no network, no bucket and no ffmpeg, and take under a second.
+RUN cmake --build build --target test_stream_plan test_relay_state \
+        test_config_store -j"$(nproc)" \
+    && ctest --test-dir build -R "stream_plan|relay_state|config_store" \
+        --output-on-failure
 
 # ── runtime ──────────────────────────────────────────────────────────────────
 FROM debian:bookworm-slim

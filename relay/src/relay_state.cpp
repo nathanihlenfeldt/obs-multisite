@@ -1,6 +1,7 @@
 #include "relay_state.h"
 
 #include <algorithm>
+#include <cstdint>
 
 namespace multisite_relay {
 

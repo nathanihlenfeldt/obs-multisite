@@ -3,6 +3,7 @@
 #include "stream_plan.h"
 
 #include <chrono>
+#include <cstdint>
 
 namespace multisite_relay {
 
