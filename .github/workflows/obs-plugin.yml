@@ -386,12 +386,41 @@ jobs:
           (cd artifacts/obs-multisite-linux && tar czf "../../dist/obs-multisite-${VER}-linux-x86_64.tar.gz" .)
           ls -lh dist
 
+      # Creating and uploading are separate so this is safe to run again.
+      # `gh release create` fails outright if the release already exists, which
+      # it does whenever a release was drafted by hand or a previous run got as
+      # far as creating it — and the failure lands BEFORE the upload, so the
+      # release sits there with no plugin attached and nothing says why.
       - name: Publish
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          gh release create "${GITHUB_REF_NAME}" dist/* \
+          if gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" > /dev/null 2>&1; then
+            echo "Release ${GITHUB_REF_NAME} already exists — uploading to it."
+          else
+            gh release create "${GITHUB_REF_NAME}" \
+              --repo "${GITHUB_REPOSITORY}" \
+              --title "${GITHUB_REF_NAME}" \
+              --notes-file .github/RELEASE-NOTES.md \
+              --prerelease
+          fi
+          # --clobber so a re-run replaces the files rather than failing on
+          # names that are already there.
+          gh release upload "${GITHUB_REF_NAME}" dist/* \
             --repo "${GITHUB_REPOSITORY}" \
-            --title "${GITHUB_REF_NAME}" \
-            --notes-file .github/RELEASE-NOTES.md \
-            --prerelease
+            --clobber
+
+      # The whole point of the job is that a release has something to download.
+      # A release published with no plugin attached is worse than a failed
+      # build, because it looks finished.
+      - name: Check the release actually has the plugins on it
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          count=$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
+                    --json assets -q '.assets | length')
+          echo "${count} asset(s) attached to ${GITHUB_REF_NAME}"
+          if [ "${count}" -lt 2 ]; then
+            echo "::error::Expected the Windows and Linux builds to be attached, found ${count}."
+            exit 1
+          fi
