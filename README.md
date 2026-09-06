@@ -188,6 +188,43 @@ For the full design, see [PROJECT-SCOPE.md](PROJECT-SCOPE.md).
 
 ## Using it
 
+### First, a retention rule on the bucket
+
+**Do this once, before your first broadcast.** Nothing in this project deletes
+anything — the plugins only write and read. Expiry is a **bucket lifecycle
+rule** you configure in your storage provider's console, and without one every
+service you ever broadcast stays in the bucket and the bill grows without
+limit. At 6 Mbps that is roughly **2.7 GB per hour** of service.
+
+Two prefixes need a rule, both with the same age:
+
+| Prefix | What it holds |
+|---|---|
+| `events/` | the media — all of the volume |
+| `rooms/` | the per-room event index — tiny, but if it outlives the media the event list fills with recordings that cannot be played |
+
+**Seven days is the design default, and the rule *is* your DVR depth** — a
+campus can timeslip back only as far as retention allows, so this setting is
+not merely housekeeping.
+
+On **Cloudflare R2**: your bucket → Settings → Object lifecycle rules → Add
+rule → prefix `events/`, delete objects 7 days after creation; then the same
+for `rooms/`. (`rooms/{room}/live.json` is rewritten on every heartbeat, so it
+stays fresh while a room is in use, and ageing out between services is
+harmless — the next Go Live recreates it.)
+
+On **AWS S3, MinIO, Backblaze B2 or Wasabi**: the equivalent lifecycle
+configuration with an Expiration rule per prefix.
+
+Object *tagging* is off by default and is deliberately not the mechanism: R2
+rejects `x-amz-tagging`, and a tag never deletes anything by itself. Enable it
+only if your store expires by tag and you have a rule that matches.
+
+Expiry is passive on purpose. A paused or behind-live campus can still fetch
+older segments for the whole retention window, which is what makes deep
+timeslipping possible; an encoder that actively deleted as it went would take
+that away.
+
 ### Main site (encoder)
 
 1. Open the **Multisite Encoder** dock (View → Docks).

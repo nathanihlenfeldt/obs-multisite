@@ -278,6 +278,15 @@ limited to the manifest window — essential for timeslipping.
 - Old segments are removed by lifecycle expiry, not active deletion, so a
   paused or behind-live decoder can still fetch older segments for the full
   retention window — enabling deep DVR rather than a short buffer.
+- **The rule must cover `rooms/` as well as `events/`.** The per-room index
+  entry for an event is a few hundred bytes and outlives nothing on its own, so
+  a rule that expires only the media leaves the event list advertising services
+  whose segments have gone. The catalog handles it — such an event is counted
+  as skipped rather than offered — but the list degrades over time for no
+  reason. Same age on both prefixes.
+- Nothing in the codebase issues a DELETE. This is a deployment step, not a
+  feature, and it is easy to forget: the README makes it the first thing under
+  Using it, because without it storage grows without limit.
 
 ### 4.7 Write-ordering invariant
 
