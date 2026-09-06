@@ -53,6 +53,7 @@ static constexpr char S_ROOM[]     = "room_id";
 static constexpr char S_POLL_MS[]  = "poll_interval_ms";
 static constexpr char S_PREBUF[]   = "prebuffer_segments";
 static constexpr char S_KEEP[]     = "keep_behind_segments";
+static constexpr char S_ATRACK[]   = "audio_track";   // 0-based
 
 // One entry in the delivery queue: either a video or an audio frame, already
 // stamped with its OBS presentation time.
@@ -61,7 +62,40 @@ struct PendingFrame {
     uint64_t timestamp = 0;
     DecodedVideoFrame video;
     DecodedAudioFrame audio;
+    // Where this audio goes. Null means this source. A companion audio-only
+    // source carrying an ISO or the click is a different obs_source_t, but its
+    // frames travel the SAME queue with timestamps from the SAME playout base
+    // — which is what keeps every track locked to the picture and to each
+    // other. Giving each track its own decoder would reintroduce exactly the
+    // per-track drift that packed multi-channel existed to avoid.
+    obs_source_t* target = nullptr;
 };
+
+// ── Companion audio sources ──────────────────────────────────────────────────
+// An OBS source can emit only one audio stream, so a service carrying a main
+// mix plus ISOs plus a click needs one source per track. They all attach to the
+// room's existing decoder rather than opening their own: one download, one
+// decode, one clock.
+//
+// Registered globally by room rather than against a particular SourceCtx, so a
+// companion survives the video source being reconfigured or replaced.
+struct AudioSub {
+    obs_source_t* source = nullptr;
+    std::string   room_id;
+    int           track = 0;          // 0-based index into the event's tracks
+};
+static std::mutex g_subs_mtx;
+static std::vector<AudioSub*> g_subs;
+
+static void register_audio_sub(AudioSub* s) {
+    std::lock_guard<std::mutex> lk(g_subs_mtx);
+    for (auto* e : g_subs) if (e == s) return;
+    g_subs.push_back(s);
+}
+static void unregister_audio_sub(AudioSub* s) {
+    std::lock_guard<std::mutex> lk(g_subs_mtx);
+    g_subs.erase(std::remove(g_subs.begin(), g_subs.end(), s), g_subs.end());
+}
 
 // Exposes timeslipping to hotkeys and the Tools menu.
 struct SourceCtx : DecoderControls {
@@ -199,6 +233,12 @@ struct SourceCtx : DecoderControls {
     // Marker chosen in the properties dialog, acted on by the Jump button.
     std::string pending_marker_id;
     std::string room_id_for_display;
+    // Which of the event's audio tracks this source emits. Multi-track is the
+    // normal production mode: main mix on one track, ISOs and click on others,
+    // each its own stream with its own channel count. Track 1 by default,
+    // because a campus that just wants the programme should not have to think
+    // about it.
+    std::atomic<int> audio_track{0};
     std::atomic<int> audio_channels{0};
     // Wall clock when playback was paused, so the playout clock can be
     // advanced by the same amount on resume (see on_resume).
@@ -249,6 +289,21 @@ static constexpr uint64_t kClockResyncThresholdNs = 2000000000ULL;   // 2 s
 // Take a reference under the short lock; never call through it while holding
 // `obj_mtx`. This is what keeps blocking work (network polls, pushing a
 // fragment to a full decoder) off the critical section that Pause/Resume need.
+// Live decoder sources, so a companion can find the room's track names. Used
+// only to build a properties list — never on the media path.
+static std::mutex g_owners_mtx;
+static std::vector<SourceCtx*> g_owners;
+
+static void register_owner(SourceCtx* c) {
+    std::lock_guard<std::mutex> lk(g_owners_mtx);
+    for (auto* e : g_owners) if (e == c) return;
+    g_owners.push_back(c);
+}
+static void unregister_owner(SourceCtx* c) {
+    std::lock_guard<std::mutex> lk(g_owners_mtx);
+    g_owners.erase(std::remove(g_owners.begin(), g_owners.end(), c), g_owners.end());
+}
+
 static std::shared_ptr<DecoderSession> get_session(SourceCtx* ctx) {
     std::lock_guard<std::mutex> lk(ctx->obj_mtx);
     return ctx->session;
@@ -461,7 +516,8 @@ static void deliver_loop(SourceCtx* ctx) {
             audio.format   = AUDIO_FORMAT_FLOAT;      // interleaved float
             audio.samples_per_sec = (uint32_t)f.sample_rate;
             audio.timestamp = item.timestamp;
-            obs_source_output_audio(ctx->source, &audio);
+            obs_source_output_audio(item.target ? item.target : ctx->source,
+                                    &audio);
         }
     }
     mlog_info("source: delivery loop exiting");
@@ -503,10 +559,22 @@ static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
 
 static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
     if (!ctx->running.load()) return;
-    // Only the first audio track drives this source; further tracks are
-    // exposed via companion sources in a later phase.
-    if (f.track_index != 0) return;
 
+    // Who wants this track? This source carries one of them; companion
+    // audio-only sources in the same room carry the others. A track nobody has
+    // asked for is decoded (it shares the fragment) but not delivered.
+    const bool for_us = (f.track_index == ctx->audio_track.load());
+    std::vector<obs_source_t*> companions;
+    {
+        std::lock_guard<std::mutex> lk(g_subs_mtx);
+        for (auto* s : g_subs)
+            if (s->track == f.track_index && s->room_id == ctx->room_id_for_display)
+                companions.push_back(s->source);
+    }
+    if (!for_us && companions.empty()) return;
+
+    // Anchored once, off the same clock as the video, so every track shares one
+    // playout base.
     const int64_t first = anchor_pts(ctx, f.pts_ns, false);
 
     // Packed multi-channel guard. OBS resamples every source to its GLOBAL
@@ -536,19 +604,31 @@ static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
                        f.channels);
     }
 
-    PendingFrame item;
-    item.is_video  = false;
-    item.timestamp = ctx->playout_base_ns.load() + (uint64_t)(f.pts_ns - first);
-    item.audio     = f;
+    const uint64_t ts = ctx->playout_base_ns.load() + (uint64_t)(f.pts_ns - first);
 
     // Report the audio/video pts offset once: a large value here is the
     // signature of a stream-timing problem rather than a delivery problem.
-    if (!ctx->logged_av_offset && ctx->last_video_pts_ns != 0) {
+    if (for_us && !ctx->logged_av_offset && ctx->last_video_pts_ns != 0) {
         ctx->logged_av_offset = true;
         mlog_info("source: audio/video pts offset %.3fs (should be near zero)",
                   (double)(f.pts_ns - ctx->last_video_pts_ns) / 1e9);
     }
-    enqueue_frame(ctx, std::move(item));
+
+    for (obs_source_t* dest : companions) {
+        PendingFrame item;
+        item.is_video  = false;
+        item.timestamp = ts;
+        item.audio     = f;
+        item.target    = dest;
+        enqueue_frame(ctx, std::move(item));
+    }
+    if (for_us) {
+        PendingFrame item;
+        item.is_video  = false;
+        item.timestamp = ts;
+        item.audio     = f;
+        enqueue_frame(ctx, std::move(item));
+    }
 }
 
 // ── Worker loops ─────────────────────────────────────────────────────────────
@@ -954,6 +1034,7 @@ static void src_update(void* data, obs_data_t* s) {
     dc.keep_behind_segments = (int)obs_data_get_int(s, S_KEEP);
     dc.buffer_minutes       = shared.buffer_minutes;
     ctx->poll_interval_ms   = (int)obs_data_get_int(s, S_POLL_MS);
+    ctx->audio_track        = (int)obs_data_get_int(s, S_ATRACK);
 
     if (s3.bucket.empty() ||
         (s3.endpoint_host.empty() && s3.r2_account_id.empty())) {
@@ -1000,12 +1081,17 @@ static void src_update(void* data, obs_data_t* s) {
     ctx->events_listed_once = false;
     ctx->events_refresh_wanted = true;   // populate the dock without a click
 
+    // Set BEFORE the workers start: deliver_audio matches companion audio
+    // sources against this room, and a companion would otherwise miss the
+    // first fragments while it was still empty.
+    ctx->room_id_for_display = dc.room_id;
+
     register_decoder_controls(ctx);      // hotkeys act on this source
+    register_owner(ctx);
     ctx->running = true;
     ctx->deliver_thread = std::thread(deliver_loop, ctx);
     ctx->poll_thread    = std::thread(poll_loop, ctx);
     ctx->feed_thread    = std::thread(feed_loop, ctx);
-    ctx->room_id_for_display = dc.room_id;
     mlog_info("source: watching room '%s' (prebuffer %d segments, poll %dms)",
               dc.room_id.c_str(), dc.prebuffer_segments, ctx->poll_interval_ms);
 }
@@ -1019,6 +1105,7 @@ static void* src_create(obs_data_t* settings, obs_source_t* source) {
 
 static void src_destroy(void* data) {
     auto* ctx = static_cast<SourceCtx*>(data);
+    unregister_owner(ctx);
     {
         std::lock_guard<std::mutex> life(ctx->lifecycle_mtx);
         unregister_decoder_controls(ctx);
@@ -1034,6 +1121,7 @@ static void src_destroy(void* data) {
 
 static void src_defaults(obs_data_t* s) {
     obs_data_set_default_string(s, S_ROOM, "main-auditorium");
+    obs_data_set_default_int(s, S_ATRACK, 0);
     // No default for the storage fields: they are no longer edited here, and a
     // default would make every source look as though it carried a value to
     // migrate.
@@ -1427,6 +1515,31 @@ static bool on_marker_selected(void* data, obs_properties_t*,
     return false;
 }
 
+
+// Fill an audio-track list with the labels the main site published, so an
+// operator picks "Click" rather than "Track 3". Falls back to numbers before
+// an event has been read — the names only exist once a manifest has arrived.
+static void fill_audio_tracks(obs_property_t* list,
+                              const std::vector<AudioTrack>& layout) {
+    if (layout.empty()) {
+        for (int i = 0; i < MAX_AUDIO_MIXES; ++i) {
+            const std::string n = "Track " + std::to_string(i + 1);
+            obs_property_list_add_int(list, n.c_str(), i);
+        }
+        return;
+    }
+    for (size_t i = 0; i < layout.size(); ++i) {
+        std::string n = std::to_string(i + 1) + ". " +
+            (layout[i].label.empty() ? ("Track " + std::to_string(i + 1))
+                                     : layout[i].label);
+        if (layout[i].channels > 2)
+            n += "  (" + std::to_string(layout[i].channels) + " ch, packed)";
+        else if (layout[i].channels == 1)
+            n += "  (mono)";
+        obs_property_list_add_int(list, n.c_str(), (long long)i);
+    }
+}
+
 static obs_properties_t* src_props(void* data) {
     obs_properties_t* p = obs_properties_create();
 
@@ -1438,6 +1551,21 @@ static obs_properties_t* src_props(void* data) {
                             obs_module_text("StorageInDock"), OBS_TEXT_INFO);
 
     obs_properties_add_text(p, S_ROOM,     obs_module_text("RoomID"),       OBS_TEXT_DEFAULT);
+
+    // Which track this source carries. Everything the main site sends arrives
+    // in the same fragment, so choosing here costs no extra bandwidth — add a
+    // Multisite Audio Track source for each further track a campus needs.
+    {
+        obs_property_t* at = obs_properties_add_list(
+            p, S_ATRACK, obs_module_text("AudioTrack"),
+            OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+        std::vector<AudioTrack> layout;
+        auto* ctx = static_cast<SourceCtx*>(data);
+        if (ctx) {
+            if (auto sess = get_session(ctx)) layout = sess->audio_layout();
+        }
+        fill_audio_tracks(at, layout);
+    }
     obs_properties_add_int_slider(p, S_PREBUF, obs_module_text("Prebuffer"), 0, 10, 1);
     obs_properties_add_int_slider(p, S_POLL_MS, obs_module_text("PollInterval"), 500, 10000, 500);
     obs_properties_add_int_slider(p, S_KEEP, obs_module_text("KeepBehind"), 10, 2000, 10);
@@ -1482,6 +1610,82 @@ static obs_properties_t* src_props(void* data) {
     return p;
 }
 
+
+// ── Companion audio source ───────────────────────────────────────────────────
+// One OBS source can emit one audio stream, so a campus that needs the main mix
+// AND a click AND an ISO needs a source per track. This is that source: audio
+// only, no video, no decoder of its own. It attaches to whatever Multisite
+// Source is already following the same room and receives its chosen track from
+// that decoder — so the segment is downloaded once, decoded once, and every
+// track shares one playout clock.
+//
+// It produces nothing until a Multisite Source for the same room is present and
+// playing. That is the normal setup (a campus always has the picture), and it
+// is stated in the properties rather than left to be discovered.
+struct AudioCtx {
+    AudioSub sub;
+};
+
+static const char* aud_name(void*) {
+    return obs_module_text("Multisite.AudioSource");
+}
+
+static void aud_update(void* data, obs_data_t* s) {
+    auto* c = static_cast<AudioCtx*>(data);
+    unregister_audio_sub(&c->sub);
+    DecoderSettings shared = decoder_settings();
+    const char* room = obs_data_get_string(s, S_ROOM);
+    c->sub.room_id = (room && *room) ? std::string(room) : shared.room_id;
+    c->sub.track   = (int)obs_data_get_int(s, S_ATRACK);
+    register_audio_sub(&c->sub);
+    mlog_info("audio source: room '%s', track %d",
+              c->sub.room_id.c_str(), c->sub.track + 1);
+}
+
+static void* aud_create(obs_data_t* settings, obs_source_t* source) {
+    auto* c = new AudioCtx();
+    c->sub.source = source;
+    aud_update(c, settings);
+    return c;
+}
+
+static void aud_destroy(void* data) {
+    auto* c = static_cast<AudioCtx*>(data);
+    unregister_audio_sub(&c->sub);
+    delete c;
+}
+
+static void aud_defaults(obs_data_t* s) {
+    obs_data_set_default_int(s, S_ATRACK, 1);   // track 2: not the main mix
+}
+
+static obs_properties_t* aud_props(void* data) {
+    obs_properties_t* p = obs_properties_create();
+    obs_properties_add_text(p, "audio_note",
+                            obs_module_text("AudioSourceNote"), OBS_TEXT_INFO);
+    obs_properties_add_text(p, S_ROOM, obs_module_text("RoomID"), OBS_TEXT_DEFAULT);
+
+    // Track names come from whichever Multisite Source is following this room.
+    std::vector<AudioTrack> layout;
+    {
+        auto* c = static_cast<AudioCtx*>(data);
+        const std::string want = c ? c->sub.room_id : std::string();
+        std::lock_guard<std::mutex> lk(g_owners_mtx);
+        for (auto* o : g_owners) {
+            if (!want.empty() && o->room_id_for_display != want) continue;
+            if (auto sess = get_session(o)) {
+                layout = sess->audio_layout();
+                if (!layout.empty()) break;
+            }
+        }
+    }
+    obs_property_t* at = obs_properties_add_list(
+        p, S_ATRACK, obs_module_text("AudioTrack"),
+        OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+    fill_audio_tracks(at, layout);
+    return p;
+}
+
 void register_source() {
     struct obs_source_info info = {};
     info.id           = "multisite_source";
@@ -1498,6 +1702,21 @@ void register_source() {
     info.get_height   = src_height;
     info.icon_type    = OBS_ICON_TYPE_MEDIA;
     obs_register_source(&info);
+
+    // The companion audio-only source. Audio flag only: OBS must not give it a
+    // video canvas, and it must never be duplicated into a second decoder.
+    struct obs_source_info aud = {};
+    aud.id             = "multisite_audio_source";
+    aud.type           = OBS_SOURCE_TYPE_INPUT;
+    aud.output_flags   = OBS_SOURCE_AUDIO | OBS_SOURCE_DO_NOT_DUPLICATE;
+    aud.get_name       = aud_name;
+    aud.create         = aud_create;
+    aud.destroy        = aud_destroy;
+    aud.update         = aud_update;
+    aud.get_defaults   = aud_defaults;
+    aud.get_properties = aud_props;
+    aud.icon_type      = OBS_ICON_TYPE_AUDIO_INPUT;
+    obs_register_source(&aud);
     mlog_info("registered source: multisite_source");
 }
 

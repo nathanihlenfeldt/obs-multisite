@@ -150,56 +150,63 @@ events/{event_id}/                # event_id = ULID minted by the encoder at "Go
   and the muxer wrapper and decoder are codec-agnostic, so adding a codec is a
   capability change rather than a rewrite.
 
-### 4.3 Production audio: packed multi-channel (primary mode)
+### 4.3 Production audio: multi-track (primary mode)
 
-The primary delivery mode for production audio is a **single multi-channel
-audio track** — one 8-channel AAC stream carrying main mix, mic ISOs and click
-in fixed channel positions.
+The primary delivery mode is **one audio stream per enabled OBS track** — main
+mix, mic ISOs, click — all muxed into the same fragment and delivered as a unit.
 
-- **Sample-accurate by construction.** One stream, one clock, start to finish.
-  Nothing can drift between the click and the programme because they are
-  channels of the same track, not separate tracks with independent buffering.
-- **Channel order is the interface.** Channel 4 must be the click at both ends.
-  The mapping is therefore *published* in `event.json` and `manifest.json` as
-  `channel_labels`, so a satellite routes by name rather than guessing.
+- **Native to how OBS already works.** An operator assigns sources to tracks in
+  Advanced Audio Properties, exactly as they would for a multi-track recording.
+  Nothing new to learn, and the encoder side needs no special configuration.
+- **No global layout requirement.** Each track is its own stream with its own
+  channel count: a stereo main mix beside a mono click beside mono ISOs. OBS can
+  stay in plain stereo at both ends.
+- **Per-track channel layout is preserved** — a click or ISO may be mono while
+  the main mix is stereo or wider.
+- **Sync is structural, not incidental.** Every track shares one fragment, one
+  timeline and one playback clock. They cannot drift from the video or from each
+  other, because they are demuxed from the same object and played from one
+  playout base.
+- **Capacity:** up to 6 tracks (OBS's limit).
+- **Codec:** AAC to start; Opus is a later option.
+- **Far-site output:** the Multisite Source carries the video plus one chosen
+  track — track 1 by default, so a campus that only wants the programme does
+  nothing. Each further track is exposed by adding a **Multisite Audio Track**
+  source, which attaches to the decoder already following that room rather than
+  opening its own. The segment is therefore downloaded once and decoded once
+  however many tracks a campus uses, and every track is emitted from the same
+  playout base. The local engineer routes those sources to mixer tracks, monitor
+  sends or in-ears.
+
+Why this is the primary mode and packed is not: OBS resamples every source to
+its **global** layout, so packed multi-channel requires both ends to be set to
+7.1, and a satellite that is not silently downmixes — summing the ISOs and the
+click into the programme. That failure destroys production audio without anyone
+noticing until it is on air, and no amount of warning text makes it a good
+default. Multi-track has no such mode.
+
+### 4.3.1 Production audio: packed multi-channel (alternative mode)
+
+A **single multi-channel track** — one 8-channel AAC stream carrying main mix,
+ISOs and click in fixed channel positions. Supported for sites with a
+multi-channel interface that would rather have one stream than several.
+
+- **Sample-accurate by construction.** One stream, one clock. This is a real
+  property, but it is not an advantage over multi-track *here*: our tracks
+  already share a fragment and a clock.
+- **Channel order is the interface.** Channel 4 must be the click at both ends,
+  so the mapping is *published* in `event.json` and `manifest.json` as
+  `channel_labels` and a satellite routes by name rather than guessing.
   Positional meanings from the speaker layout (FL/FR/LFE/…) are deliberately
   ignored — the layout is only a channel-count carrier.
-- **Prerequisite:** both encoder and satellite OBS must be set to **7.1** in
-  Settings → Audio → Channels. OBS resamples every source to its global layout,
-  so at a narrower setting the extra channels are downmixed and destroyed. Both
-  plugins detect this and log an explicit error rather than failing silently.
+- **Prerequisite, and the reason this is not the default:** both encoder and
+  satellite OBS must be set to **7.1** in Settings → Audio → Channels. Both
+  plugins detect a narrower layout and log an explicit error, because otherwise
+  the extra channels are downmixed and destroyed silently.
 - **Capacity:** 8 channels total, e.g. stereo main mix + 6 mono ISOs.
-- **Audio interfaces:** ASIO or Blackmagic DeckLink devices, which is where
-  multi-channel capture and playout actually come from in production. A
-  companion de-interleaver output plugin maps packed channels onto device output
-  channels at the satellite (later phase).
-
-The multi-track mode below remains supported for sites without a multi-channel
-interface, at the cost of per-track buffering (tens of milliseconds of possible
-drift between tracks) rather than sample-lock.
-
-### 4.3.1 Multi-track production audio (alternative mode)
-
-The audio system exists to move a full **production audio bus** to the far sites
-— **main mix, ISOs of specific mics, and a click track** — not to offer a
-listener a choice of one feed.
-
-- **All enabled OBS audio tracks (up to 6) are muxed into the segment together**
-  and delivered as a unit, so nothing arrives partially.
-- **Sample-accurate sync is a hard requirement.** Because every track shares one
-  segment and one playback clock, all audio tracks stay locked to the video and
-  to each other — a click that drifts from the program is worthless.
-- **Per-track channel layout is preserved:** a click or ISO may be mono while the
-  main mix is stereo or 5.1.
-- **Codec:** AAC to start (handles multichannel); Opus is a later option.
-- **Far-site output:** each delivered track is exposed as its **own audio bus in
-  OBS** at the satellite. A main decoder source carries video + main mix;
-  lightweight companion audio-only sources carry the ISOs and click. All of them
-  **share one download cache**, so a segment is fetched once regardless of how
-  many tracks a campus uses. The local engineer routes the buses to mixer tracks,
-  monitor sends, or in-ears and builds a local mix.
-- On the encode side the OBS output accepts one audio encoder per enabled track
-  and the muxer maps each track to an audio stream inside the fMP4.
+- **Audio interfaces:** ASIO or Blackmagic DeckLink devices. A de-interleaver
+  that maps packed channels onto device output channels at the satellite is not
+  built (see §9).
 
 ### 4.4 Manifest (live-edge discovery)
 
@@ -522,7 +529,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Markers / service cues | built |
 | Pause & hold at a campus, resuming exactly where it stopped | built |
 | Per-campus independent DVR position | built |
-| Multi-track production audio (main / ISOs / click), up to 6 tracks | built (packed multi-channel; see §4.3) |
+| Multi-track production audio (main / ISOs / click), up to 6 tracks | built — one source per track at the satellite (§4.3) |
 | Event browsing with live / recording / interrupted state | built |
 | Video-on-demand playback of past and interrupted services | built |
 | Any OBS machine can originate a broadcast | built |

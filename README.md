@@ -127,6 +127,9 @@ service either. Extensions (Phase 7) are not started.
   encoder (x264, NVENC, QuickSync, AMF).
 - Satellite receive with a deep local buffer, checksum verification, and
   timeslipping — hold, resume, catch up, scrub, jump to a marker.
+- **Multi-track production audio.** Up to 6 OBS tracks — main mix, ISOs, click —
+  travel in the same fragment and are exposed at the satellite as separate
+  sources, sharing one download and one playout clock.
 - **Event browsing.** The decoder lists what a room has recorded, shows which is
   on air, which are finished recordings and which were cut short by an encoder
   that died, and plays any of them back.
@@ -189,6 +192,13 @@ if a new service starts mid-watch the dock offers the switch rather than taking
 it, because being pulled out of a recording you are part-way through is worse
 than being told. **Back to live** returns to following the room.
 
+For production audio, the Multisite Source carries the video plus **one** audio
+track (track 1 by default — the main mix). To bring in an ISO or the click as
+well, add a **Multisite Audio Track (Decoder)** source for the same room and
+pick the track. It attaches to the decoder already running, so it costs no extra
+download: every track arrives in the same segment either way, and all of them
+play from one clock.
+
 Hotkeys for play, stop, hold, resume, catch-up, jog and markers are in
 Settings → Hotkeys.
 
@@ -242,11 +252,15 @@ churches it is the deciding factor.
 - Audio leaves OBS through its monitoring device, so whichever interface the
   room uses is the one to select there.
 
-Two caveats worth knowing before planning around this. Every third-party plugin
-named above is someone else's project, on its own release schedule. And packed
-multi-channel audio currently arrives as a single multi-channel stream — routing
-individual channels to separate destinations needs the de-interleaver, which is
-not built (see [Known gaps](#known-gaps)).
+Multi-track audio is what makes that practical: each track is a separate source
+in OBS, so the main mix can go to the house system while the click goes to
+in-ears, routed independently like any other source.
+
+One caveat worth knowing before planning around this: every third-party plugin
+named above is someone else's project, on its own release schedule. And if the
+main site sends *packed* multi-channel rather than separate tracks, those
+channels arrive as one stream — splitting them still needs the de-interleaver,
+which is not built (see [Known gaps](#known-gaps)).
 
 ### Any location can be the origin
 
@@ -415,9 +429,6 @@ Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
 
 ## Known gaps
 
-- **Multi-track mode plays only the first audio track** at the satellite. The
-  primary path is packed multi-channel, which carries end to end; separate
-  audio-only sources for the multi-track alternative are not built.
 - **No channel de-interleaver.** Packed channels arrive as one multi-channel
   stream. Routing them to individual outputs is planned as part of the
   appliance, where it is a channel map rather than an OBS plugin.
