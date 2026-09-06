@@ -170,9 +170,18 @@ int main() {
         for (uint64_t i = 0; i < 8; ++i)
             ses.publish_segment(blob(i + 1), 6.0, (double)i * 6.0);
 
-        // Let the uploader retry through the outage and drain.
-        for (int i = 0; i < 400 && ses.status().confirmed_total < 8; ++i)
+        // Wait for the state the assertions below actually check, not a proxy
+        // for it. The uploader increments confirmed_total BEFORE it publishes
+        // the manifest entry and before it clears the spool file — that order
+        // is deliberate, so a crash cannot leave an object unlisted. Waiting on
+        // confirmed_total and then asserting on pending and latest_seq is
+        // therefore a race: invisible on a fast runner, intermittently red on a
+        // loaded Windows one, which is exactly how it behaved.
+        for (int i = 0; i < 400; ++i) {
+            auto s = ses.status();
+            if (s.confirmed_total >= 8 && s.pending == 0) break;
             std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        }
 
         auto st = ses.status();
         CHECK(st.pending == 0, "all segments drained after the outage");
