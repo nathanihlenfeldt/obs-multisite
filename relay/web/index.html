@@ -1,0 +1,126 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#12151a">
+<title>Public streaming</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+
+<header id="banner">
+  <div class="state" id="room-state">Connecting…</div>
+  <div class="room" id="room-detail">&nbsp;</div>
+</header>
+
+<div id="warning" class="warning" hidden></div>
+
+<nav id="tabs">
+  <button class="tab is-on" data-tab="send">Sending</button>
+  <button class="tab" data-tab="settings">Settings</button>
+  <button class="tab" data-tab="log">Log</button>
+</nav>
+
+<main>
+
+<!-- ── Sending ───────────────────────────────────────────────────────────── -->
+<section id="tab-send" class="panel is-on">
+  <div id="destinations"></div>
+
+  <div class="totals" id="totals" hidden>
+    Sending <b id="total-rate">0</b> out in total.
+    <span class="hint">If the internet where this server lives cannot manage
+      that, every stream suffers at once.</span>
+  </div>
+
+  <button class="add" id="add-open">Add a place to send to</button>
+
+  <form class="card form" id="add-form" hidden>
+    <h2>Add a place to send to</h2>
+    <label>Name
+      <input name="name" placeholder="YouTube" required>
+      <span class="hint">Just so you can tell them apart.</span>
+    </label>
+    <label>Server address
+      <input name="url" placeholder="rtmp://a.rtmp.youtube.com/live2" required>
+      <span class="hint">Copy this from the streaming site's own page.</span>
+    </label>
+    <label>Stream key
+      <input name="stream_key" type="password" autocomplete="off" required>
+      <span class="hint">Also from the streaming site. It is kept on this
+        server and never shown again.</span>
+    </label>
+    <label>Which sound to send
+      <select name="audio_label" id="add-audio"></select>
+      <span class="hint">The main mix is what a congregation should hear.</span>
+    </label>
+    <label>Start this far behind the service
+      <input name="delay_min" type="number" min="0" max="60" step="1" value="3">
+      <span class="hint">Minutes. This is what lets a wobble at the main site
+        pass without the public stream breaking. Three is a good default.</span>
+    </label>
+    <div class="row">
+      <button type="submit" class="primary">Add</button>
+      <button type="button" class="ghost" id="add-cancel">Cancel</button>
+    </div>
+    <div class="error" id="add-error" hidden></div>
+  </form>
+</section>
+
+<!-- ── Settings ──────────────────────────────────────────────────────────── -->
+<section id="tab-settings" class="panel">
+  <form class="card form" id="config-form">
+    <h2>Where the service comes from</h2>
+    <label>Feed name
+      <input name="room_id" placeholder="main-auditorium">
+      <span class="hint">Must match the name set at the main site.</span>
+    </label>
+
+    <h2>Storage</h2>
+    <label>Cloudflare Account ID
+      <input name="r2_account_id">
+      <span class="hint">Leave blank if you are not using Cloudflare R2.</span>
+    </label>
+    <label>Server address
+      <input name="endpoint_host" placeholder="leave blank for Cloudflare R2">
+    </label>
+    <label>Bucket name
+      <input name="bucket">
+    </label>
+    <label>Access Key ID
+      <input name="access_key_id" autocomplete="off">
+    </label>
+    <label>Secret Access Key
+      <input name="secret_access_key" type="password" autocomplete="off"
+             placeholder="unchanged">
+      <span class="hint">Leave blank to keep the one already saved.</span>
+    </label>
+    <label>Region
+      <input name="region" placeholder="auto">
+    </label>
+    <label class="check">
+      <input name="use_https" type="checkbox" checked>
+      Connect securely (HTTPS)
+      <span class="hint">Leave this on. Turn it off only for storage running
+        on your own network without a certificate.</span>
+    </label>
+
+    <div class="row">
+      <button type="submit" class="primary">Save</button>
+      <button type="button" class="ghost" id="test-storage">Test storage</button>
+    </div>
+    <div class="error" id="config-error" hidden></div>
+    <div class="good" id="config-ok" hidden></div>
+  </form>
+</section>
+
+<!-- ── Log ───────────────────────────────────────────────────────────────── -->
+<section id="tab-log" class="panel">
+  <pre id="log"></pre>
+</section>
+
+</main>
+<script src="/app.js"></script>
+</body>
+</html>

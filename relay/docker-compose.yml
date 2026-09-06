@@ -1,0 +1,44 @@
+# docker-compose.yml — the whole deployment.
+#
+# Everything below the storage credentials has a working default. Bring it up,
+# open the port, and add destinations in the browser.
+
+services:
+  relay:
+    build:
+      context: ..
+      dockerfile: relay/Dockerfile
+    # Or, once there is a published image:
+    # image: ghcr.io/stageaudioworks/multisite-relay:latest
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    volumes:
+      - relay-data:/data
+    environment:
+      # Which feed to relay. Must match the name set at the main site.
+      RELAY_ROOM: main-auditorium
+
+      # Storage. These seed the settings on first run only — after that, what
+      # is in the database wins, so a value changed in the browser is not
+      # overwritten on the next restart. They can be left out entirely and
+      # filled in on the Settings page instead.
+      RELAY_BUCKET: ""
+      RELAY_R2_ACCOUNT_ID: ""       # for Cloudflare R2
+      # RELAY_ENDPOINT_HOST: "s3.eu-west-1.amazonaws.com"   # for anything else
+      RELAY_ACCESS_KEY_ID: ""
+      RELAY_SECRET_ACCESS_KEY: ""
+      RELAY_REGION: "auto"
+      # Only for storage on your own network without a certificate.
+      # RELAY_USE_HTTPS: "0"
+
+    # A relay pushing one 6 Mbps stream needs very little of either. The limits
+    # are here so a runaway cannot take the rest of a small VPS down with it.
+    deploy:
+      resources:
+        limits:
+          cpus: "1.5"
+          memory: 512M
+
+volumes:
+  relay-data:

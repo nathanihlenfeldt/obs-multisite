@@ -1,0 +1,120 @@
+//
+// main.cpp — the relay, as a container.
+//
+// Deployment simplicity is a feature, so everything here is either an
+// environment variable with a sensible default or something the operator sets
+// in the browser. A church's integrator should get this running with one
+// `docker run` and a port.
+//
+#include "api.h"
+#include "log.h"
+#include "service.h"
+
+#include <atomic>
+#include <chrono>
+#include <csignal>
+#include <cstdlib>
+#include <string>
+#include <sys/stat.h>
+#include <thread>
+
+using namespace multisite_relay;
+
+namespace {
+
+std::atomic<bool> g_stop{false};
+void on_signal(int) { g_stop = true; }
+
+std::string env(const char* name, const std::string& fallback) {
+    const char* v = ::getenv(name);
+    return (v && *v) ? std::string(v) : fallback;
+}
+
+int env_int(const char* name, int fallback) {
+    const char* v = ::getenv(name);
+    if (!v || !*v) return fallback;
+    try { return std::stoi(v); } catch (...) { return fallback; }
+}
+
+// Seeding from the environment exists so a church's integrator can bring a
+// container up already pointing at the right bucket, rather than having to
+// open the UI to type credentials before anything works. Anything already in
+// the database wins: a value typed in the browser must not be silently
+// overwritten by a stale variable on the next restart.
+void seed_from_environment(Service& service) {
+    auto c = service.config().storage();
+    bool changed = false;
+    auto take = [&](const char* name, std::string& field) {
+        const std::string v = env(name, "");
+        if (!v.empty() && field.empty()) { field = v; changed = true; }
+    };
+    take("RELAY_BUCKET", c.bucket);
+    take("RELAY_ENDPOINT_HOST", c.endpoint_host);
+    take("RELAY_R2_ACCOUNT_ID", c.r2_account_id);
+    take("RELAY_ACCESS_KEY_ID", c.access_key_id);
+    take("RELAY_SECRET_ACCESS_KEY", c.secret_access_key);
+    take("RELAY_REGION", c.region);
+    if (const char* v = ::getenv("RELAY_USE_HTTPS")) {
+        const bool want = !(v[0] == '0' || v[0] == 'f' || v[0] == 'F');
+        if (want != c.use_https) { c.use_https = want; changed = true; }
+    }
+    if (changed) service.config().set_storage(c);
+
+    auto r = service.config().room();
+    const std::string room = env("RELAY_ROOM", "");
+    if (!room.empty() && r.room_id == "main-auditorium" && room != r.room_id) {
+        r.room_id = room;
+        service.config().set_room(r);
+        changed = true;
+    }
+    if (changed) service.reload();
+}
+
+} // namespace
+
+int main() {
+    ::signal(SIGINT, on_signal);
+    ::signal(SIGTERM, on_signal);
+
+    if (env("RELAY_DEBUG", "").size()) set_debug_logging(true);
+
+    const std::string data_dir = env("RELAY_DATA_DIR", "/data");
+    const std::string db_path  = data_dir + "/relay.db";
+    const std::string web_root = env("RELAY_WEB_ROOT", "/app/web");
+    const int port = env_int("RELAY_PORT", 8080);
+
+    ::mkdir(data_dir.c_str(), 0700);
+    ::mkdir((data_dir + "/cache").c_str(), 0700);
+    if (!::getenv("RELAY_CACHE_DIR"))
+        ::setenv("RELAY_CACHE_DIR", (data_dir + "/cache").c_str(), 0);
+
+    Service service;
+    const std::string e = service.start(db_path);
+    if (!e.empty()) {
+        rlog_error("could not start: %s", e.c_str());
+        return 1;
+    }
+    seed_from_environment(service);
+
+    multisite_player::HttpServer server("0.0.0.0", port);
+    server.set_static_root(web_root);
+    register_routes(server, service);
+
+    std::string err;
+    if (!server.start(err)) {
+        // Almost always a second copy already running, which is worth saying
+        // rather than leaving as "bind failed".
+        rlog_error("could not listen on port %d: %s", port, err.c_str());
+        return 1;
+    }
+    rlog_info("relay ready on port %d", port);
+    if (!service.config().storage_configured())
+        rlog_info("storage is not set up yet — open the page and fill it in");
+
+    while (!g_stop) std::this_thread::sleep_for(std::chrono::milliseconds(200));
+
+    rlog_info("stopping");
+    server.stop();
+    service.stop();
+    return 0;
+}

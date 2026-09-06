@@ -442,3 +442,12 @@ if(BUILD_OBS_PLUGIN)
     endif()
     message(STATUS "Building OBS plugin module")
 endif()
+
+# ── Simulcast relay (separate sub-project) ───────────────────────────────────
+# Off by default: it is a container-side service, not part of the plugins, and
+# a plugin build should not be made to find sqlite3 for it. Its dependency
+# direction is one-way — the relay uses the core, the core knows nothing of it.
+option(MULTISITE_BUILD_RELAY "Build the multi-destination simulcast relay" OFF)
+if(MULTISITE_BUILD_RELAY)
+    add_subdirectory(relay)
+endif()
