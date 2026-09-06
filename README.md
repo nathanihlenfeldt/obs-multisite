@@ -119,6 +119,10 @@ minutes behind live for hours, a scrub back nearly three hours and a return to
 live both recovered cleanly, and the satellite played out to the end of the
 recording when the broadcast stopped.
 
+Audio and video stayed in sync across the whole run, checked by eye and ear as
+well as by the reported A/V offset, which held between 0.005 s and 0.021 s
+through several decoder restarts.
+
 It has still **not carried a real congregation's service** — a soak test on
 looping media is not a Sunday morning with people in the room.
 
@@ -538,6 +542,15 @@ Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
   straight trade against streaming publicly.
 - **The relay cannot split packed multi-channel audio**, and cannot start
   itself on a schedule or when the encoder goes live.
+- **Alignment between separate audio tracks is unverified.** The soak confirmed
+  audio stays locked to the *picture*, but not that a click on one track lands
+  at the same instant as the programme on another. Each track is emitted by its
+  own OBS source, and OBS buffers sources independently — the timestamps are
+  derived from one anchor by construction, but nobody has measured the result.
+  A few milliseconds would be inaudible against video and useless to a band.
+  To test it: send identical audio on two tracks, play one through the main
+  source and one through a companion into the same mix, and listen for comb
+  filtering.
 - **Not yet used for a real service.** A six-hour soak has been run (see
   [Status](#status)) but no congregation has watched anything through this. The
   soak covered sustained upload, timeslipping and playout; it did not cover a
