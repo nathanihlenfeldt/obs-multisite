@@ -4,6 +4,15 @@
 
 namespace multisite_relay {
 
+bool affects_stream(const Destination& a, const Destination& b) {
+    return a.url != b.url
+        || a.stream_key != b.stream_key
+        || a.audio.label != b.audio.label
+        || a.allow_transcode != b.allow_transcode
+        || a.delay_s != b.delay_s
+        || a.room_id != b.room_id;
+}
+
 std::string validate(const Destination& d) {
     if (d.name.empty())
         return "Give this destination a name, so you can tell it apart from "

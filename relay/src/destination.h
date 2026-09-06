@@ -54,4 +54,12 @@ struct Destination {
 // it is fine. Phrased for the person reading it in the browser.
 std::string validate(const Destination& d);
 
+// Whether the difference between two versions of a destination is one that
+// forces the stream to be rebuilt. Renaming it is not; changing where it goes,
+// which sound it carries, or how far behind it sits, is.
+//
+// This distinction is the whole reason it exists: a destination that is on air
+// must not be interrupted because something unrelated to it was edited.
+bool affects_stream(const Destination& a, const Destination& b);
+
 } // namespace multisite_relay

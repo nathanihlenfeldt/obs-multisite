@@ -5,6 +5,7 @@
 // particular exists because of a measured fact — ffmpeg blocks silently on a
 // stalled pipe and will never tell us — so the machine has to notice on its
 // own, and that noticing is what these tests pin down.
+#include "../src/destination.h"
 #include "../src/relay_state.h"
 
 #include <cstdio>
@@ -16,6 +17,17 @@ using multisite::RoomState;
 static int g_fail = 0;
 #define CHECK(c, m) do { if(!(c)){ std::printf("  [FAIL] %s\n", m); ++g_fail; } \
                          else { std::printf("  [ok]   %s\n", m); } } while(0)
+
+static Destination dest(const std::string& label) {
+    Destination d;
+    d.name = "YouTube";
+    d.room_id = "main-auditorium";
+    d.url = "rtmp://a.rtmp.youtube.com/live2";
+    d.stream_key = "key";
+    d.audio.label = label;
+    d.delay_s = 180;
+    return d;
+}
 
 static RelayInput live_at(int64_t now, uint64_t latest) {
     RelayInput in;
@@ -274,6 +286,48 @@ int main() {
         d = m2.step(ok);
         CHECK(m2.state() != RelayState::Blocked,
               "and unblocks when the problem goes away");
+    }
+
+    // ── Editing a destination ────────────────────────────────────────────────
+    // An edit rebuilds the stream, but it is not a fault: it must not be
+    // counted as a reconnection, must not serve a backoff, and must take up
+    // position again in case the delay is what changed.
+    {
+        RelayMachine m;
+        auto in = live_at(0, 100);
+        m.step(in);
+        in.child_alive = true;
+        m.step(in);
+        CHECK(m.head() == 71 && m.restarts() == 0, "running normally");
+
+        m.reconfigured(5000);
+        CHECK(m.restarts() == 0, "an edit is not counted as a reconnection");
+        CHECK(!m.has_position(),
+              "and position is given up, in case the delay is what changed");
+
+        in.now_ms = 5000;
+        in.child_alive = false;
+        in.delay_s = 600;               // the operator asked for ten minutes
+        auto d = m.step(in);
+        CHECK(d.action == RelayAction::Spawn,
+              "it starts again immediately, with no backoff");
+        CHECK(m.head() == 0,
+              "at the new delay — ten minutes back is before this service began");
+        CHECK(m.restarts() == 0, "still not a reconnection");
+    }
+
+    // Renaming a destination is not a change to the stream at all.
+    {
+        Destination a = dest("Main Mix");
+        Destination b = a;
+        b.name = "YouTube (main service)";
+        CHECK(!affects_stream(a, b), "renaming leaves a live stream alone");
+        b = a; b.audio.label = "Sermon ISO";
+        CHECK(affects_stream(a, b), "changing the sound feed does not");
+        b = a; b.delay_s = 600;
+        CHECK(affects_stream(a, b), "nor changing the delay");
+        b = a; b.stream_key = "different";
+        CHECK(affects_stream(a, b), "nor a new stream key");
     }
 
     // ── The operator's switch ────────────────────────────────────────────────

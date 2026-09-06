@@ -42,9 +42,11 @@ void RelaySession::set_enabled(bool on) {
 void RelaySession::update(const Destination& d) {
     std::lock_guard<std::mutex> lk(m_mtx);
     const int64_t id = m_dest.id;
+    const bool rebuild = affects_stream(m_dest, d);
     m_dest = d;
     m_dest.id = id;
     m_enabled = d.enabled;
+    if (rebuild) m_reconfigured = true;
 }
 
 Destination RelaySession::destination() const {
@@ -128,6 +130,18 @@ void RelaySession::run() {
                 std::lock_guard<std::mutex> lk(m_mtx);
                 m_error = line;
             }
+        }
+
+        // An edit that changes what is being sent: rebuild the stream, but
+        // deliberately, so it is not reported to the operator as a fault.
+        if (m_reconfigured.exchange(false)) {
+            if (m_child) { m_child->stop(); m_child.reset(); }
+            m_pending.clear();
+            m_pending_offset = 0;
+            m_machine.reconfigured(t);
+            rlog_info("[%s] settings changed — restarting this stream",
+                      dest.name.c_str());
+            continue;
         }
 
         const RelayDecision d = m_machine.step(in);

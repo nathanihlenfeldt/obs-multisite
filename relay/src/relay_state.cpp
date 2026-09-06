@@ -98,6 +98,16 @@ void RelayMachine::note_child_exited(int64_t now_ms, bool expected) {
     m_retry_at_ms = now_ms + m_backoff_ms;
 }
 
+void RelayMachine::reconfigured(int64_t now_ms) {
+    m_state = RelayState::Waiting;
+    m_head_set = false;          // the delay may be what changed
+    m_retry_at_ms = 0;           // an edit is not a failure to back off from
+    m_stalled_since_ms = 0;
+    m_overdue_since_ms = 0;
+    m_streaming_since_ms = now_ms;
+    m_last_error.clear();
+}
+
 RelayDecision RelayMachine::step(const RelayInput& in) {
     RelayDecision d;
     const int64_t now = in.now_ms;

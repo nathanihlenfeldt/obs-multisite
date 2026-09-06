@@ -58,9 +58,10 @@ public:
     void set_enabled(bool on);
     bool enabled() const { return m_enabled; }
 
-    // Replaces the configuration (name, audio choice, delay). A change that
-    // affects what is being sent restarts the stream, because the destination
-    // cannot be switched mid-flight.
+    // Replaces the configuration. A change to what is actually being sent —
+    // where it goes, which sound, how far behind — rebuilds the stream,
+    // because none of those can be switched mid-flight. A change to anything
+    // else (the name) leaves a stream that is on air completely alone.
     void update(const Destination& d);
 
     Destination destination() const;
@@ -89,6 +90,9 @@ private:
     std::thread m_thread;
     std::atomic<bool> m_running{false};
     std::atomic<bool> m_enabled{false};
+    // Set by update(), acted on by the loop. The child is never touched from
+    // the thread that edits the configuration: only the loop owns it.
+    std::atomic<bool> m_reconfigured{false};
 
     // Content waiting to go into the pipe. A fragment is several megabytes and
     // the pipe takes it in 64 KB bites, so this is normal, not a backlog.

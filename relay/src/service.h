@@ -13,6 +13,7 @@
 #include "room_feeder.h"
 
 #include <map>
+#include <set>
 #include <memory>
 #include <mutex>
 #include <string>
@@ -49,8 +50,10 @@ public:
 
     ConfigStore& config() { return m_cfg; }
 
-    // Rebuilds the feeder and the sessions from what is in the database.
-    // Called after any change that affects them.
+    // Brings the running relay into line with the database. Rebuilds the
+    // downloader only if the bucket or the room actually changed; otherwise
+    // adds, removes and updates sessions in place, so a destination that is
+    // on air is not disturbed because a different one was edited.
     void reload();
 
     ServiceStatus status() const;
@@ -62,11 +65,17 @@ public:
 
 private:
     void supervise();
+    void sync_destinations_locked(const std::vector<Destination>& dests,
+                                  const RoomSettings& room);
 
     ConfigStore m_cfg;
     mutable std::mutex m_mtx;
     std::unique_ptr<RoomFeeder> m_feeder;
     std::map<int64_t, std::unique_ptr<RelaySession>> m_sessions;
+    // What the current downloader was built from, so a save that changes
+    // nothing about the bucket does not rebuild it.
+    multisite::S3Config m_feeder_storage;
+    std::string         m_feeder_room;
 
     std::thread m_thread;
     std::atomic<bool> m_running{false};

@@ -28,12 +28,40 @@ void Service::stop() {
     m_feeder.reset();
 }
 
+// Whether two sets of storage settings describe the same bucket. Rebuilding
+// the downloader means dropping the cache and every stream with it, so it must
+// happen when the bucket really changed and never merely because something was
+// saved.
+static bool same_storage(const multisite::S3Config& a,
+                         const multisite::S3Config& b) {
+    return a.endpoint_host == b.endpoint_host
+        && a.r2_account_id == b.r2_account_id
+        && a.bucket == b.bucket
+        && a.access_key_id == b.access_key_id
+        && a.secret_access_key == b.secret_access_key
+        && a.region == b.region
+        && a.use_https == b.use_https;
+}
+
 void Service::reload() {
     const auto storage = m_cfg.storage();
     const auto room = m_cfg.room();
     const auto dests = m_cfg.destinations();
 
     std::lock_guard<std::mutex> lk(m_mtx);
+
+    // Does the downloader itself have to be rebuilt? Only if the bucket or the
+    // room changed. Adding a destination must NOT reach this far: doing so
+    // tore down every stream that was already on air, which is precisely what
+    // an operator does mid-service when they decide to add Facebook.
+    const bool feeder_stale =
+        !m_feeder || !same_storage(storage, m_feeder_storage) ||
+        room.room_id != m_feeder_room;
+
+    if (!feeder_stale) {
+        sync_destinations_locked(dests, room);
+        return;
+    }
 
     // Sessions hold a reference to the feeder, so they must go before it does.
     m_sessions.clear();
@@ -62,16 +90,45 @@ void Service::reload() {
 
     m_feeder = std::make_unique<RoomFeeder>(fc);
     m_feeder->start();
+    m_feeder_storage = storage;
+    m_feeder_room = room.room_id;
 
+    sync_destinations_locked(dests, room);
+    rlog_info("watching room \"%s\" with %zu destination(s)",
+              room.room_id.c_str(), dests.size());
+}
+
+// Bring the running sessions into line with the database, disturbing as little
+// as possible. A destination that has not changed keeps its stream, its
+// position and its uptime; only what actually differs is acted on.
+void Service::sync_destinations_locked(const std::vector<Destination>& dests,
+                                       const RoomSettings& room) {
+    if (!m_feeder) return;
+
+    std::set<int64_t> seen;
     for (const auto& d : dests) {
         Destination copy = d;
         if (copy.delay_s <= 0) copy.delay_s = room.default_delay_s;
-        auto s = std::make_unique<RelaySession>(copy, *m_feeder);
-        s->start_thread();
-        m_sessions.emplace(d.id, std::move(s));
+        seen.insert(d.id);
+
+        auto it = m_sessions.find(d.id);
+        if (it == m_sessions.end()) {
+            auto s = std::make_unique<RelaySession>(copy, *m_feeder);
+            s->start_thread();
+            m_sessions.emplace(d.id, std::move(s));
+            rlog_info("destination \"%s\" added", copy.name.c_str());
+            continue;
+        }
+        // update() decides for itself whether anything here is worth
+        // interrupting a live stream for.
+        it->second->update(copy);
     }
-    rlog_info("watching room \"%s\" with %zu destination(s)",
-              room.room_id.c_str(), dests.size());
+
+    for (auto it = m_sessions.begin(); it != m_sessions.end(); ) {
+        if (seen.count(it->first)) { ++it; continue; }
+        rlog_info("destination removed");
+        it = m_sessions.erase(it);          // its destructor stops the stream
+    }
 }
 
 void Service::set_enabled(int64_t id, bool on) {

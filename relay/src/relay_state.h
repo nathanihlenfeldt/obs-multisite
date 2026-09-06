@@ -134,6 +134,12 @@ public:
 
     void note_child_exited(int64_t now_ms, bool expected);
 
+    // The operator changed something about this destination, so the stream has
+    // to be rebuilt. That is not a fault: it must not be counted as a restart,
+    // must not serve a backoff, and must take up position again in case the
+    // delay is what changed.
+    void reconfigured(int64_t now_ms);
+
 private:
     void enter(RelayState s, int64_t now_ms, const std::string& why);
 
