@@ -1,3 +1,25 @@
+## 🔴 If you are running v0.1.1-alpha's relay, read this first
+
+**v0.1.1-alpha shipped the simulcast relay with no authentication of any kind,
+and a `docker-compose.yml` that publishes it on every interface.** Anyone who
+could reach that port could change a destination's address and stream key —
+pointing a church's service at their own server — as well as stop it mid-service
+and read the storage settings.
+
+If you deployed it:
+
+1. Close the port now (`docker compose down`, or firewall it), then update.
+2. Treat the storage credentials it held as exposed and roll them, using
+   read-only keys for the relay when you re-enter them.
+3. Check the destinations list for anything you did not add yourself.
+
+Fixed in this release: every endpoint but signing in now requires a login, and
+the relay binds to localhost so publishing it is a decision rather than a
+default. The campus appliance is not affected — it has always been a
+LAN-only device and was never documented as internet-facing.
+
+---
+
 ## ⚠️ Alpha — read this first
 
 This is pre-release software. A **six-hour continuous soak test** has been run
@@ -46,6 +68,21 @@ uploads once whether the service goes to two campuses or to two campuses and the
 internet. It runs a few minutes behind on purpose, so a dropout at the main site
 delays the public stream rather than breaking it. Nothing is re-encoded, so a
 $5/month VPS is the target rather than a stretch.
+
+**A login on the relay, and it binds to localhost.** See the notice at the top:
+this closes a real hole rather than hardening something already safe. Every
+endpoint but signing in requires a session; passwords are stored as
+PBKDF2-HMAC-SHA256 over a random salt; sessions are held in memory, so a restart
+signs everyone out. A working Caddy config ships alongside for TLS, because a
+password over plain HTTP protects nobody.
+
+**Past services can be downloaded and replayed.** A finished service downloads
+as one MP4, streamed from storage as it is requested rather than assembled on
+the server, so a two-hour service costs no disk and several people can download
+at once. It carries every audio track the main site sent, not just the streamed
+one, so the ISOs and the click are there for whoever edits it afterwards. A
+finished service can also be replayed out to a destination as though it were
+live — a proof of concept: one at a time, started by hand, no scheduling yet.
 
 **Fixes from the soak test.** Three defects showed up in six hours of logs:
 
@@ -97,8 +134,13 @@ will say so rather than showing an empty list.
   to the picture — measured, and checked by ear — but nobody has confirmed that
   a click on one track lands at the same instant as the programme on another.
 - **No channel de-interleaver**, which limits the packed mode only.
-- **The appliance and the relay have not carried a service** either, and the
-  relay will not send an HEVC feed.
+- **The appliance has not carried a service.** The relay has pushed live
+  streams to YouTube but has not been through a full service either, and it
+  will not send an HEVC feed.
+- **The relay does not terminate TLS.** It binds to localhost and expects a
+  proxy in front of it; a working Caddy config is included.
+- **Replaying a past service is a proof of concept** — one at a time, started
+  by hand, with no scheduling.
 - **AV1 is carried but lightly exercised**; seeking is accurate to about a
   second, not to a frame.
 
