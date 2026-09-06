@@ -100,6 +100,16 @@ void put_setting(sqlite3* db, const std::string& key, const std::string& value) 
 
 } // namespace
 
+std::string ConfigStore::get_secret(const std::string& key) const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return get_setting(m_db, key);
+}
+
+void ConfigStore::set_secret(const std::string& key, const std::string& value) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    put_setting(m_db, key, value);
+}
+
 multisite::S3Config ConfigStore::storage() const {
     std::lock_guard<std::mutex> lk(m_mtx);
     multisite::S3Config c;

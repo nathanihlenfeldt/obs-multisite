@@ -7,11 +7,14 @@
 // command and keep working for years without anyone updating a dependency
 // tree.
 //
+#include "auth.h"
+#include "auth.h"
 #include "http_server.h"
 #include "service.h"
 
 namespace multisite_relay {
 
-void register_routes(multisite_player::HttpServer& server, Service& service);
+void register_routes(multisite_player::HttpServer& server, Service& service,
+                     Auth& auth);
 
 } // namespace multisite_relay

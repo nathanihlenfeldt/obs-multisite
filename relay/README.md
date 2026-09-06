@@ -47,6 +47,36 @@ main site delays the public stream rather than breaking it.
 
 ---
 
+## Before anything else: it has a login, and it needs one
+
+This service decides where your services are sent. Anyone who can reach it can
+point your stream at their own server, take it off air mid-sermon, or read your
+storage settings. So:
+
+- **It binds to localhost by default.** Publishing it to the internet is a
+  decision you make, not something that happens by running it.
+- **Every part of it requires a login** except the sign-in page itself. The
+  first person to open an unclaimed relay sets the username and password, so
+  set yours before anyone else can reach it — or pass `RELAY_USER` and
+  `RELAY_PASSWORD` and it is claimed before it ever starts.
+- **Put HTTPS in front of it.** A password sent over plain HTTP crosses the
+  network readable, and so does everything else. `Caddyfile.example` in this
+  directory is a complete working config; Caddy gets and renews the
+  certificate by itself. If you would rather not expose it at all, leave it on
+  localhost and reach it over an SSH tunnel:
+
+  ```bash
+  ssh -L 8080:localhost:8080 you@your-server
+  ```
+
+  then open `http://localhost:8080`.
+
+Passwords are stored as PBKDF2-HMAC-SHA256 over a random salt, so the database
+is not a list of passwords. Sessions live in memory, so restarting signs
+everyone out.
+
+---
+
 ## Running it
 
 You need a server with a public internet connection and enough upload
@@ -82,6 +112,8 @@ is not overwritten by a stale variable on the next restart.
 | `RELAY_REGION` | `auto` for R2, a real region for AWS. |
 | `RELAY_USE_HTTPS` | `0` only for storage on your own network with no certificate. |
 | `RELAY_PORT` | Defaults to 8080. |
+| `RELAY_BIND` | Defaults to `127.0.0.1`. Change only if you know what is in front of it. |
+| `RELAY_USER` / `RELAY_PASSWORD` | Claims the relay on first run, so the login is set before anyone can reach it. Ignored once a login exists. |
 | `RELAY_DATA_DIR` | Defaults to `/data`. |
 
 `docker-compose.yml` in this directory does the same thing if you prefer.
@@ -112,6 +144,37 @@ matter how many destinations you add; only the upload multiplies.
 Disk: the cache holds the delay window plus room to run ahead, so at 6 Mbps
 with a three-minute delay expect a few hundred megabytes. A 10 GB volume is
 generous.
+
+---
+
+## Past services
+
+Everything the room has recorded is listed under **Past services**, with the
+same states a campus sees: on air now, finished, or cut short by an encoder
+that died. A service still going out can be neither downloaded nor replayed —
+it has no end yet.
+
+**Download.** A finished service downloads as one MP4, streamed straight from
+storage as you download it. Nothing is assembled on the server first, so a
+two-hour service costs no disk and no CPU, and several people can download at
+once without the relay noticing.
+
+The file carries **every audio track the main site sent**, not just the one
+being streamed — so the mic ISOs and the click are there for whoever edits it
+afterwards. It is a fragmented MP4, which plays in VLC, in browsers, and in
+DaVinci Resolve and Premiere. Some older tools want a classic MP4 index; if
+yours does, `ffmpeg -i service.mp4 -c copy -movflags +faststart out.mp4` will
+convert it without re-encoding.
+
+**Replay (proof of concept).** A finished service can be played out to a
+destination as though it were happening now — for a second congregation in a
+different time zone, or an evening repeat. It plays at normal speed from the
+beginning and ends by itself at the end of the recording.
+
+This is a first version and is honest about it: one replay at a time, started
+by hand, to a destination that is not currently carrying the live service. What
+it does not do yet is schedule itself, loop, start part-way in, or run several
+at once.
 
 ---
 

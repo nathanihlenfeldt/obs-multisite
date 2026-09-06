@@ -45,6 +45,12 @@ public:
     // human-readable error, or empty on success.
     std::string open(const std::string& path);
 
+    // ── Secrets and small settings ───────────────────────────────────────────
+    // Used for the operator login. Kept generic rather than growing a column
+    // per field, because these are read once at sign-in and never iterated.
+    std::string get_secret(const std::string& key) const;
+    void        set_secret(const std::string& key, const std::string& value);
+
     // ── Storage ──────────────────────────────────────────────────────────────
     multisite::S3Config storage() const;
     void set_storage(const multisite::S3Config& c);

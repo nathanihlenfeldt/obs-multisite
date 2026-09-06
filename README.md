@@ -132,8 +132,9 @@ Raspberry Pi appliance — and both are built. See
 service either.
 
 The public simulcast relay is built and is the first piece of Phase 7. It has
-been run end to end and survives having its encoder killed mid-stream, but it
-has not carried a real service, and it will not send an HEVC feed.
+pushed live streams to YouTube and survives having its encoder killed
+mid-stream, but it has not yet been through a full service, and it will not
+send an HEVC feed.
 
 **What works**
 
@@ -524,6 +525,10 @@ Then open it in a browser, put in the bucket details, and add a destination.
 A $5/month VPS is the target rather than a stretch, because nothing is being
 re-encoded.
 
+- **It has a login, and binds to localhost by default.** This service decides
+  where your services are sent, so exposing it is a decision rather than a
+  default. Put HTTPS in front of it; `relay/Caddyfile.example` is a working
+  config.
 - **One chosen sound feed per destination**, picked by the name the main site
   gave it — "Main Mix", "Sermon ISO" — never a track number. A future
   "clean feed to Facebook, main mix to YouTube" is just two destinations.
@@ -537,6 +542,16 @@ re-encoded.
   audio are both declined with a plain explanation, because sending either
   onward would mean a stream the destination rejects, or a mic ISO going out to
   the public.
+
+It also does two things with services that have already finished:
+
+- **Download one as an MP4**, streamed straight from storage — nothing is
+  assembled on the server, so a two-hour service costs no disk. The file
+  carries every audio track the main site sent, not just the streamed one, so
+  the ISOs and the click are there for whoever edits it.
+- **Replay one to a destination** as though it were happening now, for a
+  second congregation or an evening repeat. This is a proof of concept: one at
+  a time, started by hand, no scheduling yet.
 
 Full deployment notes, including bandwidth and disk, are in
 [relay/README.md](relay/README.md).
@@ -579,6 +594,11 @@ Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
   straight trade against streaming publicly.
 - **The relay cannot split packed multi-channel audio**, and cannot start
   itself on a schedule or when the encoder goes live.
+- **Replaying a past service is a proof of concept.** One at a time, started by
+  hand, and it cannot be scheduled, looped, or started part-way in.
+- **The relay speaks plain HTTP** and relies on something in front of it for
+  TLS. It binds to localhost so that is a deliberate choice rather than an
+  accident, but it does not terminate TLS itself.
 - **Alignment between separate audio tracks is unverified.** The soak confirmed
   audio stays locked to the *picture*, but not that a click on one track lands
   at the same instant as the programme on another. Each track is emitted by its

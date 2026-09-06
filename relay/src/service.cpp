@@ -24,6 +24,9 @@ std::string Service::start(const std::string& db_path) {
 void Service::stop() {
     if (m_running.exchange(false) && m_thread.joinable()) m_thread.join();
     std::lock_guard<std::mutex> lk(m_mtx);
+    m_rebroadcast.reset();
+    if (m_rebroadcast_feeder) m_rebroadcast_feeder->stop();
+    m_rebroadcast_feeder.reset();
     m_sessions.clear();          // stops each supervisor and its child
     if (m_feeder) m_feeder->stop();
     m_feeder.reset();
@@ -163,9 +166,123 @@ void Service::supervise() {
                 }
                 if (any) m_feeder->set_lowest_reader(lowest);
             }
+            if (m_rebroadcast_feeder && m_rebroadcast &&
+                m_rebroadcast->has_position())
+                m_rebroadcast_feeder->set_lowest_reader(m_rebroadcast->head());
+
+            // A rebroadcast that has played to the end tidies itself away, so
+            // the operator is not left looking at a finished job wondering
+            // whether it is still doing something.
+            if (m_rebroadcast &&
+                m_rebroadcast->status().state == std::string("stopped")) {
+                rlog_info("rebroadcast finished");
+                m_rebroadcast.reset();
+                if (m_rebroadcast_feeder) m_rebroadcast_feeder->stop();
+                m_rebroadcast_feeder.reset();
+                m_rebroadcast_event.clear();
+            }
         }
         std::this_thread::sleep_for(std::chrono::milliseconds(500));
     }
+}
+
+RoomFeeder* Service::feeder() {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_feeder.get();
+}
+
+std::vector<EventSummary> Service::events(bool force) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    if (!m_feeder) return {};
+    return m_feeder->events(force);
+}
+
+std::string Service::check_event_is_finished(const std::string& event_id) {
+    if (event_id.empty()) return "No service was chosen.";
+    for (const auto& e : events()) {
+        if (e.event_id != event_id) continue;
+        // The rule the brief asks for, and the reason for it: a service still
+        // being recorded has no end yet, so a download would be a snapshot of
+        // an unfinished thing and a rebroadcast would run into the live edge.
+        if (e.state == EventState::Live)
+            return "That service is still going out. Wait until it has "
+                   "finished.";
+        return {};
+    }
+    return "That service is no longer in storage.";
+}
+
+std::string Service::start_rebroadcast(const std::string& event_id,
+                                       int64_t dest_id) {
+    const std::string problem = check_event_is_finished(event_id);
+    if (!problem.empty()) return problem;
+
+    auto dest = m_cfg.destination(dest_id);
+    if (!dest) return "That destination no longer exists.";
+
+    const auto storage = m_cfg.storage();
+    const auto room = m_cfg.room();
+
+    std::lock_guard<std::mutex> lk(m_mtx);
+    if (m_rebroadcast) return "A rebroadcast is already running.";
+    if (!m_feeder) return "Storage has not been set up yet.";
+
+    // A destination cannot carry a live relay and a rebroadcast at once: it is
+    // one stream key, and pushing two things to it produces a mess at the far
+    // end that is hard to diagnose from here.
+    auto live = m_sessions.find(dest_id);
+    if (live != m_sessions.end() && live->second->wants_content())
+        return "That destination is already sending the live service. Stop it "
+               "first.";
+
+    FeederConfig fc;
+    fc.storage = storage;
+    fc.room_id = room.room_id;
+    fc.cache_dir = (::getenv("RELAY_CACHE_DIR")
+                        ? std::string(::getenv("RELAY_CACHE_DIR"))
+                        : std::string("/data/cache")) + "/rebroadcast";
+    fc.buffer_minutes = 5;
+    fc.stale_after_ms = 0;          // a finished event never goes stale
+    fc.pinned_event_id = event_id;
+
+    m_rebroadcast_feeder = std::make_unique<RoomFeeder>(fc);
+    m_rebroadcast_feeder->start();
+
+    Destination d = *dest;
+    d.enabled = true;
+    d.delay_s = 0;                  // a rebroadcast has no live edge to sit behind
+    m_rebroadcast = std::make_unique<RelaySession>(d, *m_rebroadcast_feeder,
+                                                   /*from_beginning=*/true);
+    m_rebroadcast->start_thread();
+    m_rebroadcast_event = event_id;
+    rlog_info("rebroadcasting %s to \"%s\"", event_id.c_str(), d.name.c_str());
+    return {};
+}
+
+void Service::stop_rebroadcast() {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    if (!m_rebroadcast) return;
+    m_rebroadcast.reset();                  // stops the stream and its child
+    if (m_rebroadcast_feeder) m_rebroadcast_feeder->stop();
+    m_rebroadcast_feeder.reset();
+    m_rebroadcast_event.clear();
+    rlog_info("rebroadcast stopped");
+}
+
+bool Service::rebroadcasting() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_rebroadcast != nullptr;
+}
+
+RelayStatus Service::rebroadcast_status() const {
+    RelaySession* s = nullptr;
+    { std::lock_guard<std::mutex> lk(m_mtx); s = m_rebroadcast.get(); }
+    return s ? s->status() : RelayStatus{};
+}
+
+std::string Service::rebroadcast_event() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_rebroadcast_event;
 }
 
 ServiceStatus Service::status() const {

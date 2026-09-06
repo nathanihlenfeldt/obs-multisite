@@ -9,22 +9,64 @@
 </head>
 <body>
 
-<header id="banner">
+<!-- ── Title bar ─────────────────────────────────────────────────────────── -->
+<header id="titlebar">
+  <div class="brand">
+    <span class="mark" aria-hidden="true"></span>
+    <span class="name">Multisite <b>Public streaming</b></span>
+  </div>
+  <div class="bar-right">
+    <span class="who" id="who"></span>
+    <button class="link" id="sign-out" hidden>Sign out</button>
+  </div>
+</header>
+
+<!-- ── Sign in ───────────────────────────────────────────────────────────── -->
+<section id="gate" hidden>
+  <form class="card form gate-card" id="sign-in-form">
+    <h2 id="gate-title">Sign in</h2>
+    <p class="gate-intro" id="gate-intro">
+      This relay decides where your services are sent, so it needs a login.
+    </p>
+    <div class="warning" id="gate-insecure" hidden>
+      This connection is not private, so your password would cross the internet
+      readable. Reach this over HTTPS or an SSH tunnel if you can.
+    </div>
+    <label>Username
+      <input name="username" autocomplete="username" required>
+    </label>
+    <label>Password
+      <input name="password" type="password" autocomplete="current-password" required>
+      <span class="hint" id="gate-hint" hidden>
+        At least 10 characters. This is the only thing stopping a stranger from
+        changing where your service is sent.
+      </span>
+    </label>
+    <button type="submit" class="primary wide" id="gate-submit">Sign in</button>
+    <div class="error" id="gate-error" hidden></div>
+  </form>
+</section>
+
+<!-- ── The application ───────────────────────────────────────────────────── -->
+<div id="app" hidden>
+
+<div id="banner">
   <div class="state" id="room-state">Connecting…</div>
   <div class="room" id="room-detail">&nbsp;</div>
-</header>
+</div>
 
 <div id="warning" class="warning" hidden></div>
 
 <nav id="tabs">
   <button class="tab is-on" data-tab="send">Sending</button>
+  <button class="tab" data-tab="past">Past services</button>
   <button class="tab" data-tab="settings">Settings</button>
   <button class="tab" data-tab="log">Log</button>
 </nav>
 
 <main>
 
-<!-- ── Sending ───────────────────────────────────────────────────────────── -->
+<!-- Sending ─────────────────────────────────────────────────────────────── -->
 <section id="tab-send" class="panel is-on">
   <div id="destinations"></div>
 
@@ -68,7 +110,30 @@
   </form>
 </section>
 
-<!-- ── Settings ──────────────────────────────────────────────────────────── -->
+<!-- Past services ───────────────────────────────────────────────────────── -->
+<section id="tab-past" class="panel">
+  <div class="card" id="rebroadcast-card" hidden>
+    <div class="dest-head">
+      <span class="dest-name">Rebroadcasting</span>
+      <span class="pill" id="rb-state">—</span>
+    </div>
+    <div class="dest-detail" id="rb-detail"></div>
+    <div class="stats" id="rb-stats"></div>
+    <div class="row">
+      <button class="stop" id="rb-stop">Stop rebroadcast</button>
+    </div>
+  </div>
+
+  <p class="lead">
+    Services that have finished. A service still going out cannot be
+    downloaded or replayed until it ends.
+    <button class="link" id="past-refresh">Refresh</button>
+  </p>
+
+  <div id="events"><div class="empty">Looking…</div></div>
+</section>
+
+<!-- Settings ────────────────────────────────────────────────────────────── -->
 <section id="tab-settings" class="panel">
   <form class="card form" id="config-form">
     <h2>Where the service comes from</h2>
@@ -113,14 +178,34 @@
     <div class="error" id="config-error" hidden></div>
     <div class="good" id="config-ok" hidden></div>
   </form>
+
+  <form class="card form" id="password-form">
+    <h2>Your login</h2>
+    <label>Username
+      <input name="username" autocomplete="username" required>
+    </label>
+    <label>Current password
+      <input name="current_password" type="password" autocomplete="current-password" required>
+    </label>
+    <label>New password
+      <input name="new_password" type="password" autocomplete="new-password" required>
+      <span class="hint">At least 10 characters. Changing it signs out every
+        other device.</span>
+    </label>
+    <button type="submit" class="primary">Change password</button>
+    <div class="error" id="password-error" hidden></div>
+    <div class="good" id="password-ok" hidden></div>
+  </form>
 </section>
 
-<!-- ── Log ───────────────────────────────────────────────────────────────── -->
+<!-- Log ─────────────────────────────────────────────────────────────────── -->
 <section id="tab-log" class="panel">
   <pre id="log"></pre>
 </section>
 
 </main>
+</div>
+
 <script src="/app.js"></script>
 </body>
 </html>

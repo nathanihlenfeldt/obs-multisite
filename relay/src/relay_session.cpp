@@ -16,8 +16,10 @@ constexpr int kDefaultDelayS = 180;   // three minutes, the room default
 constexpr int kGraceS        = 45;    // under YouTube's ~60s starvation window
 } // namespace
 
-RelaySession::RelaySession(Destination dest, RoomFeeder& feeder)
-    : m_dest(std::move(dest)), m_feeder(feeder) {
+RelaySession::RelaySession(Destination dest, RoomFeeder& feeder,
+                           bool from_beginning)
+    : m_dest(std::move(dest)), m_feeder(feeder),
+      m_from_beginning(from_beginning) {
     m_enabled = m_dest.enabled;
 }
 
@@ -122,6 +124,7 @@ void RelaySession::run() {
         in.init_ready = m_feeder.load_init().has_value();
         in.delay_s = dest.delay_s > 0 ? dest.delay_s : kDefaultDelayS;
         in.grace_s = kGraceS;
+        in.from_beginning = m_from_beginning;
 
         // A child that exited on its own must be reported to the machine
         // before it decides anything, so the backoff is applied.

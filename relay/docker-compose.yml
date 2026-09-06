@@ -11,13 +11,26 @@ services:
     # Or, once there is a published image:
     # image: ghcr.io/stageaudioworks/multisite-relay:latest
     restart: unless-stopped
+    # Deliberately bound to localhost. This service can change where a
+    # church's service is sent, so publishing it to the internet has to be a
+    # decision rather than a default. Put a TLS-terminating proxy in front of
+    # it (see Caddyfile.example) and point that at this. If you genuinely want
+    # it open, change this to "8080:8080" and understand that the password
+    # crosses the network readable.
     ports:
-      - "8080:8080"
+      - "127.0.0.1:8080:8080"
     volumes:
       - relay-data:/data
     environment:
       # Which feed to relay. Must match the name set at the main site.
       RELAY_ROOM: main-auditorium
+
+      # The operator login. Set these to claim the relay before anyone can
+      # reach it; leave them out and the first person to open the page sets
+      # the login instead. Applied only when no login exists yet, so changing
+      # the password in the browser is not undone by a restart.
+      # RELAY_USER: ""
+      # RELAY_PASSWORD: ""
 
       # Storage. These seed the settings on first run only — after that, what
       # is in the database wins, so a value changed in the browser is not

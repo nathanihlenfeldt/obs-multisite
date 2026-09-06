@@ -48,7 +48,11 @@ struct RelayStatus {
 
 class RelaySession {
 public:
-    RelaySession(Destination dest, RoomFeeder& feeder);
+    // `from_beginning` makes this a rebroadcast of a finished service rather
+    // than a relay of a live one. The feeder it is given must be pinned to
+    // that event.
+    RelaySession(Destination dest, RoomFeeder& feeder,
+                 bool from_beginning = false);
     ~RelaySession();
 
     void start_thread();
@@ -85,6 +89,7 @@ private:
 
     Destination  m_dest;
     RoomFeeder&  m_feeder;
+    const bool   m_from_beginning = false;
     RelayMachine m_machine;
     std::unique_ptr<FfmpegProcess> m_child;
 

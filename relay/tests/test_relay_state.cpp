@@ -288,6 +288,45 @@ int main() {
               "and unblocks when the problem goes away");
     }
 
+    // ── Rebroadcasting a finished service ────────────────────────────────────
+    // A recording played out as if it were live. It falls out of what is
+    // already here: a finished event plays and then ends (§7.5), which is what
+    // a rebroadcast is, so only where it starts differs.
+    {
+        RelayMachine m;
+        auto in = live_at(0, 100);
+        in.room = RoomState::Ended;         // a finished service
+        in.from_beginning = true;
+        in.first_available_seq = 0;
+        auto d = m.step(in);
+        CHECK(d.action == RelayAction::Spawn && m.head() == 0,
+              "a rebroadcast starts at the beginning, not behind the live edge");
+
+        in.child_alive = true;
+        d = m.step(in);
+        CHECK(d.action == RelayAction::FeedSegment && d.seq == 0,
+              "and sends the first segment of the service");
+
+        // It plays at 1x like anything else, rather than sprinting.
+        d = m.step(in);
+        CHECK(d.action == RelayAction::None, "at real time, not as fast as it can");
+
+        // ...and ends by itself at the end of the recording.
+        RelayMachine m2;
+        auto e = live_at(0, 1);
+        e.room = RoomState::Ended;
+        e.from_beginning = true;
+        m2.step(e);
+        e.child_alive = true;
+        m2.step(e);                         // 0
+        e.now_ms = 6000;
+        m2.step(e);                         // 1
+        e.now_ms = 12000;
+        d = m2.step(e);
+        CHECK(d.action == RelayAction::CloseInput,
+              "and closes cleanly at the end of the recording");
+    }
+
     // ── Editing a destination ────────────────────────────────────────────────
     // An edit rebuilds the stream, but it is not a fault: it must not be
     // counted as a reconnection, must not serve a backoff, and must take up

@@ -28,6 +28,7 @@ add_executable(multisite-relay
     src/api.cpp
     src/service.cpp
     src/config_store.cpp
+    src/auth.cpp
     src/relay_session.cpp
     src/room_feeder.cpp
     src/ffmpeg_process.cpp
@@ -41,8 +42,9 @@ target_include_directories(multisite-relay PRIVATE
     src ../src ../src/core ../src/appliance ../src/vendor)
 # multisite_core arrives through relay_logic's PUBLIC link; naming it again
 # here only makes the linker warn about a duplicate.
+find_package(OpenSSL REQUIRED)
 target_link_libraries(multisite-relay PRIVATE
-    relay_logic multisite_s3 PkgConfig::SQLITE3)
+    relay_logic multisite_s3 PkgConfig::SQLITE3 OpenSSL::Crypto)
 
 install(TARGETS multisite-relay RUNTIME DESTINATION bin)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/web/" DESTINATION share/multisite-relay/web)

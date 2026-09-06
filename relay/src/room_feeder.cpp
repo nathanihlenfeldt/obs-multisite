@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cstdio>
 #include <cstdint>
 
 namespace multisite_relay {
@@ -28,6 +29,7 @@ RoomFeeder::RoomFeeder(FeederConfig cfg) : m_cfg(std::move(cfg)) {
     // reached yet, with margin for a restart.
     dc.keep_behind_segments = 100;
     dc.prebuffer_segments = 0;
+    dc.pinned_event_id = m_cfg.pinned_event_id;
     m_session = std::make_unique<DecoderSession>(dc, *m_tx);
 }
 
@@ -105,6 +107,108 @@ void RoomFeeder::run() {
         if (got == 0)
             std::this_thread::sleep_for(std::chrono::milliseconds(200));
     }
+}
+
+std::vector<EventSummary> RoomFeeder::events(bool force) {
+    {
+        std::lock_guard<std::mutex> lk(m_events_mtx);
+        // One request per event, so this is not something to do on every poll
+        // of a page that refreshes every second.
+        if (!force && !m_events.empty() &&
+            now_ms() - m_events_checked_ms < 30000)
+            return m_events;
+    }
+
+    CatalogConfig cc;
+    cc.room_id = m_cfg.room_id;
+    cc.stale_after_ms = m_cfg.stale_after_ms;
+    EventCatalog cat(cc, *m_tx);
+    cat.refresh();
+    auto found = cat.events();
+
+    std::lock_guard<std::mutex> lk(m_events_mtx);
+    m_events = std::move(found);
+    m_events_checked_ms = now_ms();
+    return m_events;
+}
+
+std::vector<RoomFeeder::EventPart> RoomFeeder::event_parts(
+        const std::string& event_id, std::string& error) const {
+    const std::string prefix = event_prefix_for(event_id);
+    const std::string seg_prefix = prefix + "segments/";
+
+    std::vector<EventPart> init_part, segments;
+    std::string token;
+    do {
+        auto r = m_tx->list(prefix, "", token, 1000);
+        if (!r.success) {
+            error = "Could not read that service from storage.";
+            return {};
+        }
+        for (const auto& e : r.keys) {
+            // Only the media. manifest.json and event.json live under the same
+            // prefix and are not part of the recording.
+            if (e.key == prefix + "init.mp4")
+                init_part.push_back({ e.key, e.size });
+            else if (e.key.rfind(seg_prefix, 0) == 0 &&
+                     e.key.size() > seg_prefix.size())
+                segments.push_back({ e.key, e.size });
+        }
+        token = r.next_continuation_token;
+    } while (!token.empty());
+
+    if (init_part.empty()) {
+        error = "That service has no opening data and cannot be downloaded.";
+        return {};
+    }
+    // Segment names are zero-padded, so name order is play order.
+    std::sort(segments.begin(), segments.end(),
+              [](const EventPart& a, const EventPart& b) { return a.key < b.key; });
+
+    std::vector<EventPart> out;
+    out.reserve(segments.size() + 1);
+    out.push_back(init_part.front());
+    out.insert(out.end(), segments.begin(), segments.end());
+    return out;
+}
+
+int64_t RoomFeeder::event_byte_size(const std::string& event_id) const {
+    std::string error;
+    const auto parts = event_parts(event_id, error);
+    if (parts.empty()) return -1;
+    int64_t total = 0;
+    for (const auto& p : parts) {
+        if (p.size < 0) return -1;      // the store did not say
+        total += p.size;
+    }
+    return total;
+}
+
+bool RoomFeeder::stream_parts(
+        const std::vector<EventPart>& parts,
+        const std::function<bool(const uint8_t*, size_t)>& sink,
+        std::string& error) const {
+    for (const auto& part : parts) {
+        auto obj = m_tx->get(part.key);
+        if (!obj.success) {
+            // Nothing can be done about this mid-stream: the length has
+            // already been promised, so the download will be short and the
+            // browser will report it as failed. That is the honest outcome.
+            error = "The service could not be read all the way through.";
+            return false;
+        }
+        if (!sink(obj.body.data(), obj.body.size())) return true;  // gave up
+    }
+    return true;
+}
+
+bool RoomFeeder::stream_event(
+        const std::string& event_id,
+        const std::function<bool(const uint8_t*, size_t)>& sink,
+        std::string& error) const {
+    const auto parts = event_parts(event_id, error);
+    if (parts.empty()) return false;
+    return stream_parts(parts, sink, error);
 }
 
 RoomSnapshot RoomFeeder::snapshot() const {

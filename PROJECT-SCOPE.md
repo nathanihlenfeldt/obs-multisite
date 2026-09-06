@@ -613,6 +613,27 @@ disagree about whether a service is still running — and an event that ends
 cleanly is played out to its last segment and then closed deliberately, rather
 than being cut off or left to time out.
 
+**Finished services.** The relay also does two things with services that have
+already ended, both gated on the event actually being finished (§7.5.1's
+classification, so it and a campus agree on what "finished" means):
+
+- **Download as one MP4**, streamed from storage as it is requested rather than
+  assembled on the server, so a two-hour service costs no disk and several
+  people can download at once. It carries every audio track, not just the
+  streamed one — the ISOs and the click are what a post-production edit needs.
+- **Replay to a destination**, playing a finished service out at normal speed
+  as though it were live, for a second congregation or an evening repeat. This
+  falls out of §7.5 rather than being new machinery: a finished event already
+  plays and then ends, which is what a replay is. Proof of concept — one at a
+  time, started by hand.
+
+**Access.** The relay can change where a church broadcasts, so unlike the
+campus appliance it cannot rely on being on a trusted network. It requires a
+login on every endpoint but the sign-in itself, stores the password as
+PBKDF2-HMAC-SHA256 over a random salt, and binds to localhost so that exposing
+it is a decision. It does not terminate TLS: a proxy in front of it does, and
+one is shipped as a working example.
+
 **Not built.** Re-encoding; splitting packed audio; signing in to YouTube (a
 stream key is pasted, and the broadcast is still created in YouTube's own
 page); and starting by itself, either on a schedule or when the encoder goes
@@ -694,7 +715,9 @@ is the better answer for a given church, section 12 says so plainly.
 | Dedicated receive appliance (Raspberry Pi / mini-PC) | built, not yet run through a service |
 | Self-hosted, on storage you own | built |
 | Open protocol, no vendor lock-in | by design — the whole protocol is §4 |
-| Public simulcast to YouTube / Facebook / RTMP | built, not yet run through a service — H.264 feeds only (§8.2) |
+| Public simulcast to YouTube / Facebook / RTMP | built and pushing live to YouTube; not yet through a full service — H.264 feeds only (§8.2) |
+| Download a finished service as an MP4, all audio tracks | built (§8.2) |
+| Replay a finished service to a destination | proof of concept — one at a time, by hand (§8.2) |
 | Per-channel routing of packed audio (de-interleaver) | not built |
 | Re-encoding an HEVC feed for a streaming site | not built (§8.2) |
 | External control API (obs-websocket vendor requests, §8.3) | planned |

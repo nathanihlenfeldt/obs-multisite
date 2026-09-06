@@ -205,8 +205,10 @@ RelayDecision RelayMachine::step(const RelayInput& in) {
         // a relay starting three minutes back would sit waiting for segments
         // that were never going to be fetched.
         if (!m_head_set) {
-            m_head = seq_behind_live(in.latest_seq, in.first_available_seq,
-                                     seg_s, in.delay_s);
+            m_head = in.from_beginning
+                       ? in.first_available_seq
+                       : seq_behind_live(in.latest_seq, in.first_available_seq,
+                                         seg_s, in.delay_s);
             m_head_set = true;
         } else {
             // A restart resumes from where the feed got to, so nothing is

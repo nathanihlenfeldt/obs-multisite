@@ -1,0 +1,21 @@
+# Caddyfile.example — TLS in front of the relay.
+#
+# The relay speaks plain HTTP and binds to localhost, because a login sent over
+# an unencrypted connection protects nobody. This puts a certificate in front
+# of it. Caddy obtains and renews one from Let's Encrypt by itself; there is
+# nothing to configure and nothing to remember to renew.
+#
+# Copy to Caddyfile, change the domain, and point that domain's DNS at this
+# server first — the certificate cannot be issued until it resolves.
+
+stream.yourchurch.org {
+	reverse_proxy 127.0.0.1:8080
+
+	# A service download is several gigabytes and takes as long as it takes.
+	# Without this the proxy gives up part-way through and the operator sees a
+	# download that fails at an apparently random point.
+	timeouts {
+		read_body 0
+		write 0
+	}
+}

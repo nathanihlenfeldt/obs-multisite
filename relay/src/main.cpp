@@ -96,9 +96,29 @@ int main() {
     }
     seed_from_environment(service);
 
-    multisite_player::HttpServer server("0.0.0.0", port);
+    Auth auth(service.config());
+    // Seeding a login from the environment lets an integrator hand over a box
+    // that is already claimed, rather than leaving the first person to find
+    // the port to claim it. Only applied when there is no login yet, so it
+    // cannot silently reset one that has been changed in the browser.
+    if (!auth.configured()) {
+        const std::string u = env("RELAY_USER", "");
+        const std::string p = env("RELAY_PASSWORD", "");
+        if (!u.empty() && !p.empty()) {
+            const std::string e = auth.set_credentials(u, p);
+            if (e.empty()) rlog_info("operator login set from the environment");
+            else rlog_error("could not set the login: %s", e.c_str());
+        }
+    }
+
+    // Binds to localhost unless told otherwise. The relay can change where a
+    // church's service is sent, so publishing it to the internet has to be a
+    // deliberate act — put a TLS-terminating proxy in front of it and point
+    // that at this, rather than opening the port.
+    const std::string bind = env("RELAY_BIND", "127.0.0.1");
+    multisite_player::HttpServer server(bind, port);
     server.set_static_root(web_root);
-    register_routes(server, service);
+    register_routes(server, service, auth);
 
     std::string err;
     if (!server.start(err)) {
@@ -107,7 +127,13 @@ int main() {
         rlog_error("could not listen on port %d: %s", port, err.c_str());
         return 1;
     }
-    rlog_info("relay ready on port %d", port);
+    rlog_info("relay ready on %s:%d", bind.c_str(), port);
+    if (!auth.configured())
+        rlog_warn("no login is set yet — open the page and set one before "
+                  "anyone else can reach this");
+    if (bind != "127.0.0.1" && bind != "localhost")
+        rlog_warn("listening on %s, not just localhost — make sure something "
+                  "in front of this is terminating TLS", bind.c_str());
     if (!service.config().storage_configured())
         rlog_info("storage is not set up yet — open the page and fill it in");
 

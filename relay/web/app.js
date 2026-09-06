@@ -17,6 +17,7 @@ $$('.tab').forEach((t) => {
     $$('.panel').forEach((p) =>
       p.classList.toggle('is-on', p.id === 'tab-' + t.dataset.tab));
     if (t.dataset.tab === 'log') refreshLog();
+    if (t.dataset.tab === 'past') { refreshEvents(false); refreshRebroadcast(); }
   };
 });
 
@@ -29,9 +30,79 @@ async function api(method, path, body) {
   });
   let data = {};
   try { data = await res.json(); } catch (e) { /* empty body is fine */ }
+  // A session that has expired, or a relay whose login was reset, must put the
+  // sign-in form back rather than leaving the page showing stale figures as
+  // though everything were fine.
+  if (res.status === 401 || res.status === 409 && data.needs_setup) {
+    showGate(data.needs_setup === true);
+    throw new Error(data.error || 'Please sign in.');
+  }
   if (!res.ok) throw new Error(data.error || 'Something went wrong.');
   return data;
 }
+
+// ── sign in ─────────────────────────────────────────────────────────────────
+let signedIn = false;
+
+function showGate(needsSetup) {
+  signedIn = false;
+  $('#gate').hidden = false;
+  $('#app').hidden = true;
+  $('#sign-out').hidden = true;
+  $('#who').textContent = '';
+  $('#gate-title').textContent = needsSetup ? 'Set up a login' : 'Sign in';
+  $('#gate-submit').textContent = needsSetup ? 'Create login' : 'Sign in';
+  $('#gate-hint').hidden = !needsSetup;
+  $('#gate-intro').textContent = needsSetup
+    ? 'Nobody has claimed this relay yet. Choose a username and password — '
+      + 'until you do, it is not protected.'
+    : 'This relay decides where your services are sent, so it needs a login.';
+  $('#sign-in-form').password.autocomplete =
+    needsSetup ? 'new-password' : 'current-password';
+}
+
+function showApp(user) {
+  signedIn = true;
+  $('#gate').hidden = true;
+  $('#app').hidden = false;
+  $('#sign-out').hidden = false;
+  if (user) $('#who').textContent = user;
+}
+
+async function checkSession() {
+  const s = await (await fetch('/api/session')).json();
+  $('#gate-insecure').hidden = s.connection_is_private !== false;
+  if (!s.configured) { showGate(true); return false; }
+  if (!s.signed_in) { showGate(false); return false; }
+  showApp(localStorage.getItem('relay_user') || '');
+  return true;
+}
+
+$('#sign-in-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const err = $('#gate-error');
+  err.hidden = true;
+  try {
+    await api('POST', '/api/session', {
+      username: f.get('username'),
+      password: f.get('password'),
+    });
+    try { localStorage.setItem('relay_user', f.get('username')); } catch (x) {}
+    e.target.reset();
+    showApp(f.get('username'));
+    loadConfig().catch(() => {});
+    refresh();
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.hidden = false;
+  }
+};
+
+$('#sign-out').onclick = async () => {
+  try { await fetch('/api/session', { method: 'DELETE' }); } catch (e) {}
+  showGate(false);
+};
 
 function duration(s) {
   if (s < 60) return s + 's';
@@ -60,6 +131,7 @@ function esc(t) {
 
 // ── status ──────────────────────────────────────────────────────────────────
 async function refresh() {
+  if (!signedIn) return;
   let s;
   try {
     s = await api('GET', '/api/status');
@@ -262,9 +334,133 @@ async function refreshLog() {
   } catch (e) { /* the page will try again */ }
 }
 
-loadConfig().catch(() => {});
-refresh();
+// ── past services ───────────────────────────────────────────────────────────
+let destinationsCache = [];
+
+function whenText(ms, durationS) {
+  const d = new Date(ms);
+  const when = d.toLocaleDateString(undefined,
+    { weekday: 'short', day: 'numeric', month: 'short' })
+    + ' ' + d.toLocaleTimeString(undefined, { hour: '2-digit', minute: '2-digit' });
+  if (!durationS) return when;
+  const m = Math.round(durationS / 60);
+  return when + ' · ' + (m >= 60
+    ? Math.floor(m / 60) + 'h ' + (m % 60) + 'm'
+    : m + ' min');
+}
+
+async function refreshEvents(force) {
+  if (!signedIn) return;
+  const host = $('#events');
+  try {
+    const [events, dests] = await Promise.all([
+      api('GET', '/api/events' + (force ? '?refresh=1' : '')),
+      api('GET', '/api/destinations'),
+    ]);
+    destinationsCache = dests;
+    if (!events.length) {
+      host.innerHTML = '<div class="empty">No services in storage yet.</div>';
+      return;
+    }
+    host.innerHTML = events.map((e) => {
+      const options = dests.map((d) =>
+        `<option value="${d.id}">${esc(d.name)}</option>`).join('');
+      return `
+      <div class="card event">
+        <div class="dest-head">
+          <span class="dest-name">${esc(whenText(e.started_at_ms, e.duration_s))}</span>
+          ${!e.finished ? '<span class="pill streaming">On air now</span>' : ''}
+          ${e.interrupted ? '<span class="pill stalled">Cut short</span>' : ''}
+        </div>
+        ${!e.finished
+          ? `<div class="dest-detail">Still going out. It can be downloaded or
+               replayed once it finishes.</div>`
+          : `<div class="row">
+               <a class="button" download
+                  href="/api/events/download?event=${encodeURIComponent(e.event_id)}"
+                  >Download</a>
+               ${dests.length ? `
+                 <select class="inline" data-rbdest="${esc(e.event_id)}">${options}</select>
+                 <button data-rb="${esc(e.event_id)}">Replay to it</button>` : ''}
+             </div>`}
+      </div>`;
+    }).join('');
+
+    host.querySelectorAll('[data-rb]').forEach((b) => {
+      b.onclick = async () => {
+        const id = b.dataset.rb;
+        const sel = host.querySelector(`[data-rbdest="${CSS.escape(id)}"]`);
+        b.disabled = true;
+        try {
+          await api('POST', '/api/rebroadcast', {
+            event_id: id,
+            destination_id: Number(sel.value),
+          });
+          refreshRebroadcast();
+        } catch (ex) { alert(ex.message); }
+        b.disabled = false;
+      };
+    });
+  } catch (e) {
+    host.innerHTML = `<div class="empty">${esc(e.message)}</div>`;
+  }
+}
+
+async function refreshRebroadcast() {
+  if (!signedIn) return;
+  let r;
+  try { r = await api('GET', '/api/rebroadcast'); } catch (e) { return; }
+  const card = $('#rebroadcast-card');
+  card.hidden = !r.running;
+  if (!r.running) return;
+  const s = r.status || {};
+  $('#rb-state').textContent = s.state_text || '';
+  $('#rb-state').className = 'pill ' + (s.state || '');
+  $('#rb-detail').textContent = s.detail || '';
+  $('#rb-stats').innerHTML = s.live ? `
+    <div>${esc(duration(s.uptime_s))}<span>played so far</span></div>
+    <div>${esc(rate(s.bitrate_kbps))}<span>going out</span></div>` : '';
+}
+
+$('#rb-stop').onclick = async () => {
+  if (!confirm('Stop the rebroadcast?')) return;
+  try { await api('DELETE', '/api/rebroadcast'); } catch (e) { alert(e.message); }
+  refreshRebroadcast();
+};
+
+$('#past-refresh').onclick = () => refreshEvents(true);
+
+// ── changing the password ───────────────────────────────────────────────────
+$('#password-form').onsubmit = async (e) => {
+  e.preventDefault();
+  const f = new FormData(e.target);
+  const err = $('#password-error'), good = $('#password-ok');
+  err.hidden = true; good.hidden = true;
+  try {
+    await api('POST', '/api/password', {
+      username: f.get('username'),
+      current_password: f.get('current_password'),
+      new_password: f.get('new_password'),
+    });
+    good.textContent = 'Password changed. Other devices have been signed out.';
+    good.hidden = false;
+    e.target.reset();
+  } catch (ex) {
+    err.textContent = ex.message;
+    err.hidden = false;
+  }
+};
+
+// ── start ───────────────────────────────────────────────────────────────────
+checkSession().then((ok) => {
+  if (!ok) return;
+  loadConfig().catch(() => {});
+  refresh();
+});
+
 setInterval(refresh, 1000);
 setInterval(() => {
+  if (!signedIn) return;
   if ($('#tab-log').classList.contains('is-on')) refreshLog();
+  if ($('#tab-past').classList.contains('is-on')) refreshRebroadcast();
 }, 3000);

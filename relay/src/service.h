@@ -64,6 +64,24 @@ public:
 
     void set_enabled(int64_t id, bool on);
 
+    // ── Past services ────────────────────────────────────────────────────────
+    std::vector<multisite::EventSummary> events(bool force = false);
+    // Whether this event may be downloaded or rebroadcast: it must exist, and
+    // it must not be the one currently on air. Returns a reason, or empty.
+    std::string check_event_is_finished(const std::string& event_id);
+    RoomFeeder* feeder();
+
+    // ── Rebroadcast (proof of concept) ───────────────────────────────────────
+    // Plays a finished service out to a destination as though it were live.
+    // One at a time on purpose: this is the first version of the idea, and a
+    // church running several at once needs answers about bandwidth and
+    // scheduling that do not exist yet.
+    std::string start_rebroadcast(const std::string& event_id, int64_t dest_id);
+    void        stop_rebroadcast();
+    bool        rebroadcasting() const;
+    RelayStatus rebroadcast_status() const;
+    std::string rebroadcast_event() const;
+
 private:
     void supervise();
     void sync_destinations_locked(const std::vector<Destination>& dests,
@@ -77,6 +95,12 @@ private:
     // nothing about the bucket does not rebuild it.
     multisite::S3Config m_feeder_storage;
     std::string         m_feeder_room;
+
+    // A rebroadcast gets its own downloader, pinned to the event it is
+    // playing, so it never disturbs the live room's download window.
+    std::unique_ptr<RoomFeeder>   m_rebroadcast_feeder;
+    std::unique_ptr<RelaySession> m_rebroadcast;
+    std::string                   m_rebroadcast_event;
 
     std::thread m_thread;
     std::atomic<bool> m_running{false};

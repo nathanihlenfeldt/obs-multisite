@@ -16,6 +16,13 @@
 
 * { box-sizing: border-box; }
 
+/* Any author `display` rule beats the browser's own [hidden] styling, however
+   specific each one is. So `#gate { display: flex }` silently defeated
+   `gate.hidden = true`, and the sign-in form stayed on screen above a signed-in
+   page. Anything given a display rule below needs this, so it is stated once
+   here rather than remembered at each one. */
+[hidden] { display: none !important; }
+
 body {
   margin: 0;
   background: var(--bg);
@@ -184,3 +191,71 @@ input, select {
 label.check { display: flex; flex-wrap: wrap; align-items: center; gap: 0.5rem; }
 label.check input { width: auto; margin: 0; }
 label.check .hint { flex-basis: 100%; margin-top: 0.15rem; }
+
+/* ── title bar ─────────────────────────────────────────────────────────── */
+#titlebar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 1rem;
+  padding: 0.6rem 1rem;
+  background: #0e1116;
+  border-bottom: 1px solid var(--line);
+}
+#titlebar .brand { display: flex; align-items: center; gap: 0.55rem; min-width: 0; }
+#titlebar .mark {
+  width: 10px; height: 10px; border-radius: 50%;
+  background: var(--accent);
+  box-shadow: 0 0 0 3px rgba(74, 158, 255, 0.18);
+  flex: none;
+}
+#titlebar .name {
+  color: var(--dim);
+  font-size: 0.92rem;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+#titlebar .name b { color: var(--text); font-weight: 600; }
+.bar-right { display: flex; align-items: center; gap: 0.75rem; flex: none; }
+.who { color: var(--dim); font-size: 0.85rem; }
+
+button.link {
+  background: none;
+  border: none;
+  color: var(--accent);
+  padding: 0;
+  font: inherit;
+  font-size: 0.85rem;
+  cursor: pointer;
+}
+button.link:hover { text-decoration: underline; }
+
+/* ── sign in ───────────────────────────────────────────────────────────── */
+#gate { padding: 2rem 1rem; display: flex; justify-content: center; }
+.gate-card { max-width: 380px; width: 100%; margin: 0; }
+.gate-intro { color: var(--dim); font-size: 0.9rem; margin: 0 0 1rem; }
+button.wide { width: 100%; }
+
+/* ── past services ─────────────────────────────────────────────────────── */
+.lead {
+  color: var(--dim);
+  font-size: 0.9rem;
+  margin: 0 0 0.9rem;
+}
+.card.event .row { margin-top: 0.75rem; align-items: center; }
+select.inline { width: auto; margin: 0; min-width: 9rem; }
+
+/* A download is a link, not a button, so the browser handles it — but it
+   should not look like a different kind of control because of that. */
+a.button {
+  display: inline-block;
+  font: inherit;
+  text-decoration: none;
+  border-radius: 7px;
+  padding: 0.45rem 0.9rem;
+  border: 1px solid var(--line);
+  background: #232a34;
+  color: var(--text);
+}
+a.button:hover { border-color: var(--accent); }

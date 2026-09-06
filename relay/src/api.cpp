@@ -1,13 +1,17 @@
 #include "api.h"
+#include "auth.h"
+#include "room_feeder.h"
 #include "log.h"
 #include "stream_plan.h"
 
 #include "nlohmann/json.hpp"
 
 #include <cstdint>
+#include <ctime>
 #include <string>
 
 using json = nlohmann::json;
+using multisite_player::HttpHandler;
 using multisite_player::HttpRequest;
 using multisite_player::HttpResponse;
 using multisite_player::HttpServer;
@@ -97,9 +101,118 @@ json status_json(const RelayStatus& s) {
 
 } // namespace
 
-void register_routes(HttpServer& server, Service& service) {
+void register_routes(HttpServer& server, Service& service, Auth& auth) {
 
-    server.route("GET", "/api/status", [&service](const HttpRequest&,
+    // ── The guard ────────────────────────────────────────────────────────────
+    // The failure mode of getting this wrong is not "a stranger reads a status
+    // page" — it is a stranger changing where a church's service is sent. So
+    // every route registered through `route()` below is behind a session, and
+    // the three that cannot be (signing in, and asking whether you are signed
+    // in) are registered directly on the server and are listed here:
+    //
+    //     GET    /api/session   is anyone signed in, and is this private
+    //     POST   /api/session   sign in, or claim an unclaimed relay
+    //     DELETE /api/session   sign out
+    //
+    // Routes added later use route() and are protected by default. That is
+    // deliberate: protection by forgetting, rather than by remembering.
+    auto guarded = [&auth](HttpHandler h) -> HttpHandler {
+        return [&auth, h](const HttpRequest& req, HttpResponse& res) {
+            if (!auth.configured()) {
+                json j;
+                j["error"] = "This relay has no login yet.";
+                j["needs_setup"] = true;
+                res.status = 409;
+                res.json(j.dump());
+                return;
+            }
+            auto c = req.headers.find("cookie");
+            const std::string token =
+                c == req.headers.end() ? std::string()
+                                       : Auth::session_from_cookies(c->second);
+            if (!auth.valid_session(token)) {
+                json j;
+                j["error"] = "Please sign in.";
+                res.status = 401;
+                res.json(j.dump());
+                return;
+            }
+            h(req, res);
+        };
+    };
+    auto route = [&server, &guarded](const std::string& verb,
+                                     const std::string& path, HttpHandler h) {
+        server.route(verb, path, guarded(std::move(h)));
+    };
+
+    // ── Signing in ───────────────────────────────────────────────────────────
+    server.route("GET", "/api/session", [&auth](const HttpRequest& req,
+                                                HttpResponse& res) {
+        auto c = req.headers.find("cookie");
+        const std::string token =
+            c == req.headers.end() ? std::string()
+                                   : Auth::session_from_cookies(c->second);
+        json j;
+        j["configured"] = auth.configured();
+        j["signed_in"] = auth.valid_session(token);
+        // Reported so the interface can say so, not so it can refuse. Locking
+        // an operator out of their own relay mid-service would be the worse
+        // failure by far.
+        j["connection_is_private"] = connection_is_private(req.headers);
+        res.json(j.dump());
+    });
+
+    server.route("POST", "/api/session", [&auth](const HttpRequest& req,
+                                                 HttpResponse& res) {
+        const auto j = body_json(req);
+        const std::string user = str(j, "username");
+        const std::string pass = str(j, "password");
+
+        // First run: whoever arrives first sets the login. The container and
+        // the port belong to the church, so this is narrower than it sounds —
+        // but it is exactly why the documentation says to set the login before
+        // opening the port to anyone else.
+        if (!auth.configured()) {
+            const std::string e = auth.set_credentials(user, pass);
+            if (!e.empty()) return fail(res, 400, e);
+            rlog_info("operator login created for \"%s\"", user.c_str());
+        } else if (!auth.verify(user, pass)) {
+            // Deliberately does not say which of the two was wrong.
+            rlog_warn("failed sign-in for \"%s\"", user.c_str());
+            return fail(res, 401, "That username or password is not right.");
+        }
+
+        const std::string token = auth.create_session();
+        if (token.empty()) return fail(res, 500, "Could not start a session.");
+        res.headers["Set-Cookie"] =
+            Auth::cookie_for(token, connection_is_private(req.headers));
+        ok(res);
+    });
+
+    server.route("DELETE", "/api/session", [&auth](const HttpRequest& req,
+                                                   HttpResponse& res) {
+        auto c = req.headers.find("cookie");
+        if (c != req.headers.end())
+            auth.destroy_session(Auth::session_from_cookies(c->second));
+        res.headers["Set-Cookie"] = Auth::clear_cookie();
+        ok(res);
+    });
+
+    // Changing the password needs the current one, so a session left open on
+    // an unattended machine cannot be used to lock the operator out.
+    route("POST", "/api/password", [&auth](const HttpRequest& req,
+                                           HttpResponse& res) {
+        const auto j = body_json(req);
+        const std::string user = str(j, "username");
+        if (!auth.verify(user, str(j, "current_password")))
+            return fail(res, 401, "That current password is not right.");
+        const std::string e = auth.set_credentials(user, str(j, "new_password"));
+        if (!e.empty()) return fail(res, 400, e);
+        rlog_info("operator password changed");
+        ok(res);
+    });
+
+    route("GET", "/api/status", [&service](const HttpRequest&,
                                                   HttpResponse& res) {
         const auto s = service.status();
         json j;
@@ -122,7 +235,7 @@ void register_routes(HttpServer& server, Service& service) {
 
     // ── Storage and room ─────────────────────────────────────────────────────
 
-    server.route("GET", "/api/config", [&service](const HttpRequest&,
+    route("GET", "/api/config", [&service](const HttpRequest&,
                                                   HttpResponse& res) {
         const auto c = service.config().storage();
         const auto r = service.config().room();
@@ -140,7 +253,7 @@ void register_routes(HttpServer& server, Service& service) {
         res.json(j.dump());
     });
 
-    server.route("PUT", "/api/config", [&service](const HttpRequest& req,
+    route("PUT", "/api/config", [&service](const HttpRequest& req,
                                                   HttpResponse& res) {
         const auto j = body_json(req);
         auto c = service.config().storage();
@@ -171,7 +284,7 @@ void register_routes(HttpServer& server, Service& service) {
         ok(res);
     });
 
-    server.route("POST", "/api/storage/test", [&service](const HttpRequest&,
+    route("POST", "/api/storage/test", [&service](const HttpRequest&,
                                                          HttpResponse& res) {
         const std::string e = service.check_storage();
         json j;
@@ -182,7 +295,7 @@ void register_routes(HttpServer& server, Service& service) {
 
     // ── Destinations ─────────────────────────────────────────────────────────
 
-    server.route("GET", "/api/destinations", [&service](const HttpRequest&,
+    route("GET", "/api/destinations", [&service](const HttpRequest&,
                                                         HttpResponse& res) {
         json out = json::array();
         for (const auto& d : service.config().destinations())
@@ -190,7 +303,7 @@ void register_routes(HttpServer& server, Service& service) {
         res.json(out.dump());
     });
 
-    server.route("POST", "/api/destinations", [&service](const HttpRequest& req,
+    route("POST", "/api/destinations", [&service](const HttpRequest& req,
                                                          HttpResponse& res) {
         const auto j = body_json(req);
         Destination d;
@@ -211,7 +324,7 @@ void register_routes(HttpServer& server, Service& service) {
         res.json(r.dump());
     });
 
-    server.route("POST", "/api/destinations/update",
+    route("POST", "/api/destinations/update",
                  [&service](const HttpRequest& req, HttpResponse& res) {
         const auto j = body_json(req);
         const int64_t id = id_of(req);
@@ -233,7 +346,7 @@ void register_routes(HttpServer& server, Service& service) {
         ok(res);
     });
 
-    server.route("POST", "/api/destinations/delete",
+    route("POST", "/api/destinations/delete",
                  [&service](const HttpRequest& req, HttpResponse& res) {
         const int64_t id = id_of(req);
         if (!service.config().remove(id))
@@ -242,7 +355,7 @@ void register_routes(HttpServer& server, Service& service) {
         ok(res);
     });
 
-    server.route("POST", "/api/destinations/start",
+    route("POST", "/api/destinations/start",
                  [&service](const HttpRequest& req, HttpResponse& res) {
         const int64_t id = id_of(req);
         auto d = service.config().destination(id);
@@ -258,7 +371,7 @@ void register_routes(HttpServer& server, Service& service) {
         ok(res);
     });
 
-    server.route("POST", "/api/destinations/stop",
+    route("POST", "/api/destinations/stop",
                  [&service](const HttpRequest& req, HttpResponse& res) {
         const int64_t id = id_of(req);
         auto d = service.config().destination(id);
@@ -268,9 +381,108 @@ void register_routes(HttpServer& server, Service& service) {
         ok(res);
     });
 
+    // ── Past services ────────────────────────────────────────────────────────
+
+    route("GET", "/api/events", [&service](const HttpRequest& req,
+                                           HttpResponse& res) {
+        const bool force = req.param("refresh") == "1";
+        json out = json::array();
+        for (const auto& e : service.events(force)) {
+            json j;
+            j["event_id"] = e.event_id;
+            j["started_at_ms"] = e.started_at_ms;
+            j["duration_s"] = e.duration_s;
+            j["state"] = multisite::to_string(e.state);
+            // The one thing the interface needs to decide what to offer: a
+            // service still going out can be neither downloaded nor
+            // rebroadcast, because it has no end yet.
+            j["finished"] = e.state != multisite::EventState::Live;
+            j["interrupted"] = e.state == multisite::EventState::Interrupted;
+            out.push_back(j);
+        }
+        res.json(out.dump());
+    });
+
+    route("GET", "/api/events/download", [&service](const HttpRequest& req,
+                                                    HttpResponse& res) {
+        const std::string id = req.param("event");
+        const std::string problem = service.check_event_is_finished(id);
+        if (!problem.empty()) return fail(res, 409, problem);
+
+        RoomFeeder* feeder = service.feeder();
+        if (!feeder) return fail(res, 409, "Storage has not been set up yet.");
+
+        // Named for when the service happened, because a folder of ULIDs is
+        // no use to anyone looking for last Sunday.
+        std::string name = "service";
+        for (const auto& e : service.events()) {
+            if (e.event_id != id) continue;
+            const std::time_t t = (std::time_t)(e.started_at_ms / 1000);
+            char buf[32];
+            if (std::strftime(buf, sizeof(buf), "%Y-%m-%d-%H%M",
+                              std::localtime(&t)))
+                name = std::string("service-") + buf;
+            break;
+        }
+
+        // Listed once, then both measured and sent from that same list, so
+        // the promised length and the bytes that follow cannot disagree.
+        std::string list_error;
+        auto parts = feeder->event_parts(id, list_error);
+        if (parts.empty()) return fail(res, 502, list_error);
+
+        int64_t size = 0;
+        for (const auto& p : parts) {
+            if (p.size < 0) { size = -1; break; }
+            size += p.size;
+        }
+
+        res.content_type = "video/mp4";
+        res.headers["Content-Disposition"] =
+            "attachment; filename=\"" + name + ".mp4\"";
+        if (size > 0) res.headers["Content-Length"] = std::to_string(size);
+
+        res.stream = [feeder, id, parts](multisite_player::HttpStream& out) {
+            std::string error;
+            feeder->stream_parts(parts, [&out](const uint8_t* p, size_t n) {
+                return out.write(p, n);     // false once the browser goes away
+            }, error);
+            if (!error.empty())
+                rlog_warn("download of %s ended: %s", id.c_str(), error.c_str());
+        };
+    });
+
+    // ── Rebroadcast ──────────────────────────────────────────────────────────
+
+    route("GET", "/api/rebroadcast", [&service](const HttpRequest&,
+                                                HttpResponse& res) {
+        json j;
+        j["running"] = service.rebroadcasting();
+        j["event_id"] = service.rebroadcast_event();
+        if (service.rebroadcasting())
+            j["status"] = status_json(service.rebroadcast_status());
+        res.json(j.dump());
+    });
+
+    route("POST", "/api/rebroadcast", [&service](const HttpRequest& req,
+                                                 HttpResponse& res) {
+        const auto j = body_json(req);
+        const std::string e =
+            service.start_rebroadcast(str(j, "event_id"),
+                                      (int64_t)num(j, "destination_id", 0));
+        if (!e.empty()) return fail(res, 409, e);
+        ok(res);
+    });
+
+    route("DELETE", "/api/rebroadcast", [&service](const HttpRequest&,
+                                                   HttpResponse& res) {
+        service.stop_rebroadcast();
+        ok(res);
+    });
+
     // ── Log ──────────────────────────────────────────────────────────────────
 
-    server.route("GET", "/api/log", [](const HttpRequest& req,
+    route("GET", "/api/log", [](const HttpRequest& req,
                                        HttpResponse& res) {
         size_t n = 200;
         try {

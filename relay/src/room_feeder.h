@@ -17,10 +17,12 @@
 // actually reading from.
 //
 #include "decoder_session.h"
+#include "event_catalog.h"
 #include "model.h"
 #include "s3_transport.h"
 
 #include <atomic>
+#include <functional>
 #include <cstdint>
 #include <memory>
 #include <mutex>
@@ -40,6 +42,10 @@ struct FeederConfig {
     // run ahead. Set from the configured delays at startup.
     int buffer_minutes = 15;
     int stale_after_ms = 600000;      // the same 10 minutes a campus uses
+    // Follow one specific event instead of whatever live.json names. This is
+    // what makes a rebroadcast possible: DecoderSession already knows how to
+    // pin an event (§7.5), so playing a past service needs no new receive path.
+    std::string pinned_event_id;
 };
 
 // A consistent view of the room, taken under one lock so a caller cannot see
@@ -80,6 +86,47 @@ public:
     // minutes back would find its segments already pruned.
     void set_lowest_reader(uint64_t seq);
 
+    // ── Past services ────────────────────────────────────────────────────────
+    // What the room has recorded, each with its own state. Uses the same
+    // EventCatalog the decoder dock uses, so the relay's list and a campus's
+    // list cannot disagree about which service is which.
+    //
+    // A refresh makes one request per event, so it is cached: a caller asking
+    // for the list every second gets the same answer until it is stale.
+    std::vector<multisite::EventSummary> events(bool force = false);
+
+    // Exactly what a download consists of: the init segment followed by every
+    // fragment, in order, each with its size.
+    //
+    // Size and content come from this one list on purpose. They were derived
+    // separately at first, and disagreed — the size counted manifest.json and
+    // event.json, which are not part of the video, so every download declared
+    // about five kilobytes more than it sent and no browser could ever see it
+    // finish.
+    struct EventPart { std::string key; int64_t size = 0; };
+    std::vector<EventPart> event_parts(const std::string& event_id,
+                                       std::string& error) const;
+
+    // Sum of the above. -1 when the store did not report sizes, in which case
+    // the download still works but without a progress bar.
+    int64_t event_byte_size(const std::string& event_id) const;
+
+    // Streams a whole event as one fragmented MP4: the init segment followed
+    // by every fragment in order, which is already a valid MP4 and needs no
+    // re-muxing. `sink` returns false to abandon the download — a browser
+    // closing the tab must not leave this fetching a five-gigabyte service.
+    // Reads straight from the store, deliberately bypassing the relay's cache
+    // so a download cannot evict what a live stream is about to need.
+    bool stream_event(const std::string& event_id,
+                      const std::function<bool(const uint8_t*, size_t)>& sink,
+                      std::string& error) const;
+
+    // The same, given a part list already fetched — so a caller that needed
+    // the size does not pay for a second listing.
+    bool stream_parts(const std::vector<EventPart>& parts,
+                      const std::function<bool(const uint8_t*, size_t)>& sink,
+                      std::string& error) const;
+
     // A one-off credential and connectivity check, so a mistyped key is
     // reported when it is entered rather than when a service starts.
     std::string check_storage();
@@ -98,6 +145,10 @@ private:
 
     // event.json is static for the life of an event, so it is fetched once
     // rather than on every poll.
+    mutable std::mutex m_events_mtx;
+    std::vector<multisite::EventSummary> m_events;
+    int64_t m_events_checked_ms = 0;
+
     mutable std::mutex m_mtx;
     std::string  m_info_event_id;
     multisite::EventInfo m_info;

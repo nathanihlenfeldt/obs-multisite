@@ -92,6 +92,12 @@ struct RelayInput {
     // How far behind the live edge this destination should sit.
     int delay_s = 180;
 
+    // Rebroadcast: play a finished service from its beginning rather than
+    // taking up position behind a live edge. The rest of the machine is
+    // unchanged, because a finished event already behaves as something that
+    // plays and then ends (§7.5) — which is exactly what a rebroadcast is.
+    bool from_beginning = false;
+
     // How long a silence to ride out before giving up on the connection.
     // Measured against the destination's own tolerance: YouTube ends a
     // broadcast after roughly 60 seconds without data, so this sits under it.
