@@ -20,6 +20,26 @@ LAN-only device and was never documented as internet-facing.
 
 ---
 
+## Fixed since v0.1.2-alpha
+
+**The relay's container could not be reached.** v0.1.2-alpha set the relay to
+bind `127.0.0.1`, which is right for a process run directly on a machine and
+wrong inside a container: a container's loopback is its own, and Docker
+publishes a port by forwarding to the container's `eth0`. The relay started,
+listened, and answered nobody — including through its own published port.
+
+The image now binds every interface inside the container, which is not a
+loosening. What decides who can reach the relay is the host side of the port
+mapping, and `docker-compose.yml` still binds that to `127.0.0.1:8080`.
+
+If you are on v0.1.2-alpha and would rather not rebuild, adding
+`RELAY_BIND: 0.0.0.0` to the `environment:` block has the same effect.
+
+Nothing else changed. If v0.1.2-alpha is working for you, this release adds
+nothing you need.
+
+---
+
 ## ⚠️ Alpha — read this first
 
 This is pre-release software. A **six-hour continuous soak test** has been run
