@@ -16,6 +16,7 @@
 #include <cstdlib>
 #include <string>
 #include <sys/stat.h>
+#include <unistd.h>
 #include <thread>
 
 using namespace multisite_relay;
@@ -131,7 +132,12 @@ int main() {
     if (!auth.configured())
         rlog_warn("no login is set yet — open the page and set one before "
                   "anyone else can reach this");
-    if (bind != "127.0.0.1" && bind != "localhost")
+    // In a container, binding every interface is correct and is not what
+    // decides exposure — the host side of the port mapping does. Warning about
+    // it there would be noise on every start, and would train an operator to
+    // ignore the line that matters.
+    const bool in_container = ::access("/.dockerenv", F_OK) == 0;
+    if (bind != "127.0.0.1" && bind != "localhost" && !in_container)
         rlog_warn("listening on %s, not just localhost — make sure something "
                   "in front of this is terminating TLS", bind.c_str());
     if (!service.config().storage_configured())

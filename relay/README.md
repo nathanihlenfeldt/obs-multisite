@@ -53,8 +53,12 @@ This service decides where your services are sent. Anyone who can reach it can
 point your stream at their own server, take it off air mid-sermon, or read your
 storage settings. So:
 
-- **It binds to localhost by default.** Publishing it to the internet is a
-  decision you make, not something that happens by running it.
+- **The published port is bound to the host's localhost.** Publishing it to
+  the internet is a decision you make, not something that happens by running
+  it. That control lives in the `ports:` line of `docker-compose.yml` —
+  `127.0.0.1:8080:8080` — not inside the container, where the process listens
+  on all interfaces because a container's own loopback is unreachable from
+  anywhere, port mapping included.
 - **Every part of it requires a login** except the sign-in page itself. The
   first person to open an unclaimed relay sets the username and password, so
   set yours before anyone else can reach it — or pass `RELAY_USER` and
@@ -112,7 +116,7 @@ is not overwritten by a stale variable on the next restart.
 | `RELAY_REGION` | `auto` for R2, a real region for AWS. |
 | `RELAY_USE_HTTPS` | `0` only for storage on your own network with no certificate. |
 | `RELAY_PORT` | Defaults to 8080. |
-| `RELAY_BIND` | Defaults to `127.0.0.1`. Change only if you know what is in front of it. |
+| `RELAY_BIND` | Which interface the process listens on. The image sets `0.0.0.0`, which is correct: inside a container that is not what decides exposure — the host side of the port mapping is. Running outside a container it defaults to `127.0.0.1`. |
 | `RELAY_USER` / `RELAY_PASSWORD` | Claims the relay on first run, so the login is set before anyone can reach it. Ignored once a login exists. |
 | `RELAY_DATA_DIR` | Defaults to `/data`. |
 

@@ -11,12 +11,16 @@ services:
     # Or, once there is a published image:
     # image: ghcr.io/stageaudioworks/multisite-relay:latest
     restart: unless-stopped
-    # Deliberately bound to localhost. This service can change where a
-    # church's service is sent, so publishing it to the internet has to be a
-    # decision rather than a default. Put a TLS-terminating proxy in front of
-    # it (see Caddyfile.example) and point that at this. If you genuinely want
-    # it open, change this to "8080:8080" and understand that the password
-    # crosses the network readable.
+    # THIS LINE is what decides who can reach the relay, not anything inside
+    # the container. Bound to the host's localhost on purpose: this service can
+    # change where a church's service is sent, so publishing it to the internet
+    # has to be a decision rather than a default.
+    #
+    # Reach it over an SSH tunnel:  ssh -L 8080:localhost:8080 you@your-server
+    # or put a TLS proxy in front of it (see Caddyfile.example) pointing at
+    # 127.0.0.1:8080. If you genuinely want it open, change this to
+    # "8080:8080" and understand that the password then crosses the network
+    # readable.
     ports:
       - "127.0.0.1:8080:8080"
     volumes:

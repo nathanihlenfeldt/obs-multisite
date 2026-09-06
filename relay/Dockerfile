@@ -56,8 +56,18 @@ COPY relay/web /app/web
 # Everything that must survive a restart lives here: the database and the
 # segment cache. Mount it, or a container replacement loses the destinations.
 VOLUME ["/data"]
+# Binds to every interface INSIDE the container, which is not the loosening it
+# looks like. A container's 127.0.0.1 is its own loopback, and Docker publishes
+# a port by forwarding to the container's eth0 — so binding loopback here makes
+# the relay unreachable even when the port is published, which is exactly what
+# happened when this was first set to 127.0.0.1.
+#
+# What actually decides who can reach it is the HOST side of the port mapping.
+# docker-compose.yml publishes "127.0.0.1:8080:8080" for that reason: the
+# container boundary plus that mapping is the control, not this line.
 ENV RELAY_DATA_DIR=/data \
     RELAY_WEB_ROOT=/app/web \
+    RELAY_BIND=0.0.0.0 \
     RELAY_PORT=8080
 EXPOSE 8080
 
