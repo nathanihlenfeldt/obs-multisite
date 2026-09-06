@@ -48,9 +48,11 @@ This ranking is the tie-breaker for every design choice.
   live feed into a local cache the whole time. Sites can also **jump to live**,
   **scrub** within what's retained, and see **how far behind live** they are.
 - **Multi-track production audio.** Delivers up to all 6 OBS audio tracks — main
-  mix, ISOs of specific mics, click track — muxed together and sample-accurately
-  synced, then exposed at each far site as separate audio buses for local mixing,
-  monitoring, and in-ears.
+  mix, ISOs of specific mics, click track — muxed into the same fragment and so
+  locked to the picture and to each other. At an OBS satellite each track is a
+  separate source, all fed by one decoder, for local mixing, monitoring and
+  in-ears. This is the primary mode (§4.3); packed multi-channel (§4.3.1)
+  remains available for sites whose output is a single multi-channel device.
 - **Markers / cues.** The main site drops named markers into the stream ("Sermon
   Start", "Offering", "Go to local"), manually or on a schedule; satellites see
   them, jump to them, and can trigger local automation.
@@ -207,6 +209,14 @@ multi-channel interface that would rather have one stream than several.
 - **Audio interfaces:** ASIO or Blackmagic DeckLink devices. A de-interleaver
   that maps packed channels onto device output channels at the satellite is not
   built (see §9).
+
+**Which mode suits which satellite.** The two modes are not competing for the
+same sites. An **OBS satellite** wants multi-track: OBS routes sources
+independently, so separate tracks land on separate destinations with no
+de-interleaving. An **appliance** driving HDMI or SDI wants packed: its output
+is one multi-channel device, and eight channels in one stream map straight onto
+HDMI's eight (§8.1). The encoder can send either; the choice belongs to the
+receiving end, which is why both remain supported.
 
 ### 4.4 Manifest (live-edge discovery)
 
@@ -462,7 +472,10 @@ Two tiers, sharing one build:
   multi-channel layout: an inexpensive HDMI audio de-embedder recovers the
   individual channels at the campus. That gives a third audio path alongside
   ASIO and DeckLink, and is what makes the low-cost tier viable for production
-  audio rather than stereo only.
+  audio rather than stereo only. Packed is therefore the appliance's mode even
+  though multi-track is the primary one overall (§4.3): an appliance has one
+  output device, not a mixer. Fed a multi-track event it plays the first track;
+  distributing several tracks across output channels is not built.
 - **Storage.** The segment cache writes roughly 3 GB per hour at 6 Mbps. That
   will wear out an SD card, so a USB SSD is required rather than recommended,
   and the cache location must be configurable.
@@ -588,6 +601,8 @@ built; 6 and 7 are not started.
   pipeline.
 - **Audio:** every enabled OBS output track is delivered (up to 6), each labelled
   once by the operator; multichannel/surround allowed per track; AAC to start.
+  A satellite plays track 1 unless told otherwise, so a stereo-only site needs
+  no audio configuration at either end.
 - **Pause behaviour:** hold the last frame.
 - **First storage target:** Cloudflare R2 (any S3-compatible store supported).
 - **Platform order:** Windows first, macOS second.

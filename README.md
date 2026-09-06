@@ -123,8 +123,8 @@ service either. Extensions (Phase 7) are not started.
 
 - Durable store-and-forward upload: nothing is lost through an outage, a crash,
   or a mid-service restart.
-- CMAF segments with multi-channel production audio, H.264 or HEVC, from any OBS
-  encoder (x264, NVENC, QuickSync, AMF).
+- CMAF segments from any OBS encoder — H.264 or HEVC via x264, NVENC, QuickSync
+  or AMF.
 - Satellite receive with a deep local buffer, checksum verification, and
   timeslipping — hold, resume, catch up, scrub, jump to a marker.
 - **Multi-track production audio.** Up to 6 OBS tracks — main mix, ISOs, click —
@@ -176,6 +176,15 @@ For the full design, see [PROJECT-SCOPE.md](PROJECT-SCOPE.md).
    markers. Settings are saved as you type.
 3. **Go live.** Watch the status readout: how much of the service has been sent,
    how much is waiting, and link health.
+
+**Production audio** is set up in OBS itself, not in the dock. In Settings →
+Output → Recording, enable the audio tracks you intend to send; in Advanced
+Audio Properties (right-click the mixer), assign each source to its tracks —
+main mix on track 1, a click on its own track, ISOs on theirs. Name them under
+**Settings… → Track labels** so satellites see "Click" rather than "Track 3".
+Every enabled track travels in the same segment, locked to the picture.
+
+Sending stereo only? Do nothing: track 1 is the default at both ends.
 
 ### Satellite (decoder)
 
@@ -387,7 +396,11 @@ service.
   desktop to be left in the wrong state. Pi OS Lite is the right image.
 - **Production audio over HDMI.** Up to eight channels of LPCM, recovered at
   the campus with a de-embedder. If the device will not take every channel the
-  feed carries, it says so loudly rather than silently dropping the click.
+  feed carries, it says so loudly rather than silently dropping the click. This
+  is the one place *packed* multi-channel is the better mode: eight channels in
+  one stream map straight onto HDMI's eight. An appliance fed multi-track plays
+  the first track; routing several tracks onto output channels there is not
+  built.
 - **The preview is not the output.** The web UI shows the incoming picture at
   a rate the browser chooses, independently of what is on the screen in the
   room — so a cue can be lined up while the picture is held.
@@ -414,7 +427,7 @@ Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
 | suite | what it proves |
 |---|---|
 | `reliability` | durability across a crash, ordered drain through an outage, checksum rejection, permanent-failure handling |
-| `session` | the write-ordering invariant holds continuously, including across a crash and resume; packed multi-channel audio round-trips |
+| `session` | the write-ordering invariant holds continuously, including across a crash and resume; packed multi-channel audio round-trips, channel order intact |
 | `decoder` | timeslipping: the cache fills while paused, resume continues exactly where it stopped, markers, seek-by-time, VOD playback, and that a gap stalls rather than silently skipping |
 | `responsive` | UI queries stay fast while downloading — the property that keeps OBS usable during a service |
 | `snapshot` | the figures the dock reads agree with the session they are built from |
@@ -429,9 +442,11 @@ Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
 
 ## Known gaps
 
-- **No channel de-interleaver.** Packed channels arrive as one multi-channel
-  stream. Routing them to individual outputs is planned as part of the
-  appliance, where it is a channel map rather than an OBS plugin.
+- **No channel de-interleaver**, which limits the *packed* mode only. Packed
+  channels arrive as one multi-channel stream and cannot be split to individual
+  outputs; it is planned as part of the appliance, where it is a channel map
+  rather than an OBS plugin. Multi-track audio does not need it — each track is
+  already its own source.
 - **AV1 is carried but lightly exercised**, unlike H.264 and HEVC.
 - **Seeking is accurate to about a second**, not to a frame.
 - **No soak test yet.** Sustained behaviour over a full service is untested and
