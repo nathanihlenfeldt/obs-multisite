@@ -76,6 +76,8 @@ struct CmafDecoder::Impl {
     SwrContext* swr = nullptr;
 
     int width = 0, height = 0, audio_tracks = 0;
+    std::string video_codec;
+    int decode_threads = 0;
 
     VideoFrameCallback on_video;
     AudioFrameCallback on_audio;
@@ -202,7 +204,20 @@ struct CmafDecoder::Impl {
             AVCodecContext* c = avcodec_alloc_context3(dec);
             if (!c) continue;
             avcodec_parameters_to_context(c, par);
+            // FFmpeg defaults AVCodecContext to a single thread. On a campus
+            // player that is three of the Pi's four cores left idle while
+            // video decode sets the pace for the whole playout clock: the
+            // symptom is a few frames a second and a picture that constantly
+            // falls behind. 0 means "pick a sensible number for this machine".
+            c->thread_count = 0;
+            c->thread_type  = FF_THREAD_FRAME | FF_THREAD_SLICE;
             if (avcodec_open2(c, dec, nullptr) < 0) { avcodec_free_context(&c); continue; }
+            if (par->codec_type == AVMEDIA_TYPE_VIDEO && video_codec.empty()) {
+                // Core has no logger of its own — it is shared with the OBS
+                // plugin. Record it and let the caller report it.
+                video_codec = dec->name ? dec->name : "?";
+                decode_threads = c->thread_count;
+            }
             ctxs[i] = c;
             if (par->codec_type == AVMEDIA_TYPE_VIDEO && video_stream < 0) video_stream = (int)i;
             else if (par->codec_type == AVMEDIA_TYPE_AUDIO) audio_idx[i] = an++;
@@ -326,5 +341,7 @@ const std::string& CmafDecoder::error() const { return d->err; }
 int CmafDecoder::video_width() const { return d->width; }
 int CmafDecoder::video_height() const { return d->height; }
 int CmafDecoder::audio_track_count() const { return d->audio_tracks; }
+std::string CmafDecoder::video_codec() const { return d->video_codec; }
+int CmafDecoder::decode_threads() const { return d->decode_threads; }
 
 } // namespace multisite

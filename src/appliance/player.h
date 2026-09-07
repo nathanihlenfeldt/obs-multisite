@@ -267,6 +267,8 @@ private:
     std::atomic<uint64_t> m_present_ns{0}, m_present_max_ns{0}, m_presents{0};
     // Read only by the poll thread, which is the only writer too.
     uint64_t m_last_frames_out = 0;
+    // Cleared when a decoder is created, set by the first frame out of it.
+    std::atomic<bool> m_logged_stream{true};
     // Monotonic time of the last frame that reached the display. What
     // separates "playing" from "nothing is arriving", which is the difference
     // between leaving the picture alone and putting the splash back up.

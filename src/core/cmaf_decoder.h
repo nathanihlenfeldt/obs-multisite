@@ -70,6 +70,10 @@ public:
     int  video_width() const;
     int  video_height() const;
     int  audio_track_count() const;
+    // Which decoder FFmpeg picked, and how many threads it opened it with.
+    // Both are only known once a fragment has been opened.
+    std::string video_codec() const;
+    int  decode_threads() const;
 
 private:
     struct Impl;

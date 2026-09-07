@@ -310,6 +310,16 @@ void Player::enqueue(PendingFrame&& f) {
 
 void Player::on_video(const DecodedVideoFrame& f) {
     if (!m_running.load()) return;
+    // The decode thread has not opened a fragment when the decoder is created,
+    // so none of this is known there — it printed 0x0 and no audio tracks
+    // every time. By the first frame it is all real.
+    if (!m_logged_stream.exchange(true)) {
+        if (auto dec = decoder_ref())
+            plog_info("stream: %s %dx%d, %d audio track(s), decoding on %d "
+                      "thread(s)", dec->video_codec().c_str(),
+                      dec->video_width(), dec->video_height(),
+                      dec->audio_track_count(), dec->decode_threads());
+    }
     const int64_t first = anchor_pts(f.pts_ns, true);
     m_last_video_pts_ns = f.pts_ns;
 
@@ -603,7 +613,7 @@ void Player::update_screen() {
 void Player::poll_loop() {
     plog_info("receive loop started");
     long long next_poll = 0;
-    long long last_status_log = 0;
+    long long last_status_log = now_ms();
 
     while (m_running.load()) {
         const long long now = now_ms();
@@ -791,9 +801,8 @@ void Player::feed_loop() {
             m_decoder_started = true;
             m_feed_start_ns = now_ns();
             m_pushed_media_ns = 0;
-            plog_info("decoder started (%dx%d, %d audio track(s))",
-                      dec->video_width(), dec->video_height(),
-                      dec->audio_track_count());
+            m_logged_stream = false;    // report it once it is actually known
+            plog_info("decoder started");
         }
 
         // Feed at playout rate with a small lead, so the decoder always has
