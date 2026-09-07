@@ -580,8 +580,8 @@ service.
   feed carries, it says so loudly rather than silently dropping the click. This
   is the one place *packed* multi-channel is the better mode: eight channels in
   one stream map straight onto HDMI's eight. An appliance fed multi-track plays
-  the first track; routing several tracks onto output channels there is not
-  built.
+  one chosen track — the first by default, with a picker in Settings; routing
+  several tracks onto output channels there is not built.
 - **The preview is not the output.** The web UI shows the incoming picture at
   a rate the browser chooses, independently of what is on the screen in the
   room — so a cue can be lined up while the picture is held.

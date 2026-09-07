@@ -1,45 +1,3 @@
-## 🔴 If you are running v0.1.1-alpha's relay, read this first
-
-**v0.1.1-alpha shipped the simulcast relay with no authentication of any kind,
-and a `docker-compose.yml` that publishes it on every interface.** Anyone who
-could reach that port could change a destination's address and stream key —
-pointing a church's service at their own server — as well as stop it mid-service
-and read the storage settings.
-
-If you deployed it:
-
-1. Close the port now (`docker compose down`, or firewall it), then update.
-2. Treat the storage credentials it held as exposed and roll them, using
-   read-only keys for the relay when you re-enter them.
-3. Check the destinations list for anything you did not add yourself.
-
-Fixed in this release: every endpoint but signing in now requires a login, and
-the relay binds to localhost so publishing it is a decision rather than a
-default. The campus appliance is not affected — it has always been a
-LAN-only device and was never documented as internet-facing.
-
----
-
-## Fixed since v0.1.2-alpha
-
-**The relay's container could not be reached.** v0.1.2-alpha set the relay to
-bind `127.0.0.1`, which is right for a process run directly on a machine and
-wrong inside a container: a container's loopback is its own, and Docker
-publishes a port by forwarding to the container's `eth0`. The relay started,
-listened, and answered nobody — including through its own published port.
-
-The image now binds every interface inside the container, which is not a
-loosening. What decides who can reach the relay is the host side of the port
-mapping, and `docker-compose.yml` still binds that to `127.0.0.1:8080`.
-
-If you are on v0.1.2-alpha and would rather not rebuild, adding
-`RELAY_BIND: 0.0.0.0` to the `environment:` block has the same effect.
-
-Nothing else changed. If v0.1.2-alpha is working for you, this release adds
-nothing you need.
-
----
-
 ## ⚠️ Alpha — read this first
 
 This is pre-release software. A **six-hour continuous soak test** has been run
@@ -65,72 +23,96 @@ objects after the same number of days. Seven days is the design default, and
 **the rule is also your DVR depth**: a campus can timeslip back only as far as
 retention allows.
 
-## What's new since v0.1.0-alpha
+## What's new since v0.1.3-alpha
 
-**Multi-track production audio, end to end.** Up to six OBS audio tracks — main
-mix, mic ISOs, click — travel in the same fragment and are now delivered at the
-satellite. The Multisite Source carries the video plus one chosen track (track 1
-by default), and each further track is added as a **Multisite Audio Track
-(Decoder)** source. Those attach to the decoder already following that room, so
-a segment is downloaded once and decoded once however many tracks a campus
-uses, and every track plays from one clock.
+A fix-only release. Three faults in the OBS decoder, three in the campus
+player, and the test gap that let one of them ship.
 
-This is now the **primary** production-audio mode, with packed multi-channel as
-the alternative. The reason is a failure mode: OBS resamples every source to its
-global layout, so packed requires both ends set to 7.1, and a satellite that is
-not silently downmixes — summing the ISOs and click into the programme with no
-symptom until it is on air. Separate tracks each carry their own channel count,
-so a stereo main mix beside a mono click works with OBS in plain stereo.
+### The event list showed only the newest service
 
-**Public simulcast relay.** `relay/` reads the same segments from the bucket and
-pushes them to YouTube, Facebook or any RTMP destination, so the main site
-uploads once whether the service goes to two campuses or to two campuses and the
-internet. It runs a few minutes behind on purpose, so a dropout at the main site
-delays the public stream rather than breaking it. Nothing is re-encoded, so a
-$5/month VPS is the target rather than a stretch.
+**If you have used this for more than one service, this is the one that
+matters.** The per-room index arrived during v0.1.0-alpha, so any service
+recorded before it has media in the bucket and no index entry. Discovery
+treated a non-empty index as the whole truth and only scanned the bucket when
+the index was completely empty — so the first service recorded with an index
+made every earlier one invisible. Services were still in storage and still
+playable; nothing would list them.
 
-**A login on the relay, and it binds to localhost.** See the notice at the top:
-this closes a real hole rather than hardening something already safe. Every
-endpoint but signing in requires a session; passwords are stored as
-PBKDF2-HMAC-SHA256 over a random salt; sessions are held in memory, so a restart
-signs everyone out. A working Caddy config ships alongside for TLS, because a
-password over plain HTTP protects nobody.
+Discovery is now the union of the index and a scan, so an event with no entry
+lists alongside those that have one. It affects the **relay's Past services
+list too**, which shared the same code, and both are fixed by the same change.
 
-**Past services can be downloaded and replayed.** A finished service downloads
-as one MP4, streamed from storage as it is requested rather than assembled on
-the server, so a two-hour service costs no disk and several people can download
-at once. It carries every audio track the main site sent, not just the streamed
-one, so the ISOs and the click are there for whoever edits it afterwards. A
-finished service can also be replayed out to a destination as though it were
-live — a proof of concept: one at a time, started by hand, no scheduling yet.
+Nothing needs re-uploading and nothing was lost — your older services should
+simply appear again.
 
-**Fixes from the soak test.** Three defects showed up in six hours of logs:
+### Jump to live and seeking gave no sign they had worked
 
-- The packed-audio warning fired whenever more than two channel names were
-  filled in, regardless of what was being sent — telling a correct six-track
-  setup to switch OBS to 7.1, which would have widened every track for nothing.
-  It now fires only when a track genuinely carries more channels than the global
-  layout.
-- The shutdown log reported the upload queue depth *before* draining it, so a
-  clean stop that uploaded its last fragments still signed off "2 pending",
-  reading as two segments lost when nothing had been.
-- The companion audio source logged once per keystroke while typing a room name.
+Jump to live did none of the bookkeeping a seek does, so the dock had nothing
+to show and the operator got no acknowledgement that the button had done
+anything. Both now report **LOADING…** and **BUFFERING…** the same way, and the
+indication appears whatever state the decoder is in — including a recording
+that is loaded but not yet playing, which is exactly when someone is lining up
+a cue and needs to know their click landed.
 
-**`use_object_tags` is now `send_expiry_tag`.** The old name implied the encoder
-managed expiry. It never did: a tag only gives a lifecycle rule something to
-match, and Cloudflare R2 rejects tagging outright. The old settings key is still
-read, so an encoder configured with tagging on keeps its setting.
+### Stop left the picture on air
 
-**Documentation.** Why the project exists and who builds it; what it is *not*;
-what running the decoder inside OBS makes possible (local overlays, DeckLink and
-AJA, NDI, Dante); that any machine running OBS can originate a broadcast; and a
-roadmap entry for an external control API aimed at Bitfocus Companion.
+Stop halted the feed but never cleared the source, and OBS holds the last frame
+it was given indefinitely, so the programme stayed on the campus screen and the
+button looked broken. Stop now takes the picture off air. Holding the picture is
+what **Hold** is for, and it remains a separate control.
+
+### Campus player: the five-frames-a-second problem
+
+Three fixes, and the first is the cause:
+
+- **One audio track is played, not all of them.** A six-track service had every
+  track going into the same stereo device — six times real time of audio into
+  an output that accepts one. ALSA applied back-pressure on the same thread
+  that presents video, so the picture starved behind it. Track 0 by default,
+  with a picker in Settings ("Track to play") for a campus whose origin puts
+  the house mix somewhere else.
+- **Video decodes on more than one core.** FFmpeg defaults to a single thread
+  and nothing set otherwise, so a Pi 5 was decoding on one of four cores. The
+  log now also says which decoder FFmpeg chose and how many threads it opened.
+- **The status line reports frame rate and dropped frames**, not a running
+  total — 29042 and 23 look equally healthy until you divide by the interval.
+  With `--verbose` it also reports how long presenting a frame takes, which
+  separates a slow display path from frames that are not arriving.
+
+### Campus player: selecting an event lost audio
+
+Choosing an event in the web UI tore the decoder down without telling the
+session, so the new decoder never received the init segment while the session
+believed it had already sent one. The result was a burst of "first segment
+arrived with no init segment" and a silent hole in the programme.
+
+### Campus player: the service and the login prompt fought over tty1
+
+Raspberry Pi OS Lite starts a login prompt on tty1, and the two took turns
+evicting each other — the player got SIGHUP, died, restarted three seconds
+later, and threw the login prompt off again. The unit now claims tty1
+exclusively. `StartLimitIntervalSec` also moved to `[Unit]`, where systemd
+actually reads it.
+
+### Testing and documentation
+
+The CMAF fragment tests shelled out to `cat`, `wc -l` and `test`, so they could
+never pass on Windows — and nobody noticed, because the Windows CI runner has
+no FFmpeg and never reached them. They run on all three platforms now.
+
+The event-listing test only covered a bucket with *no* index entries, which is
+precisely why the fault above shipped; the mixed case is covered now.
+
+Documentation: the scope document claimed the encoder queue used SQLite (it
+uses plain files, deliberately), said phases 6 and 7 were "not started"
+directly above entries marking both built, and reproduced the README's "Why
+this exists" word for word. Fixed, and about seventy duplicated lines removed.
 
 ## Installing
 
-**macOS (Apple Silicon)** — new in this release. Unzip, move
-`obs-multisite.plugin` into `~/Library/Application Support/obs-studio/plugins/`,
-then clear the download quarantine flag before restarting OBS:
+**macOS (Apple Silicon)** — unzip, move `obs-multisite.plugin` into
+`~/Library/Application Support/obs-studio/plugins/`, then clear the download
+quarantine flag before restarting OBS:
 
 ```sh
 xattr -dr com.apple.quarantine ~/Library/Application\ Support/obs-studio/plugins/obs-multisite.plugin
@@ -163,18 +145,25 @@ decoder's event list the key also needs `s3:ListBucket` — Cloudflare's "Object
 Read & Write" token includes it, an object-scoped token does not, and the dock
 will say so rather than showing an empty list.
 
+**The campus player** installs with one command on stock Raspberry Pi OS Lite
+(64-bit); see the README. Updating is the same command again.
+
 ## Known gaps
 
 - **Not yet used for a real service.** The soak covered sustained upload,
   timeslipping and playout. It did not cover a room full of people, a volunteer
   under pressure, or a venue's network on a Sunday.
+- **The campus player has not carried a service either**, and its frame rate on
+  a Pi 5 has not been re-measured since the audio and threading fixes above.
 - **Alignment between separate audio tracks is unverified.** Audio stays locked
   to the picture — measured, and checked by ear — but nobody has confirmed that
   a click on one track lands at the same instant as the programme on another.
-- **No channel de-interleaver**, which limits the packed mode only.
-- **The appliance has not carried a service.** The relay has pushed live
-  streams to YouTube but has not been through a full service either, and it
-  will not send an HEVC feed.
+- **No channel de-interleaver**, which limits the packed mode only. On the
+  appliance, one chosen track is played rather than several routed to output
+  channels.
+- **The relay has pushed live streams to YouTube** but has not been through a
+  full service, and it **will not send an HEVC feed** — streaming sites want
+  H.264 over RTMP and re-encoding is not built.
 - **The relay does not terminate TLS.** It binds to localhost and expects a
   proxy in front of it; a working Caddy config is included.
 - **Replaying a past service is a proof of concept** — one at a time, started

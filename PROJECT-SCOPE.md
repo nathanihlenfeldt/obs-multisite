@@ -497,8 +497,12 @@ Two tiers, sharing one build:
   ASIO and DeckLink, and is what makes the low-cost tier viable for production
   audio rather than stereo only. Packed is therefore the appliance's mode even
   though multi-track is the primary one overall (§4.3): an appliance has one
-  output device, not a mixer. Fed a multi-track event it plays the first track;
-  distributing several tracks across output channels is not built.
+  output device, not a mixer. Fed a multi-track event it plays **one chosen
+  track** — the first by default, selectable in Settings for a campus whose
+  origin puts the house mix elsewhere. Distributing several tracks across
+  output channels is not built, and playing all of them is not a fallback: six
+  tracks into a device that accepts one is six times real time of audio, and
+  the back-pressure starves the video sharing that thread.
 - **Storage.** The segment cache writes roughly 3 GB per hour at 6 Mbps. That
   will wear out an SD card, so a USB SSD is required rather than recommended,
   and the cache location must be configurable.
