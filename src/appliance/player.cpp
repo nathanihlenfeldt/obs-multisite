@@ -333,6 +333,24 @@ void Player::on_video(const DecodedVideoFrame& f) {
 
 void Player::on_audio(const DecodedAudioFrame& f) {
     if (!m_running.load()) return;
+
+    // One track goes to air. OBS publishes up to six and an event carries
+    // every one it was told to, so a six-track service used to put all six
+    // into the same stereo device: six times real time into an output that
+    // accepts one, on the thread that also presents video. ALSA applied the
+    // back-pressure it should, and video starved behind it — a few frames a
+    // second and a playout clock that could never catch up. Dropping the
+    // other tracks here keeps them out of the queue as well as off the card.
+    {
+        const int wanted = config().audio_track;
+        if (f.track_index != wanted) {
+            if (!m_logged_audio_tracks.exchange(true))
+                plog_info("this event carries more than one audio track — "
+                          "playing track %d, ignoring the rest", wanted);
+            return;
+        }
+    }
+
     const int64_t first = anchor_pts(f.pts_ns, false);
 
     if (!m_logged_av_offset && m_last_video_pts_ns != 0) {

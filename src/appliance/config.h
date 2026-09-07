@@ -77,6 +77,9 @@ struct Config {
     // 0 = take the channel count from the feed. HDMI carries up to 8 channels
     // of LPCM, which is what makes packed multi-channel work on the cheap tier.
     int         audio_channels = 0;
+    // Which audio track to put to air. OBS publishes up to six, and an event
+    // carries every one it was told to; a campus plays one of them.
+    int         audio_track = 0;
 
     // ── Control surface ──────────────────────────────────────────────────────
     int         web_port = 8080;

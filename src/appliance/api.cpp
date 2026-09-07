@@ -126,6 +126,7 @@ json config_json(const Config& c) {
     j["audio_enabled"]  = c.audio_enabled;
     j["alsa_device"]    = c.alsa_device;
     j["audio_channels"] = c.audio_channels;
+    j["audio_track"] = c.audio_track;
 
     j["web_port"] = c.web_port;
     j["web_bind"] = c.web_bind;
@@ -187,6 +188,7 @@ Config apply_edit(Config c, const json& j) {
     take(j, "audio_enabled",  c.audio_enabled);
     take(j, "alsa_device",    c.alsa_device);
     take(j, "audio_channels", c.audio_channels);
+    take(j, "audio_track", c.audio_track);
 
     take(j, "web_port", c.web_port);
     take(j, "web_bind", c.web_bind);

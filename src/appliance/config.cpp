@@ -103,6 +103,7 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "audio_enabled",        audio_enabled);
     take(j, "alsa_device",          alsa_device);
     take(j, "audio_channels",       audio_channels);
+    take(j, "audio_track",          audio_track);
 
     take(j, "web_port",             web_port);
     take(j, "web_bind",             web_bind);
@@ -146,6 +147,7 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["audio_enabled"]        = audio_enabled;
     j["alsa_device"]          = alsa_device;
     j["audio_channels"]       = audio_channels;
+    j["audio_track"]          = audio_track;
 
     j["web_port"]             = web_port;
     j["web_bind"]             = web_bind;

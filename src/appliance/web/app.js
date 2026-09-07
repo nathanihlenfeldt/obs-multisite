@@ -405,6 +405,7 @@ async function loadSettings() {
   set('#c-cache', settings.cache_dir);
   set('#c-idle', settings.idle_mode);
   set('#c-channels', settings.audio_channels);
+  set('#c-audio-track', settings.audio_track);
   set('#c-audio-on', String(settings.audio_enabled));
   set('#c-autoplay', String(settings.auto_play));
   $('#idle-image-field').hidden = settings.idle_mode !== 'image';
@@ -483,6 +484,7 @@ $('#settings-form').addEventListener('submit', async (e) => {
     audio_enabled: $('#c-audio-on').value === 'true',
     alsa_device: $('#c-alsa').value,
     audio_channels: Number($('#c-channels').value),
+    audio_track: Number($('#c-audio-track').value),
     auto_play: $('#c-autoplay').value === 'true',
   };
 

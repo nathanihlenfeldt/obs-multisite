@@ -269,6 +269,8 @@ private:
     uint64_t m_last_frames_out = 0;
     // Cleared when a decoder is created, set by the first frame out of it.
     std::atomic<bool> m_logged_stream{true};
+    // Said once per run, not once per discarded frame.
+    std::atomic<bool> m_logged_audio_tracks{false};
     // Monotonic time of the last frame that reached the display. What
     // separates "playing" from "nothing is arriving", which is the difference
     // between leaving the picture alone and putting the splash back up.

@@ -217,6 +217,15 @@
       <input id="c-channels" name="audio_channels" type="number" min="0" max="8">
       <p class="hint">0 follows whatever the feed carries.</p>
     </div>
+    <div class="field">
+      <label for="c-audio-track">Track to play</label>
+      <input id="c-audio-track" name="audio_track" type="number" min="0" max="5">
+      <p class="hint">
+        OBS can publish six tracks and an event carries every one it was
+        given. This picks the one that goes to air; the rest are ignored.
+        Track 0 unless somebody at the origin says otherwise.
+      </p>
+    </div>
 
     <h2>On power-up</h2>
     <div class="field">
