@@ -191,7 +191,7 @@ For the full design, see [PROJECT-SCOPE.md](PROJECT-SCOPE.md).
 
 ### Installing the plugin
 
-Builds are attached to each [release](https://github.com/nathanihlenfeldt/obs-multisite/releases),
+Builds are attached to each [release](https://github.com/stageaudioworks/obs-multisite/releases),
 one per platform. All of them are built against the OBS version named in the
 release notes; a different major version of OBS may refuse to load them.
 
@@ -569,7 +569,7 @@ receives, decodes and plays out, with no operator-facing desktop software. See
 stock **Raspberry Pi OS Lite (64-bit)**:
 
 ```bash
-curl -fsSL https://raw.githubusercontent.com/nathanihlenfeldt/obs-multisite/main/scripts/player/install.sh | sudo bash
+curl -fsSL https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/install.sh | sudo bash
 ```
 
 That installs the dependencies, builds the player, installs it as a service
