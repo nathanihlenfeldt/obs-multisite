@@ -219,14 +219,21 @@ multi-channel interface that would rather have one stream than several.
   plugins detect a narrower layout and log an explicit error, because otherwise
   the extra channels are downmixed and destroyed silently.
 - **Capacity:** 8 channels total, e.g. stereo main mix + 6 mono ISOs.
-- **Audio interfaces:** ASIO or Blackmagic DeckLink devices. A de-interleaver
-  that maps packed channels onto device output channels at the satellite is not
-  built (see §9).
+- **Audio interfaces:** ASIO or Blackmagic DeckLink devices. Mapping packed
+  channels onto device output channels at the satellite is **out of scope**,
+  not merely unbuilt: in OBS,
+  [atkAudio's plugin suite](https://github.com/atkAudio/PluginForObsRelease)
+  already routes audio to ASIO, CoreAudio and Windows Audio devices and hosts
+  VST3/AU/LV2 plugins alongside, which is a superset of what a de-interleaver
+  of ours would have done. It is a separate install under AGPL-3.0; nothing
+  here links against it or requires it. Verified 2026-09-07: an 8-channel /
+  7.1 feed carried on one track survives this pipeline with its channel order
+  intact, which is the part that is ours to get right.
 
 **Which mode suits which satellite.** The two modes are not competing for the
 same sites. An **OBS satellite** wants multi-track: OBS routes sources
 independently, so separate tracks land on separate destinations with no
-de-interleaving. An **appliance** driving HDMI or SDI wants packed: its output
+routing plugin needed at all. An **appliance** driving HDMI or SDI wants packed: its output
 is one multi-channel device, and eight channels in one stream map straight onto
 HDMI's eight (§8.1). The encoder can send either; the choice belongs to the
 receiving end, which is why both remain supported.
@@ -510,7 +517,10 @@ Two tiers, sharing one build:
   will throttle during a long service.
 - **Output:** DeckLink (video plus embedded multichannel audio, which suits the
   packed channel layout), or DRM/KMS for direct display. Audio to ALSA/JACK or
-  embedded in SDI, with the channel de-interleaver applied on the way out.
+  embedded in SDI. Packed channels go out in the order they arrived, which is
+  what an eight-channel HDMI de-embedder or an SDI de-embedder expects — there
+  is nothing to de-interleave when the output device is itself
+  multi-channel.
 - **Control:** a small built-in web server. Operators use a phone, tablet or any
   browser on the church network — hold, resume, catch up to now, jump to a
   moment, and see what is playing and how far behind. No app to install.
@@ -729,7 +739,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Public simulcast to YouTube / Facebook / RTMP | built and pushing live to YouTube; not yet through a full service — H.264 feeds only (§8.2) |
 | Download a finished service as an MP4, all audio tracks | built (§8.2) |
 | Replay a finished service to a destination | proof of concept — one at a time, by hand (§8.2) |
-| Per-channel routing of packed audio (de-interleaver) | not built |
+| Per-channel routing of packed audio at an OBS satellite | out of scope — use [atkAudio's OBS plugins](https://github.com/atkAudio/PluginForObsRelease) (§4.3.1) |
 | Re-encoding an HEVC feed for a streaming site | not built (§8.2) |
 | External control API (obs-websocket vendor requests, §8.3) | planned |
 | Bitfocus Companion module (buttons, feedbacks, variables) | planned; needs the API first |
@@ -772,8 +782,10 @@ carried a service; phase 8 has not been started.
   modesetting, ALSA multichannel audio, the splash and idle screens, the web
   control surface (decoder controls, event list, storage and system settings,
   decoupled preview), and the systemd/install path that makes it start on
-  power-up. Outstanding: the channel de-interleaver, DeckLink SDI output for
-  the production tier, and hardware-decoder selection on Pi 4.
+  power-up, **proven on a Pi 5 on 2026-09-07** though not yet through a
+  service. Outstanding: DeckLink SDI output for the production tier, and
+  hardware-decoder selection on Pi 4. The channel de-interleaver has been
+  dropped from scope rather than deferred (§4.3.1).
 - **Phase 7 — Extensions.** 🟨 Built: the public simulcast relay (§8.2), as a
   separate container in `relay/` — copy remux to one or more RTMP
   destinations, per-destination audio selection, a delay buffer, and

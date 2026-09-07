@@ -158,9 +158,14 @@ will say so rather than showing an empty list.
 - **Alignment between separate audio tracks is unverified.** Audio stays locked
   to the picture — measured, and checked by ear — but nobody has confirmed that
   a click on one track lands at the same instant as the programme on another.
-- **No channel de-interleaver**, which limits the packed mode only. On the
-  appliance, one chosen track is played rather than several routed to output
-  channels.
+- **Routing packed channels to separate outputs is out of scope**, not
+  pending. In OBS,
+  [atkAudio's plugin suite](https://github.com/atkAudio/PluginForObsRelease)
+  does it — and more — better than a de-interleaver of ours would have; it is
+  a separate install under AGPL-3.0. A packed 8-channel / 7.1 feed carries
+  through this pipeline with its channel order intact. On the appliance, one
+  chosen track is played when fed multi-track, and packed channels go out of
+  HDMI in order.
 - **The relay has pushed live streams to YouTube** but has not been through a
   full service, and it **will not send an HEVC feed** — streaming sites want
   H.264 over RTMP and re-encoding is not built.

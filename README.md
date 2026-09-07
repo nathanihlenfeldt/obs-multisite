@@ -359,10 +359,17 @@ in OBS, so the main mix can go to the house system while the click goes to
 in-ears, routed independently like any other source.
 
 One caveat worth knowing before planning around this: every third-party plugin
-named above is someone else's project, on its own release schedule. And if the
-main site sends *packed* multi-channel rather than separate tracks, those
-channels arrive as one stream — splitting them still needs the de-interleaver,
-which is not built (see [Known gaps](#known-gaps)).
+named above is someone else's project, on its own release schedule.
+
+If the main site sends *packed* multi-channel rather than separate tracks, the
+channels arrive as one stream and something has to route them to their
+destinations. That is not built here, deliberately — it is a solved problem in
+OBS. [atkAudio's plugin suite](https://github.com/atkAudio/PluginForObsRelease)
+hosts VST3/AU/LV2 plugins, mixes OBS sources, and routes audio to ASIO,
+CoreAudio and Windows Audio devices, which covers channel mapping better than a
+narrow de-interleaver of our own would. It is a separate install under the
+AGPL-3.0 licence and nothing here depends on it; a packed feed carries eight
+channels through this pipeline with the channel order intact either way.
 
 ### Any location can be the origin
 
@@ -579,9 +586,11 @@ service.
   the campus with a de-embedder. If the device will not take every channel the
   feed carries, it says so loudly rather than silently dropping the click. This
   is the one place *packed* multi-channel is the better mode: eight channels in
-  one stream map straight onto HDMI's eight. An appliance fed multi-track plays
-  one chosen track — the first by default, with a picker in Settings; routing
-  several tracks onto output channels there is not built.
+  one stream map straight onto HDMI's eight, in order, with nothing to route.
+  An appliance fed multi-track plays one chosen track — the first by default,
+  with a picker in Settings; combining several tracks onto output channels
+  there is not built, and packed is the answer for a campus that needs more
+  than one.
 - **The preview is not the output.** The web UI shows the incoming picture at
   a rate the browser chooses, independently of what is on the screen in the
   room — so a cue can be lined up while the picture is held.
@@ -683,11 +692,15 @@ Thirteen suites, all runnable without OBS (the `cmaf*` ones need FFmpeg and
 
 ## Known gaps
 
-- **No channel de-interleaver**, which limits the *packed* mode only. Packed
-  channels arrive as one multi-channel stream and cannot be split to individual
-  outputs; it is planned as part of the appliance, where it is a channel map
-  rather than an OBS plugin. Multi-track audio does not need it — each track is
-  already its own source.
+- **Routing packed channels to separate outputs is not our job.** A packed
+  feed arrives as one multi-channel stream, and in OBS
+  [atkAudio's plugin suite](https://github.com/atkAudio/PluginForObsRelease)
+  already does the routing — to ASIO, CoreAudio or Windows Audio devices, with
+  VST3/AU hosting alongside. A de-interleaver of our own was planned and has
+  been dropped: it would have been a worse version of something that exists.
+  Multi-track audio needs none of it, since each track is already its own
+  source. On the appliance the packed channels go out of HDMI in order, which
+  is what an eight-channel de-embedder expects.
 - **AV1 is carried but lightly exercised**, unlike H.264 and HEVC.
 - **Seeking is accurate to about a second**, not to a frame.
 - **The relay will not send an HEVC feed.** Streaming sites want H.264 over
@@ -723,9 +736,11 @@ Thirteen suites, all runnable without OBS (the `cmaf*` ones need FFmpeg and
 ## Roadmap
 
 - **Phase 6 — Satellite appliance.** Built and installable for the ARM64 /
-  Raspberry Pi HDMI tier (see above), but not yet run through a service. Still
-  to come: the packed-channel de-interleaver, DeckLink SDI output for the
-  production tier, and hardware-decoder selection on Pi 4.
+  Raspberry Pi HDMI tier (see above), and now proven on a Pi 5 — though not
+  yet through a service. Still to come: DeckLink SDI output for the production
+  tier, and hardware-decoder selection on Pi 4. The packed-channel
+  de-interleaver has been dropped rather than deferred; see
+  [Known gaps](#known-gaps).
 - **Phase 7 — Extensions.** The public simulcast relay is built (see
   [Streaming to the public](#streaming-to-the-public)) and has not yet carried
   a service. Still to come there: re-encoding, so an HEVC feed can be streamed;
