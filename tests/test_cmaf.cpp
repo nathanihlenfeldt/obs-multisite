@@ -140,15 +140,33 @@ int main(int argc, char** argv) {
         const std::string chk  = out + "/_chk.mp4";
         const std::string fcnt = out + "/_frames.txt";
 
-        if (system(("cat '" + out + "/init.mp4' '" + seg + "' > '" + chk + "'").c_str()) != 0) {
-            check(false, "concat init+fragment");
-            continue;
+        // Concatenate in-process rather than shelling out to `cat`. The shell
+        // pipeline this used to be is POSIX-only, so the whole check failed on
+        // Windows — which went unnoticed because the Windows runner has no
+        // FFmpeg and never reached this test at all.
+        {
+            std::ofstream  cf(chk, std::ios::binary | std::ios::trunc);
+            std::ifstream  initf(out + "/init.mp4", std::ios::binary);
+            std::ifstream  segf(seg, std::ios::binary);
+            if (!cf || !initf || !segf) {
+                check(false, "concat init+fragment");
+                continue;
+            }
+            cf << initf.rdbuf();
+            cf << segf.rdbuf();
+            if (!cf) {
+                check(false, "concat init+fragment");
+                continue;
+            }
         }
 
         // Decoded video frames must be > 0 (proves the fragment really decodes).
+        // Paths are double-quoted and stderr is left alone: single quotes are
+        // not quoting to cmd.exe, and `2>/dev/null` there writes a file called
+        // "null" instead of discarding anything. `-v error` keeps it quiet.
         int probe_rc = system(("ffprobe -v error -count_frames -select_streams v "
-                "-show_entries stream=nb_read_frames -of csv=p=0 '" + chk +
-                "' 2>/dev/null > '" + fcnt + "'").c_str());
+                "-show_entries stream=nb_read_frames -of csv=p=0 \"" + chk +
+                "\" > \"" + fcnt + "\"").c_str());
         (void)probe_rc;
         long frames = 0;
         if (FILE* f = fopen(fcnt.c_str(), "r")) {
@@ -158,12 +176,20 @@ int main(int argc, char** argv) {
         std::printf("     (fragment %d: %ld decoded video frames)\n", i, frames);
         check(frames > 0, "fragment decodes to real video frames");
 
-        // Every audio track must survive inside the fragment.
-        const std::string acount =
-            "test $(ffprobe -v error -select_streams a -show_entries stream=index "
-            "-of csv=p=0 '" + chk + "' 2>/dev/null | wc -l) -eq " +
-            std::to_string(audio_n);
-        check(system(acount.c_str()) == 0, "all audio tracks present in fragment");
+        // Every audio track must survive inside the fragment. Counted here
+        // rather than with `wc -l`, for the same portability reason.
+        const std::string acnt = out + "/_audio.txt";
+        system(("ffprobe -v error -select_streams a -show_entries stream=index "
+                "-of csv=p=0 \"" + chk + "\" > \"" + acnt + "\"").c_str());
+        int audio_seen = 0;
+        {
+            std::ifstream af(acnt);
+            std::string line;
+            while (std::getline(af, line))
+                if (!line.empty() && line != "\r") ++audio_seen;
+        }
+        std::printf("     (fragment %d: %d audio streams)\n", i, audio_seen);
+        check(audio_seen == audio_n, "all audio tracks present in fragment");
     }
 
     std::printf("\n%s\n", failures == 0 ? "CMAF MUXER TESTS PASSED"
