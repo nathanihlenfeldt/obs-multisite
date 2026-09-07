@@ -661,7 +661,8 @@ Full deployment notes, including bandwidth and disk, are in
 
 ## What the tests cover
 
-Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
+Thirteen suites, all runnable without OBS (the `cmaf*` ones need FFmpeg and
+`s3_url` needs libcurl; the rest need neither):
 
 | suite | what it proves |
 |---|---|
@@ -671,7 +672,8 @@ Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
 | `responsive` | UI queries stay fast while downloading — the property that keeps OBS usable during a service |
 | `snapshot` | the figures the dock reads agree with the session they are built from |
 | `s3_list` | a ListObjectsV2 response is read correctly, including pagination and an access-denied body; a signed query string is canonicalised the way S3 does it |
-| `event_catalog` | events are classified as live / recording / interrupted, rooms stay separate, a listing failure is not shown as "no recordings", and an event that recorded nothing is not offered |
+| `event_catalog` | events are classified as live / recording / interrupted, rooms stay separate, a listing failure is not shown as "no recordings", an event that recorded nothing is not offered, and an event with no room-index entry still lists alongside those that have one |
+| `crypto` | SHA-256 and HMAC-SHA256 match the NIST and RFC 4231 vectors on whichever backend was compiled in — OpenSSL, Windows bcrypt or Apple CommonCrypto. Each CI platform runs its own, so all three are held to the same published answers and a signed request cannot differ by platform |
 | `cmaf`, `cmaf_hevc` | the muxer produces decodable fragments for H.264 and HEVC, with multi-track audio |
 | `cmaf_decode` | the round trip: what the muxer wrote, the decoder plays back |
 | `s3_url` | endpoint and bucket values survive being pasted with schemes, slashes and whitespace |
@@ -713,8 +715,8 @@ Twelve suites, all runnable without OBS (the `cmaf*` ones need FFmpeg):
   [Status](#status)) but no congregation has watched anything through this. The
   soak covered sustained upload, timeslipping and playout; it did not cover a
   room full of people, a volunteer under pressure, or a venue's actual network
-  on a Sunday. The relay has run 44 minutes
-  unattended without a fault, which is encouraging and is not a service.
+  on a Sunday. The relay has run 44 minutes unattended without a fault, which
+  is encouraging and is not a service.
 
 ---
 
