@@ -189,6 +189,10 @@ For the full design, see [PROJECT-SCOPE.md](PROJECT-SCOPE.md).
 
 ## Using it
 
+**In a hurry?** [QUICKSTART.md](QUICKSTART.md) is the twenty-minute version:
+what you need, install, retention, main site, campus. This section is the long
+form.
+
 ### Installing the plugin
 
 Builds are attached to each [release](https://github.com/stageaudioworks/obs-multisite/releases),
