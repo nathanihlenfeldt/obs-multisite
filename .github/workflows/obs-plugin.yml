@@ -95,30 +95,54 @@ jobs:
           $obs = (Get-ChildItem obs-src -Directory | Select-Object -First 1).FullName
           Write-Host "obs source dir: $obs"
 
-          # OBS has moved buildspec.json between releases, so search for it
-          # rather than assuming the root. Fall back to OBS_DEPS_FALLBACK.
+          # Where OBS keeps its dependency pins has moved: OBS 32 uses the
+          # "dependencies" configure preset in CMakePresets.json, releases up
+          # to 31 used a buildspec.json. Read the new location first, then the
+          # old, and treat the fallback as a last resort — a fallback that
+          # fires unnoticed is how a build ends up against the wrong FFmpeg,
+          # which on Windows means OBS failing to load the plugin with error
+          # 126 and no indication of which DLL is at fault.
           $depsVer = ""
-          $spec = Get-ChildItem -Recurse $obs -Filter buildspec.json -ErrorAction SilentlyContinue |
-                  Select-Object -First 1
-          if ($spec) {
-            Write-Host "found buildspec: $($spec.FullName)"
+          $qtVerFound = ""
+          $presets = Join-Path $obs "CMakePresets.json"
+          if (Test-Path $presets) {
             try {
-              $json = Get-Content $spec.FullName -Raw | ConvertFrom-Json
-              $depsVer = $json.dependencies.prebuilt.version
+              $json = Get-Content $presets -Raw | ConvertFrom-Json
+              $depPreset = $json.configurePresets | Where-Object { $_.name -eq "dependencies" }
+              if ($depPreset) {
+                $deps = $depPreset.vendor."obsproject.com/obs-studio".dependencies
+                $depsVer = $deps.prebuilt.version
+                $qtVerFound = $deps.qt6.version
+                if ($depsVer) {
+                  Write-Host "obs-deps version from CMakePresets.json: $depsVer"
+                }
+              } else {
+                Write-Host "CMakePresets.json has no 'dependencies' preset"
+              }
             } catch {
-              Write-Host "could not parse buildspec.json: $_"
+              Write-Host "could not parse CMakePresets.json: $_"
             }
-          } else {
-            Write-Host "no buildspec.json in the OBS source tree"
-            Write-Host "--- OBS source root ---"
-            Get-ChildItem $obs | Select-Object Name | Format-Table -AutoSize
+          }
+
+          if (-not $depsVer) {
+            $spec = Get-ChildItem -Recurse $obs -Filter buildspec.json -ErrorAction SilentlyContinue |
+                    Select-Object -First 1
+            if ($spec) {
+              Write-Host "found buildspec: $($spec.FullName)"
+              try {
+                $json = Get-Content $spec.FullName -Raw | ConvertFrom-Json
+                $depsVer = $json.dependencies.prebuilt.version
+                if ($json.dependencies.qt6.version) { $qtVerFound = $json.dependencies.qt6.version }
+                if ($depsVer) { Write-Host "obs-deps version from buildspec.json: $depsVer" }
+              } catch {
+                Write-Host "could not parse buildspec.json: $_"
+              }
+            }
           }
 
           if (-not $depsVer) {
             $depsVer = $env:OBS_DEPS_FALLBACK
-            Write-Host "using fallback obs-deps version: $depsVer"
-          } else {
-            Write-Host "obs-deps version from OBS: $depsVer"
+            Write-Host "::warning::Could not read the obs-deps version from OBS $tag; using the fallback $depsVer. If OBS has moved the pin again, check that this still matches."
           }
 
           $url = "https://github.com/obsproject/obs-deps/releases/download/$depsVer/windows-deps-$depsVer-x64.zip"
@@ -134,14 +158,12 @@ jobs:
           Expand-Archive deps.zip -DestinationPath "$env:GITHUB_WORKSPACE\obs-deps"
 
           # Qt6, needed for the operator docks and for obs-frontend-api to
-          # exist at all (OBS only builds it as part of its Qt UI).
+          # exist at all (OBS only builds it as part of its Qt UI). OBS pins it
+          # separately from the other prebuilts, so use its own version when we
+          # managed to read one.
           $qtVer = $depsVer
-          if ($spec) {
-            try {
-              $json = Get-Content $spec.FullName -Raw | ConvertFrom-Json
-              if ($json.dependencies.qt6.version) { $qtVer = $json.dependencies.qt6.version }
-            } catch { }
-          }
+          if ($qtVerFound) { $qtVer = $qtVerFound }
+          Write-Host "Qt6 deps version: $qtVer"
           # Windows Qt6 assets carry a build-config suffix, unlike the base
           # deps zip — e.g. windows-deps-qt6-<ver>-x64-RelWithDebInfo.zip.
           # Try the plausible names rather than assuming one.
