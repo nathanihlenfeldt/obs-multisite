@@ -131,6 +131,11 @@ public:
     void pause();                      // freezes the head; cache keeps filling
     void resume();                      // continues from the paused position
     void jump_to_live();               // snap the head to the live edge
+
+    // "I threw the decoder away; the next segment must carry the init segment
+    // again." A fresh decoder cannot decode a bare fragment, and the session
+    // is the only thing that knows whether it has already handed the init out.
+    void request_init();
     bool seek(uint64_t seq);           // move within what's retained
 
     // Hand the next segment to the decoder, if one is due and cached.

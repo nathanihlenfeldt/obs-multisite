@@ -421,6 +421,11 @@ void DecoderSession::jump_to_live() {
     if (m_play == PlayState::Paused) m_play = PlayState::Playing;
 }
 
+void DecoderSession::request_init() {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    m_init_sent = false;
+}
+
 bool DecoderSession::seek(uint64_t seq) {
     std::lock_guard<std::mutex> lk(m_mtx);
     // Only within what the store still retains.
@@ -440,6 +445,7 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
     // seconds — which is what made clicking the timeline appear to lock OBS up.
     uint64_t want = 0;
     bool need_init = false;
+    int64_t skip_ms = 0;
     PlayableSegment out;
 
     {
@@ -469,9 +475,12 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
         if (out.starts_at_ms == 0 && m_started_at_ms.load() > 0)
             out.starts_at_ms = m_started_at_ms.load() +
                 (int64_t)((double)want * m_segment_duration_s.load() * 1000.0);
-        out.skip_to_ms = m_pending_skip_ms;
-        m_pending_skip_ms = 0;          // applies to this segment only
         need_init = !m_init_sent;
+        // Reading the init segment can fail — most often just after an event
+        // change, when the head is ready but init.mp4 is still downloading.
+        // Take the skip only once the segment is certain to be served, or a
+        // held-back segment loses it.
+        skip_ms = m_pending_skip_ms;
     }
 
     // ── unlocked: the actual disk reads ──────────────────────────────────────
@@ -486,6 +495,16 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
     std::vector<uint8_t> init;
     if (need_init) {
         if (auto i = m_cache->load_init()) init = std::move(*i);
+        if (init.empty()) {
+            // The decoder needs the init segment and it is not there yet.
+            // Serving the fragment anyway hands the caller something it cannot
+            // decode, and advancing the head throws that segment away for
+            // good — programme silently lost while init.mp4 downloads. Hold
+            // position, exactly as for a segment that has not arrived.
+            std::lock_guard<std::mutex> lk(m_mtx);
+            m_stats.gaps_waited++;
+            return std::nullopt;
+        }
     }
 
     // ── commit ───────────────────────────────────────────────────────────────
@@ -495,10 +514,12 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
         // seek, or a jump to live). If so, discard this one rather than
         // serving content from the old position.
         if (m_head.load() != want) return std::nullopt;
-        if (need_init && !init.empty()) {
+        if (need_init) {
             out.init = std::move(init);
             m_init_sent = true;
         }
+        out.skip_to_ms = skip_ms;
+        m_pending_skip_ms = 0;          // applies to this segment only
         ++m_head;
         m_stats.served++;
     }

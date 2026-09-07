@@ -165,6 +165,13 @@ void Player::stop() {
 }
 
 void Player::teardown_decoder() {
+    // The next decoder starts from nothing and cannot decode a bare fragment,
+    // so the session must hand the init segment out again. Doing it here
+    // rather than at each call site is the point: pinning an event tore the
+    // decoder down without it, and every segment that arrived while init.mp4
+    // downloaded was then rejected and dropped.
+    if (auto sess = session_ref()) sess->request_init();
+
     std::shared_ptr<CmafDecoder> old;
     {
         std::lock_guard<std::mutex> lk(m_obj_mtx);
