@@ -4,6 +4,10 @@ Distribute a live church service from a main campus to any number of satellite
 campuses, reliably, over ordinary venue internet — using nothing but an
 S3-compatible bucket you control.
 
+**New here? [QUICKSTART.md](QUICKSTART.md) gets you broadcasting in twenty
+minutes.** This README is the long form — what it does, why it is built this
+way, and where it falls short.
+
 Two OBS Studio plugins in one module: an **encoder** at the main site that
 publishes the programme as CMAF segments, and a **decoder** at each satellite
 that receives, buffers deeply, and plays it out with per-campus timeslipping.
@@ -189,9 +193,8 @@ For the full design, see [PROJECT-SCOPE.md](PROJECT-SCOPE.md).
 
 ## Using it
 
-**In a hurry?** [QUICKSTART.md](QUICKSTART.md) is the twenty-minute version:
-what you need, install, retention, main site, campus. This section is the long
-form.
+**In a hurry?** [QUICKSTART.md](QUICKSTART.md) is the short version of
+everything below.
 
 ### Installing the plugin
 
