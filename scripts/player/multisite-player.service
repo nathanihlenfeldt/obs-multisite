@@ -12,6 +12,19 @@ Documentation=https://github.com/nathanihlenfeldt/obs-multisite
 After=network-online.target time-sync.target
 Wants=network-online.target
 
+# A box that fails to start must keep trying rather than give up after a few
+# attempts: the usual cause is a network that has not come up yet, or a USB
+# SSD that has not been noticed, and both fix themselves. This is a [Unit] key:
+# systemd ignores it in [Service] and says so in the journal.
+StartLimitIntervalSec=0
+
+# tty1 can only have one owner. Raspberry Pi OS Lite starts a login prompt on
+# it, and the two then take it in turns to hang up on each other: the player
+# gets SIGHUP, dies, restarts three seconds later, and evicts the login prompt
+# again. Claiming tty1 exclusively is what stops that.
+Conflicts=getty@tty1.service
+After=getty@tty1.service
+
 [Service]
 Type=simple
 ExecStart=/usr/local/bin/multisite-player --config /etc/multisite-player/config.json
@@ -26,10 +39,6 @@ User=root
 
 Restart=always
 RestartSec=3
-# A box that fails to start must keep trying rather than give up after a few
-# attempts: the usual cause is a network that has not come up yet, or a USB
-# SSD that has not been noticed, and both fix themselves.
-StartLimitIntervalSec=0
 
 # The console must not draw over the picture the player is putting on screen.
 StandardOutput=journal

@@ -159,10 +159,25 @@ if ! grep -q 'consoleblank=0' /boot/firmware/cmdline.txt 2>/dev/null; then
   warn "/boot/firmware/cmdline.txt and reboot."
 fi
 
-sleep 2
-if ! systemctl is-active --quiet "$SERVICE"; then
+# RestartSec is 3 seconds, so a box that is merely between restart attempts
+# looks identical to a box that has given up if you only glance once. Watch it
+# for long enough to see it settle, and only then call it.
+settled=""
+for _ in $(seq 1 12); do
+  if systemctl is-active --quiet "$SERVICE"; then
+    settled="yes"
+  else
+    settled=""
+  fi
+  sleep 1
+done
+if [ -z "$settled" ] || ! systemctl is-active --quiet "$SERVICE"; then
   warn "The service did not stay running. What it said:"
-  journalctl -u "$SERVICE" -n 25 --no-pager || true
+  journalctl -u "$SERVICE" -n 40 --no-pager || true
+  warn ""
+  warn "To see it fail with the log in front of you:"
+  warn "    sudo systemctl stop $SERVICE"
+  warn "    sudo $PREFIX/bin/multisite-player --config $CONFIG --verbose"
   die "see above"
 fi
 
