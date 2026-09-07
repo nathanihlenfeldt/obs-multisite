@@ -202,6 +202,54 @@ int main() {
               "newest first, other rooms excluded");
     }
 
+    // ── A bucket part-way through the change ─────────────────────────────────
+    // The case a real bucket is actually in: services recorded before the room
+    // index existed, and one recorded since. Treating a non-empty index as the
+    // whole truth hid every older service the moment one indexed event
+    // appeared — the operator saw the newest recording and nothing else, while
+    // the rest sat in storage, playable, and unlisted.
+    std::printf("Indexed and un-indexed events in one bucket\n");
+    {
+        MemStore s;
+        make_event(s, "01AAA", "main",   NOW - 90 * MIN, "ended", NOW - 80 * MIN, false);
+        make_event(s, "01BBB", "main",   NOW - 60 * MIN, "ended", NOW - 50 * MIN, false);
+        make_event(s, "01CCC", "chapel", NOW - 45 * MIN, "ended", NOW - 40 * MIN, false);
+        // The only one with an index entry.
+        make_event(s, "01DDD", "main",   NOW - 20 * MIN, "ended", NOW - 10 * MIN, true);
+
+        CatalogConfig cfg; cfg.room_id = "main";
+        EventCatalog cat(cfg, s);
+        CHECK(cat.refresh(NOW), "refresh succeeds");
+        auto ev = cat.events();
+        CHECK(ev.size() == 3,
+              "an indexed event does not hide the un-indexed ones");
+        CHECK(ev.size() == 3 && ev[0].event_id == "01DDD" &&
+              ev[1].event_id == "01BBB" && ev[2].event_id == "01AAA",
+              "all three of this room's events, newest first");
+        CHECK(cat.used_fallback_scan(),
+              "the scan is reported, since it is what found the older ones");
+        CHECK(cat.skipped() == 0, "nothing skipped");
+    }
+
+    // An indexed event whose room differs from the one being listed must not
+    // leak in: the index is room-scoped by key, the scan by descriptor, and
+    // both paths have to agree.
+    std::printf("Room separation across both discovery paths\n");
+    {
+        MemStore s;
+        make_event(s, "01AAA", "chapel", NOW - 60 * MIN, "ended", NOW - 50 * MIN, false);
+        make_event(s, "01BBB", "chapel", NOW - 40 * MIN, "ended", NOW - 30 * MIN, true);
+        make_event(s, "01CCC", "main",   NOW - 20 * MIN, "ended", NOW - 10 * MIN, true);
+
+        CatalogConfig cfg; cfg.room_id = "main";
+        EventCatalog cat(cfg, s);
+        CHECK(cat.refresh(NOW), "refresh succeeds");
+        CHECK(cat.events().size() == 1 && cat.events()[0].event_id == "01CCC",
+              "another room's events are excluded whether indexed or not");
+        CHECK(!cat.used_fallback_scan(),
+              "and a scan that found nothing for this room is not reported");
+    }
+
     // ── Pagination ───────────────────────────────────────────────────────────
     std::printf("Pagination\n");
     {

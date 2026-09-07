@@ -72,9 +72,12 @@ public:
 
     std::string last_error() const;
 
-    // True when the room index was empty and the flat events/ namespace had to
-    // be scanned instead — the path for events recorded before the index
-    // existed. Costs an extra request per event, so it is worth surfacing.
+    // True when at least one event was found only by scanning the flat
+    // events/ namespace — i.e. it predates the room index and has no entry
+    // there. The scan always runs alongside the index rather than only when
+    // the index is empty: one indexed event would otherwise hide every older
+    // one. Each such event costs an extra request to find out its room, so it
+    // is worth surfacing.
     bool used_fallback_scan() const;
 
     // Events listed whose manifest could not be read, and which were therefore
@@ -91,8 +94,9 @@ private:
     bool m_fallback = false;
     int  m_skipped = 0;
 
-    // Every event id in the room, newest last. Uses the room index, falling
-    // back to a scan of events/ when the index yields nothing.
+    // Every event id in the room. The union of the room index and a scan of
+    // the flat events/ namespace, so events written before the index existed
+    // list alongside those that have an entry.
     bool collect_event_ids(std::vector<std::string>& out, bool& fallback,
                            std::string& error);
     bool classify(const std::string& event_id, const LivePointer& live,
