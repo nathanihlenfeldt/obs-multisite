@@ -449,7 +449,16 @@ void Player::deliver_loop() {
         }
 
         if (item.is_video) {
+            const uint64_t t0 = now_ns();
             m_video.present(item.video);
+            const uint64_t took = now_ns() - t0;
+            m_present_ns += took;
+            m_presents++;
+            { // plain compare-exchange loop: a running maximum, no lock
+              uint64_t prev = m_present_max_ns.load();
+              while (took > prev &&
+                     !m_present_max_ns.compare_exchange_weak(prev, took)) {}
+            }
             m_frames_out++;
             m_last_frame_ns = now_ns();
             m_idle_showing = false;
@@ -673,17 +682,39 @@ void Player::poll_loop() {
         update_screen();
 
         if (now - last_status_log > 60000) {
+            const long long span_ms = now - last_status_log;
             last_status_log = now;
             if (auto sess = session_ref()) {
                 const auto& s = sess->stats();
+                // Frames per second over the interval rather than a running
+                // total: a total that keeps climbing tells you playback is
+                // alive, not whether it is keeping up.
+                const uint64_t out = m_frames_out.load();
+                const double fps = span_ms > 0
+                    ? (double)(out - m_last_frames_out) * 1000.0 / (double)span_ms
+                    : 0.0;
+                m_last_frames_out = out;
                 plog_info("head=%llu live=%llu behind=%.0fs buffered=%.0fs "
-                          "cached=%zu downloaded=%llu frames_out=%llu",
+                          "cached=%zu downloaded=%llu frames_out=%llu "
+                          "fps=%.1f dropped=%llu",
                           (unsigned long long)sess->playback_head(),
                           (unsigned long long)sess->live_edge(),
                           sess->behind_live_s(), sess->buffered_ahead_s(),
                           sess->cache().count(),
                           (unsigned long long)s.downloaded,
-                          (unsigned long long)m_frames_out.load());
+                          (unsigned long long)out, fps,
+                          (unsigned long long)m_frames_dropped.load());
+
+                // Where the delivery thread's time actually goes. A mean that
+                // approaches the frame interval means the display path, not
+                // the network, is setting the pace.
+                const uint64_t n = m_presents.exchange(0);
+                const uint64_t total = m_present_ns.exchange(0);
+                const uint64_t worst = m_present_max_ns.exchange(0);
+                if (n > 0)
+                    plog_debug("present: %.1f ms mean, %.1f ms worst, over %llu "
+                               "frame(s)", (double)total / (double)n / 1e6,
+                               (double)worst / 1e6, (unsigned long long)n);
             }
         }
 

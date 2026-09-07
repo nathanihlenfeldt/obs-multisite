@@ -259,6 +259,14 @@ private:
     std::condition_variable  m_dq_cv;
 
     std::atomic<uint64_t> m_frames_out{0}, m_frames_dropped{0};
+    // How long present() actually takes. The delivery thread scales the
+    // picture and waits for the vertical blank inline, so if the display path
+    // is slow it does not just make the picture late — it throttles the whole
+    // playout clock, and the symptom shows up as "playout fell behind".
+    // Totals since the last status line; read and reset there.
+    std::atomic<uint64_t> m_present_ns{0}, m_present_max_ns{0}, m_presents{0};
+    // Read only by the poll thread, which is the only writer too.
+    uint64_t m_last_frames_out = 0;
     // Monotonic time of the last frame that reached the display. What
     // separates "playing" from "nothing is arriving", which is the difference
     // between leaving the picture alone and putting the splash back up.
