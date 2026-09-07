@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // event_catalog.h — what a satellite can play, and what state each event is in.

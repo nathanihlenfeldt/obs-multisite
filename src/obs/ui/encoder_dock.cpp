@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "encoder_dock.h"
 
 #include "../broadcast_controller.h"

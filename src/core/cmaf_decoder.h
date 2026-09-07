@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // cmaf_decoder.h — decodes a CMAF stream that arrives as an init segment

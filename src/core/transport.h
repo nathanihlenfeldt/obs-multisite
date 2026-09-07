@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // transport.h — the object-store PUT abstraction the uploader drains through.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // http_server.h — the appliance's control surface, in about as little code as

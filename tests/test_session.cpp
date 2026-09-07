@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // test_session.cpp — proves the publishing layer's protocol guarantees.
 //
 // The critical invariant: manifest.json must NEVER list a segment that isn't

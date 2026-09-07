@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // The dock reads a snapshot struct, not the session. A field that disagrees
 // with its source is invisible in testing and confusing in use — an earlier
 // placeholder line reset `ended` to false AFTER the real assignment, so the

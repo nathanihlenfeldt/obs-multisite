@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // preview.h — a picture of the incoming feed in the operator's browser,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // outputs.cpp — choosing where picture and sound go.
 //

@@ -25,6 +25,6 @@
 	<key>LSMinimumSystemVersion</key>
 	<string>@CMAKE_OSX_DEPLOYMENT_TARGET@</string>
 	<key>NSHumanReadableCopyright</key>
-	<string>Copyright (c) 2026 Stage Audio Works. MIT licence.</string>
+	<string>Copyright (C) 2026 Stage Audio Works. GPL-3.0-or-later.</string>
 </dict>
 </plist>

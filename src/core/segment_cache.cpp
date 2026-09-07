@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "segment_cache.h"
 #include "checksum.h"
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "decoder_dock.h"
 
 #include "../multisite_ui.h"

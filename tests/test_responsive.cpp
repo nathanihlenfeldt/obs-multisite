@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // Measures what a UI call costs while the decoder is downloading. This is the
 // lockup: a timeline click had to wait for whatever transfer was in flight.
 #include "decoder_session.h"

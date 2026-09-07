@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // sysinfo.h — the box itself, as far as an operator needs to see it.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // test_cmaf.cpp — feeds a real multi-track (1 video + 2 audio) source through
 // CmafMuxer and writes init.mp4 + seg_*.m4s to disk for ffprobe validation.
 //

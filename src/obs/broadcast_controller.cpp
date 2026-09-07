@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "broadcast_controller.h"
 #include "plugin_log.h"
 #include "multisite_ui.h"

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // alsa_output.cpp — production audio out of the box.
 //

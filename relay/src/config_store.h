@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // config_store.h — everything the relay must remember, in one SQLite file.

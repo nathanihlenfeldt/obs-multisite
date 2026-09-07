@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // test_config_store.cpp — what the relay remembers between restarts.
 //
 // The things worth pinning down here are the ones that lose a church its

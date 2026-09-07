@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // cmaf_muxer.h — wraps FFmpeg's fragmented-MP4 muxer to produce CMAF output:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // s3_transport.h — the production Transport: libcurl + the validated SigV4

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // dock_register.cpp — installs the two docks in the OBS window.
 //
 // Compiled only when the plugin is built with Qt and obs-frontend-api

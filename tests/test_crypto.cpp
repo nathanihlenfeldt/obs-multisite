@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // test_crypto.cpp — the platform crypto backends against published vectors.
 //
 // There are three backends: CNG on Windows, CommonCrypto on macOS, OpenSSL

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // test_cmaf_decode.cpp — decodes a CMAF stream through CmafDecoder.
 //
 // Runs against REAL captured output when available (test-data/real_init.mp4 +

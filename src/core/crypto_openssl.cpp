@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // crypto_openssl.cpp — OpenSSL backend (Linux, and any Unix that is not macOS).
 //

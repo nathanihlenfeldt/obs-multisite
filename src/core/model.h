@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // model.h — the storage-protocol data model: live pointer, event descriptor,

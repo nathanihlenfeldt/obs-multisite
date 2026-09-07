@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "s3_transport.h"
 #include "aws_sigv4.h"
 #include "s3_list_xml.h"

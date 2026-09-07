@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // crypto_bcrypt.cpp — Windows CNG (bcrypt) backend.
 // Compiled only when targeting Windows. Links against bcrypt.lib, which is

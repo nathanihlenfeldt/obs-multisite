@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // multisite_source.cpp — the satellite (receive) side, as an OBS source.
 //
 // Threads:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // spool_queue.h — durable, crash-safe store-and-forward queue.

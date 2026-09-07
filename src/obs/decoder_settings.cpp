@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "decoder_settings.h"
 #include "plugin_log.h"
 

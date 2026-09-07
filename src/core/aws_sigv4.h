@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // aws_sigv4.h — minimal AWS Signature Version 4 signer for S3-compatible APIs.

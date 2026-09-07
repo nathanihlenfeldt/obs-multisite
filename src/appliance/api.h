@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // api.h — the web UI's half of the appliance, expressed as JSON over HTTP.

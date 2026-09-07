@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "s3_transport.h"
 #include <cstdio>
 #include <string>

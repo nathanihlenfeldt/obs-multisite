@@ -97,10 +97,12 @@ because we have deliberately followed conventions that operators already
 understand. Familiarity is a feature in a room where a volunteer is running the
 service.
 
-It is released under the MIT licence in support of kingdom expansion and the
-enabling of local churches. There is no intent to tread on anyone's
-intellectual property. If you believe something here does, please raise it with
-us and we will address it properly.
+It is released under the **GPLv3** in support of kingdom expansion and the
+enabling of local churches: free for any church to run, adapt and keep running
+— and if you distribute a changed version, those changes have to reach the next
+church too. That is the whole point of the choice. There is no intent to tread
+on anyone's intellectual property. If you believe something here does, please
+raise it with us and we will address it properly.
 
 ### Contributing
 
@@ -777,6 +779,18 @@ Thirteen suites, all runnable without OBS (the `cmaf*` ones need FFmpeg and
 
 ## License
 
-MIT — see [LICENSE](LICENSE). Copyright (c) 2026 Stage Audio Works.
+**GPL-3.0-or-later** — see [LICENSE](LICENSE), and [COPYRIGHT](COPYRIGHT) for
+the notice and the third-party components. Copyright (C) 2026 Stage Audio
+Works.
 
-Vendored `nlohmann/json` is MIT.
+What it means in practice: run it, adapt it, install it for as many churches as
+you like. If you distribute a modified version — as a binary or as source —
+those modifications are GPLv3 too, and recipients get the source. It places no
+condition on the services you broadcast with it, or on anything in your bucket.
+
+Releases up to and including **v0.1.4-alpha were MIT**, and that grant cannot
+be withdrawn: anyone who has those versions keeps their MIT rights to them.
+
+This is compatible with OBS, which is **GPL-2.0-or-later** — the "or later" is
+what makes a GPLv3 plugin lawful in a GPLv2 host. Vendored `nlohmann/json`
+stays MIT, which is GPL-compatible and not ours to relicense.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "service.h"
 #include "log.h"
 #include "stream_plan.h"

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // retry_uploader.h — drains the durable spool to the object store in strict

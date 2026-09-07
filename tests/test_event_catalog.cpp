@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // test_event_catalog.cpp — turning a bucket into a list an operator can choose
 // from.
 //

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "decoder_session.h"
 #include "session.h"     // for now_ms()
 

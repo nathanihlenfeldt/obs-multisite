@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "api.h"
 #include "log.h"
 #include "sysinfo.h"

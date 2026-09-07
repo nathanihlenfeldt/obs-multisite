@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // test_s3_list.cpp — the two mechanisms event listing rests on.
 //
 // 1. Reading a ListObjectsV2 response. Events are discovered as CommonPrefixes,

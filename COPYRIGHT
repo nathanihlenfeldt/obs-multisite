@@ -1,0 +1,38 @@
+obs-multisite
+Copyright (C) 2026 Stage Audio Works
+
+This program is free software: you can redistribute it and/or modify it under
+the terms of the GNU General Public License as published by the Free Software
+Foundation, either version 3 of the License, or (at your option) any later
+version.
+
+This program is distributed in the hope that it will be useful, but WITHOUT ANY
+WARRANTY; without even the implied warranty of MERCHANTABILITY or FITNESS FOR A
+PARTICULAR PURPOSE. See the GNU General Public License for more details.
+
+You should have received a copy of the GNU General Public License along with
+this program. If not, see <https://www.gnu.org/licenses/>.
+
+  Releases up to and including v0.1.4-alpha were published under the MIT
+  licence. That grant cannot be withdrawn: anyone who received those versions
+  keeps their MIT rights to that code. This licence applies from the change
+  onward.
+
+Third-party components, under their own terms
+─────────────────────────────────────────────
+
+  src/vendor/nlohmann/json.hpp   MIT (GPL-compatible; notices retained in the
+                                 file, and it is not ours to relicense)
+
+  OBS Studio (libobs, obs-frontend-api), against which the plugin is built and
+  from which it is loaded, is GPL-2.0-or-later. The "or later" is what makes
+  this combination lawful: a GPLv2-only host could not be combined with a
+  GPLv3 plugin.
+
+  Qt 6 is used under the LGPL, dynamically, from the copy OBS ships. FFmpeg is
+  used dynamically from the copy OBS ships (LGPL-2.1-or-later as OBS builds
+  it). Neither is redistributed here.
+
+  atkAudio's OBS plugin suite is recommended in the documentation for audio
+  routing. It is a separate program under AGPL-3.0; nothing here links against
+  it or requires it.

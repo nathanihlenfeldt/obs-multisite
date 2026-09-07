@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // multisite_ui.cpp — operator controls via OBS's frontend API and hotkeys.
 //
 // Deliberately Qt-free. `obs_frontend_add_tools_menu_item` takes a plain C

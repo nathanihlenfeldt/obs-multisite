@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // test_stream_plan.cpp — what may be sent onward, and what must be refused.
 //
 // The failure this guards against is not a crash. It is a relay that looks

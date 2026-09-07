@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 //
 // drm_output.cpp — the appliance drives its own HDMI output.
 //

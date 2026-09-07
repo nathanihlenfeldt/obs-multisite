@@ -112,4 +112,4 @@ fixed because somebody took the time to paste a log.
 ---
 
 Full documentation: [README](README.md) · design and protocol:
-[PROJECT-SCOPE](PROJECT-SCOPE.md) · MIT licensed.
+[PROJECT-SCOPE](PROJECT-SCOPE.md) · GPL-3.0-or-later.

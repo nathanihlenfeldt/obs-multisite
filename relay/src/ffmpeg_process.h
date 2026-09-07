@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // ffmpeg_process.h — one ffmpeg child: start it, feed it, watch it, stop it.

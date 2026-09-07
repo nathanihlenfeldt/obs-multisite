@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // checksum.h — SHA-256 helpers used for segment integrity (recorded in the

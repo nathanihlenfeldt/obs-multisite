@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "api.h"
 #include "auth.h"
 #include "room_feeder.h"

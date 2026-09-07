@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // test_relay_state.cpp — the awkward cases, without a destination or a wait.
 //
 // Everything here is a situation that would otherwise need a real stream key,

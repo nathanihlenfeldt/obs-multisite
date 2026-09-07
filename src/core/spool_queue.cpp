@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #include "spool_queue.h"
 #include "checksum.h"
 #include "../vendor/nlohmann/json.hpp"

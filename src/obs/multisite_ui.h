@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // multisite_ui.h — the interfaces the frontend controls act through.

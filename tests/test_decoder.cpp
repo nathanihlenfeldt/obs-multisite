@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // test_decoder.cpp — proves the satellite receive path and timeslipping.
 //
 // A fake object store stands in for R2, driven by a simulated encoder that

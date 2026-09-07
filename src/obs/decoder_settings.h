@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
 // decoder_settings.h — storage credentials for the satellite, stored once per

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // test_reliability.cpp — exercises the Phase 1 reliability core end to end.
 //
 // Covers:

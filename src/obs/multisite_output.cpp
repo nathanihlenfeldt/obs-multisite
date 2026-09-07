@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
 // multisite_output.cpp — the OBS output.
 //
 // Pulls encoded packets from OBS (H.264 video + up to 6 AAC audio tracks),
