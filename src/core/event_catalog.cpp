@@ -1,6 +1,7 @@
 #include "event_catalog.h"
 
 #include <algorithm>
+#include <set>
 
 namespace multisite {
 
@@ -41,6 +42,7 @@ bool EventCatalog::collect_event_ids(std::vector<std::string>& out,
     fallback = false;
 
     // ── The room index: one request per page, already room-scoped ────────────
+    std::set<std::string> indexed;
     std::string token;
     do {
         ListResult r = m_tx.list(room_events_prefix(m_cfg.room_id), "", token, 1000);
@@ -50,29 +52,38 @@ bool EventCatalog::collect_event_ids(std::vector<std::string>& out,
         }
         for (const auto& e : r.keys) {
             std::string id = event_id_from_index_key(e.key);
-            if (!id.empty()) out.push_back(id);
+            if (!id.empty()) indexed.insert(std::move(id));
         }
         token = r.truncated ? r.next_continuation_token : std::string();
     } while (!token.empty());
 
-    if (!out.empty()) return true;
+    out.assign(indexed.begin(), indexed.end());
 
-    // ── Fallback: events recorded before the index existed ───────────────────
-    // The flat namespace has no room in the key, so every event.json must be
-    // read to find out which room it belongs to. Expensive on purpose — it is
-    // the compatibility path, not the normal one.
-    fallback = true;
+    // ── The flat namespace, for whatever the index does not know about ───────
+    // The index is only written by encoders new enough to write it, so a
+    // bucket that predates it holds events with media and no entry. Treating a
+    // non-empty index as the whole truth hid every one of them: one recent
+    // service would list, and the older ones — still in storage, still
+    // playable — would not appear at all.
+    //
+    // So the scan always runs. Only the ids the index missed cost anything
+    // beyond the listing: nothing in an event's key says which room it belongs
+    // to, so each of those needs its descriptor read.
     token.clear();
     std::vector<std::string> candidates;
     do {
         ListResult r = m_tx.list("events/", "/", token, 1000);
         if (!r.success) {
+            // The index has already given us a list. A failed scan means it
+            // may be short, which is not a reason to report no events at all.
+            if (!out.empty()) break;
             error = r.error;
             return false;
         }
         for (const auto& p : r.common_prefixes) {
             std::string id = event_id_from_index_key(p);
-            if (!id.empty()) candidates.push_back(id);
+            if (!id.empty() && !indexed.count(id))
+                candidates.push_back(std::move(id));
         }
         token = r.truncated ? r.next_continuation_token : std::string();
     } while (!token.empty());
@@ -88,7 +99,12 @@ bool EventCatalog::collect_event_ids(std::vector<std::string>& out,
         if (!g.success) continue;
         try {
             EventInfo ev = EventInfo::from_json(std::string(g.body.begin(), g.body.end()));
-            if (ev.room_id == m_cfg.room_id) out.push_back(id);
+            if (ev.room_id == m_cfg.room_id) {
+                out.push_back(id);
+                // This one was found only by scanning, so the extra request
+                // per event is being paid. Worth surfacing.
+                fallback = true;
+            }
         } catch (...) {
             // A malformed descriptor is not a reason to abandon the listing.
         }
