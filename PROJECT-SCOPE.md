@@ -136,8 +136,14 @@ events/{event_id}/                # event_id = ULID minted by the encoder at "Go
   does. Without the index, listing one room's events means listing every event
   ever recorded and reading each descriptor to discard most of them. Writing it
   is deliberately non-fatal — a service must not be held off air because an
-  index entry failed — and events recorded before it existed are still found by
-  that slower scan.
+  index entry failed.
+- **The index is a shortcut, not the register.** An event with no entry — one
+  recorded before the index existed, or one whose entry failed to write — must
+  still list, so discovery is the *union* of the index and a scan of `events/`
+  rather than the index when it has anything and the scan when it does not.
+  Treating a non-empty index as the whole truth hid every older service the
+  moment one indexed service appeared. The scan costs a descriptor read only
+  for the ids the index did not already name.
 - `event_id` is a ULID minted locally by the encoder at "Go Live".
 - Decoders need only read access; the encoder needs write access scoped to its
   own room/event paths.
@@ -299,9 +305,10 @@ to exist.
 
 ## 5. Reliability
 
-- **Durable encoder queue.** Segments are written to a local store (SQLite or an
-  on-disk WAL) before upload, bounded only by disk. Survives OBS crash and power
-  loss.
+- **Durable encoder queue.** Segments are written to disk before upload, bounded
+  only by disk. Survives OBS crash and power loss. Plain files with atomic
+  write-then-rename, deliberately not a database: that gives the durability
+  guarantee needed here and is trivial to reason about and to test.
 - **Retry with backoff.** Failed uploads retry with exponential backoff and
   jitter, in strict sequence order, for as long as the event is live. No segment
   is abandoned.
@@ -736,7 +743,8 @@ windows for campus announcements.
 ## 10. Delivery phases
 
 Each phase leaves the project in a testable, usable state. Phases 1–5 are
-built; 6 and 7 are not started.
+built and have been run end to end. Phases 6 and 7 are built but have not yet
+carried a service; phase 8 has not been started.
 
 - **Phase 1 — Reliability core.** ✅ Durable upload queue, retry/backoff, checksums,
   resume-after-crash, decoder cache with verification, and stale detection. This
@@ -752,8 +760,8 @@ built; 6 and 7 are not started.
 - **Phase 4 — Markers & cues.** ✅ Authoring from the encoder, consumption and
   jump-to-marker at the satellite. Decoder-side cue authoring is not built.
 - **Phase 5 — User interface.** ✅ Encoder and decoder Qt docks, hotkeys, and
-  plain-language status. Event browsing (section 7.5.1) is the outstanding
-  piece and needs bucket listing.
+  plain-language status, plus event browsing (section 7.5.1), which needs
+  bucket listing.
 - **Phase 6 — Satellite appliance.** 🟨 Headless Linux decoder with HDMI output
   and a browser-based operator UI (section 8.1), built on the existing receive
   core. Built: the player engine, DRM/KMS display output with its own
@@ -800,75 +808,14 @@ built; 6 and 7 are not started.
 
 This project is developed by the projects team at **Stage Audio Works**, a
 worship AVL integrator working across Africa, to support churches that are
-growing into multiple locations.
+growing into multiple locations. Multisite streaming is a solved problem for a
+large church in a well-connected part of the world; the commercial platforms
+that solve it are good, and largely unavailable or unaffordable where these
+churches are.
 
-Multisite streaming is a solved problem if you are a large church in a
-well-connected part of the world. The commercial platforms that solve it are
-good, and the teams behind them have earned their place. But they are largely
-unavailable outside the developed world, and where they are available the
-recurring cost is out of reach for a congregation whose entire annual AV budget
-is smaller than a year of subscription.
-
-### 12.1 What this is not
-
-**It is not a managed service.** The commercial products are, and that is worth
-paying for. Someone answers the phone. Someone watches the infrastructure.
-Someone ships you a decoder that boots and works. If your church can afford one
-and it is available where you are, you should probably buy it.
-
-This is a set of tools instead. Setting it up requires a reasonably technical
-person, or support from an integrator with the relevant expertise. There is no
-support contract, no uptime guarantee, and no one to call. What there is
-instead: you own your storage, you own your content, your ongoing cost is a few
-dollars a month of object storage, and nothing can be taken away from you or
-priced beyond your reach later.
-
-**It is not low latency, and it is not two-way.** This carries a service from
-one site to others with a delay measured in tens of seconds. It cannot support a
-live conversation between campuses, a two-way interview, or anything else where
-people need to respond to each other in real time. For that, use SRT or WebRTC:
-both are in OBS already, and there are many good hardware products built on
-them. Those approaches trade differently, sitting much closer to the raw
-condition of the connection at the moment you need it.
-
-This project takes the opposite trade deliberately. Content is written to disk
-before it is sent, sent again until the storage confirms it, and buffered deeply
-at the far end before it is played. Minutes of the service can be held at the
-satellite in advance, so an outage part-way through is something the
-congregation never sees. Latency is the price, and for a service being relayed
-rather than a conversation being held, it is a price worth paying.
-
-### 12.2 What it asks of your network
-
-Very little, and this is deliberate. Everything moves over ordinary HTTPS to
-object storage. There are no inbound connections, no port forwarding, no static
-IP, no VPN, and no firewall rules to negotiate with a building's IT.
-
-That means it works on connections that would defeat a direct stream: mobile
-data, LEO satellite, consumer fibre, and networks behind carrier-grade NAT. If a
-laptop at the site can load a web page, it can usually send or receive a
-service.
-
-### 12.3 On intellectual property
-
-This is a clean-room implementation built on published, open standards: CMAF
-fragmented MP4, the S3 object API, and OBS Studio's public plugin interface. It
-is not derived from, and does not reverse-engineer, any commercial product.
-
-Where our design resembles existing products, it is because we are solving the
-same problem under the same constraints and arriving at similar answers, or
-because we have deliberately followed conventions that operators already
-understand. Familiarity is a feature in a room where a volunteer is running the
-service.
-
-It is released under the MIT licence in support of kingdom expansion and the
-enabling of local churches. There is no intent to tread on anyone's
-intellectual property. If you believe something here does, please raise it with
-us and we will address it properly.
-
-### 12.4 Contributing
-
-If this is useful to your church, use it. If you improve it, we would be glad to
-see the change come back. If it fails you in an interesting way, a good bug
-report is a real contribution: much of what works well here was fixed because
-someone took the time to paste a log.
+The full argument — what this is and is not, why it is not a managed service,
+why latency is traded for resilience, what it asks of a venue's network, and
+the clean-room and licensing position — is in the README, under
+[Why this exists](README.md#why-this-exists). It was duplicated here word for
+word, which meant two places to keep in step and one of them silently going
+stale. This document covers the design; the README covers the case for it.
