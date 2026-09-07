@@ -1732,7 +1732,7 @@ void register_source() {
     aud.get_properties = aud_props;
     aud.icon_type      = OBS_ICON_TYPE_AUDIO_INPUT;
     obs_register_source(&aud);
-    mlog_info("registered source: multisite_source");
+    mlog_info("registered sources: multisite_source, multisite_audio_source");
 }
 
 } // namespace multisite_obs

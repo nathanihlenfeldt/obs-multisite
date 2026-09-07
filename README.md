@@ -189,6 +189,42 @@ For the full design, see [PROJECT-SCOPE.md](PROJECT-SCOPE.md).
 
 ## Using it
 
+### Installing the plugin
+
+Builds are attached to each [release](https://github.com/nathanihlenfeldt/obs-multisite/releases),
+one per platform. All of them are built against the OBS version named in the
+release notes; a different major version of OBS may refuse to load them.
+
+**macOS** (Apple Silicon) — unzip, move `obs-multisite.plugin` into
+`~/Library/Application Support/obs-studio/plugins/`, then clear the download
+quarantine flag before restarting OBS:
+
+```sh
+xattr -dr com.apple.quarantine ~/Library/Application\ Support/obs-studio/plugins/obs-multisite.plugin
+```
+
+That step is required because these builds are **not code-signed or
+notarised**, and macOS refuses to load a quarantined unsigned bundle. What you
+see if you skip it is nothing at all: OBS starts normally with no Multisite
+source, output or docks, and its log does not say why. Signing is deferred
+until there is a stable version to sign.
+
+**Windows** — copy the `obs-plugins` and `data` folders into your OBS Studio
+install directory (typically `C:\Program Files\obs-studio\`), merging with
+what is there.
+
+**Linux** — place `obs-multisite.so` in
+`~/.config/obs-studio/plugins/obs-multisite/bin/64bit/` with the contents of
+`data/` alongside. Links the system FFmpeg and libcurl.
+
+Restart OBS. The encoder appears as an output and the decoder as a source,
+with **Multisite Encoder** and **Multisite Decoder** docks under View → Docks.
+
+You need an S3-compatible bucket and a key that can read and write it. For the
+decoder's event list the key also needs `s3:ListBucket` — Cloudflare's "Object
+Read & Write" token includes it, an object-scoped token does not, and the dock
+says so rather than showing an empty list.
+
 ### First, a retention rule on the bucket
 
 **Do this once, before your first broadcast.** Nothing in this project deletes
@@ -406,32 +442,60 @@ Apple Silicon only, and the core needs no OpenSSL — it uses CommonCrypto from
 libSystem, so a built plugin loads on a Mac that has never had Homebrew.
 `ctest` should pass 13/13 with nothing installed but CMake and FFmpeg.
 
-To build the plugin against an installed OBS, you need headers matching it
-(they are not in the app) and `simde`, which OBS vendors as a submodule that
-the source tarball omits:
+For the **plugin**, the only real difficulty is ABI matching. OBS.app carries
+its own FFmpeg, Qt and libobs, and a plugin has to use those exact copies. A
+build against Homebrew's FFmpeg or Qt loads on the machine that built it and
+fails elsewhere, because Homebrew tracks the latest version and OBS pins one —
+at the time of writing that is libavcodec 63 against OBS's 62, and Qt 6.11.2
+against 6.11.1. A second Qt is the worse of the two: the docks attach to the
+host's `QApplication`, and a duplicate `QtCore` has none.
+
+So take the dependencies from **obs-deps at the version OBS itself pins**,
+which is in `CMakePresets.json` in the OBS source under the `dependencies`
+preset. For OBS 32.2.2 that is `2026-07-15`:
 
 ```sh
-brew install simde ffmpeg
-curl -L https://github.com/obsproject/obs-studio/archive/refs/tags/32.2.2.tar.gz | tar xz
+OBS_TAG=32.2.2; DEPS_VER=2026-07-15
+mkdir -p deps/root
+for n in macos-deps-$DEPS_VER-arm64.tar.xz macos-deps-qt6-$DEPS_VER-arm64.tar.xz; do
+  curl -L "https://github.com/obsproject/obs-deps/releases/download/$DEPS_VER/$n" | tar x -C deps/root
+done
+curl -L "https://github.com/obsproject/obs-studio/archive/refs/tags/$OBS_TAG.tar.gz" | tar xz
 printf '#pragma once\n#define OBS_RELEASE_CANDIDATE 0\n#define OBS_BETA 0\n' > obsconfig.h
-cmake -S . -B build -DBUILD_OBS_PLUGIN=ON \
-  -DLIBOBS_INCLUDE_DIR=$PWD/obs-studio-32.2.2/libobs \
-  -DLIBOBS_CONFIG_INCLUDE_DIR=$PWD \
-  -DLIBOBS_LIBRARY=/Applications/OBS.app/Contents/Frameworks/libobs.framework/libobs \
-  -DCMAKE_CXX_FLAGS=-I/opt/homebrew/include
+
+DEPS=$PWD/deps/root; OBS_SRC=$PWD/obs-studio-$OBS_TAG
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
+  -DBUILD_OBS_PLUGIN=ON -DENABLE_QT=ON \
+  -DCMAKE_PREFIX_PATH="$DEPS" -DQt6_DIR="$DEPS/lib/cmake/Qt6" \
+  -DFORCE_FFMPEG_MANUAL_SEARCH=ON \
+  -DFFMPEG_INCLUDE_DIR="$DEPS/include" \
+  -DFFMPEG_avformat_LIBRARY="$DEPS/lib/libavformat.dylib" \
+  -DFFMPEG_avcodec_LIBRARY="$DEPS/lib/libavcodec.dylib" \
+  -DFFMPEG_avutil_LIBRARY="$DEPS/lib/libavutil.dylib" \
+  -DFFMPEG_swresample_LIBRARY="$DEPS/lib/libswresample.dylib" \
+  -DFFMPEG_swscale_LIBRARY="$DEPS/lib/libswscale.dylib" \
+  -DLIBOBS_INCLUDE_DIR="$OBS_SRC/libobs" \
+  -DLIBOBS_CONFIG_INCLUDE_DIR="$PWD" \
+  -DLIBOBS_FRONTEND_INCLUDE_DIR="$OBS_SRC/frontend/api"
 cmake --build build --target obs-multisite
 ```
 
-That produces `obs-multisite.plugin`, which goes in
-`~/Library/Application Support/obs-studio/plugins/`. libobs resolves from
-OBS.app at load time through `@rpath`, so the plugin carries no copy of it.
+Two things are worth knowing about that. Passing every FFmpeg path explicitly
+and pinning `Qt6_DIR` is not belt-and-braces: if Homebrew's copies are
+installed they are found first, and the result is the mismatched build this
+recipe exists to avoid. And **no OBS binary is needed** — only headers. The
+plugin is linked with `-undefined dynamic_lookup`, so libobs and
+obs-frontend-api resolve out of the running OBS at load time. Qt *is* linked
+for real, because those symbols are not OBS's to provide.
 
-**One caveat before distributing such a build:** it will link Homebrew's
-FFmpeg by absolute path, so it only loads on a machine with that exact
-version installed. OBS ships its own FFmpeg in `OBS.app/Contents/Frameworks`,
-and a release build has to link those instead — which is what obs-deps
-provides and what a release job must use.
-
+The result is `obs-multisite.plugin`, whose every versioned dependency is an
+`@rpath` reference to something OBS already ships, with one rpath —
+`@executable_path/../Frameworks`. A plugin has no executable of its own, so
+`@executable_path` is the host: `OBS.app/Contents/MacOS`, making
+`../Frameworks` OBS's own framework directory wherever OBS is installed.
+Check a build with `otool -L` and `otool -l | grep -A2 LC_RPATH`; anything
+that is not `@rpath`, `/System` or `/usr/lib` is a path from your machine and
+will not exist on anybody else's. CI asserts exactly that.
 
 With the public simulcast relay (adds SQLite; needs the `ffmpeg` command at
 run time, not at build time):
@@ -448,9 +512,13 @@ broken build cannot become something somebody deploys:
 docker build -f relay/Dockerfile -t multisite-relay .
 ```
 
-CI builds and tests the core on Linux x86, **Linux ARM64** and Windows, and
-produces an installable Windows plugin. The ARM64 job exists because the planned
-appliance runs there, so a regression is caught in CI rather than on hardware.
+CI builds and tests the core on Linux x86, **Linux ARM64**, Windows and macOS,
+and produces the installable Windows and macOS plugins. The ARM64 job exists
+because the planned appliance runs there, so a regression is caught in CI
+rather than on hardware. The macOS job asserts what makes a bundle loadable on
+a machine other than the one that built it: package type `BNDL`, arm64, the
+module entry points exported, exactly one rpath, no OpenSSL, and no absolute
+path outside `/System` and `/usr/lib`.
 
 ---
 

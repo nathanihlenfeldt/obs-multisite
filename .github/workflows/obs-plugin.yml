@@ -15,8 +15,10 @@ env:
   # this release's own buildspec.json, so FFmpeg/curl DLL versions line up with
   # what your OBS ships — otherwise the plugin fails to load with error 126.
   OBS_TAG: "32.2.2"
-  # Used only if the OBS source tree has no parsable buildspec.json.
-  OBS_DEPS_FALLBACK: "2026-06-02"
+  # Used only if the pinned obs-deps version cannot be read from the OBS source
+  # tree. OBS 32 keeps it in CMakePresets.json; older releases used
+  # buildspec.json. Keep this matched to OBS_TAG.
+  OBS_DEPS_FALLBACK: "2026-07-15"
 
 jobs:
   # Fast guard on our OBS API usage, against distro libobs headers.
@@ -357,9 +359,232 @@ jobs:
           name: obs-multisite-windows
           path: dist/
 
+  # Produces the installable macOS plugin: an arm64 .plugin bundle that links
+  # nothing OBS does not already ship.
+  #
+  # The whole difficulty on macOS is ABI matching. OBS.app carries its own
+  # FFmpeg, Qt and libobs, and a plugin must use those exact copies — a build
+  # against Homebrew's FFmpeg or Qt loads on the machine that built it and
+  # crashes elsewhere, because the versions differ (Homebrew tracks latest;
+  # OBS pins). So the dependencies here come from obs-deps at the version OBS
+  # itself pins for this release, which makes the match true by construction
+  # rather than by luck.
+  macos:
+    runs-on: macos-15
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Read the obs-deps version OBS pins for this release
+        run: |
+          set -euo pipefail
+          TAG="${OBS_TAG}"
+          echo "OBS tag: ${TAG}"
+          # OBS 32 keeps the dependency pins in CMakePresets.json, under the
+          # "dependencies" configure preset. Releases up to 31 used a
+          # buildspec.json at the root. Try both, in that order, and fall back
+          # only if neither parses — an unnoticed fallback is how you end up
+          # linking the wrong FFmpeg.
+          VER=""
+          if curl -sfSL -o presets.json \
+               "https://raw.githubusercontent.com/obsproject/obs-studio/${TAG}/CMakePresets.json"; then
+            VER=$(python3 -c "import json; d=json.load(open('presets.json')); print(next((p['vendor']['obsproject.com/obs-studio']['dependencies']['prebuilt']['version'] for p in d.get('configurePresets',[]) if p.get('name')=='dependencies'), ''))" 2>/dev/null || true)
+            [ -n "${VER}" ] && echo "obs-deps version from CMakePresets.json: ${VER}"
+          fi
+          if [ -z "${VER}" ] && curl -sfSL -o buildspec.json \
+               "https://raw.githubusercontent.com/obsproject/obs-studio/${TAG}/buildspec.json"; then
+            VER=$(python3 -c "import json; print(json.load(open('buildspec.json')).get('dependencies',{}).get('prebuilt',{}).get('version',''))" 2>/dev/null || true)
+            [ -n "${VER}" ] && echo "obs-deps version from buildspec.json: ${VER}"
+          fi
+          if [ -z "${VER}" ]; then
+            VER="${OBS_DEPS_FALLBACK}"
+            echo "::warning::Could not read the obs-deps version from OBS ${TAG}; using the fallback ${VER}. If OBS has moved the pin again, check that this still matches."
+          fi
+          echo "DEPS_VER=${VER}" >> "$GITHUB_ENV"
+
+      - name: Fetch obs-deps and the OBS headers
+        run: |
+          set -euo pipefail
+          VER="${DEPS_VER}"
+          mkdir -p deps/root
+          # arm64 rather than the universal asset OBS builds with: the arm64
+          # slice is byte-identical in ABI and the download is half the size.
+          for name in "macos-deps-${VER}-arm64.tar.xz" \
+                      "macos-deps-qt6-${VER}-arm64.tar.xz"; do
+            url="https://github.com/obsproject/obs-deps/releases/download/${VER}/${name}"
+            echo "downloading ${name}"
+            curl -sfSL -o "${name}" "${url}" || {
+              echo "::error::obs-deps asset ${name} not found."
+              echo "Check https://github.com/obsproject/obs-deps/releases/tag/${VER}"
+              exit 1
+            }
+            tar xf "${name}" -C deps/root
+          done
+
+          # Headers only — the plugin is linked with -undefined dynamic_lookup
+          # and resolves libobs and obs-frontend-api out of the running OBS at
+          # load time, so no OBS binary is needed to build against.
+          curl -sfSL -o obs.tar.gz \
+            "https://github.com/obsproject/obs-studio/archive/refs/tags/${OBS_TAG}.tar.gz"
+          tar xzf obs.tar.gz
+          OBS_SRC="$PWD/obs-studio-${OBS_TAG}"
+          test -f "${OBS_SRC}/libobs/obs-module.h"
+          test -f "${OBS_SRC}/frontend/api/obs-frontend-api.h" \
+            || test -f "${OBS_SRC}/UI/obs-frontend-api/obs-frontend-api.h"
+
+          # obsconfig.h is generated into OBS's own build tree, and a plugin
+          # needs only the two version defines from it. Standing one up here
+          # avoids configuring the whole of OBS for a header with two lines
+          # that matter.
+          mkdir -p gen
+          printf '%s\n' '#pragma once' \
+                         '#define OBS_RELEASE_CANDIDATE 0' \
+                         '#define OBS_BETA 0' > gen/obsconfig.h
+
+          FE="${OBS_SRC}/frontend/api"
+          [ -d "${FE}" ] || FE="${OBS_SRC}/UI/obs-frontend-api"
+
+          echo "OBS_SRC=${OBS_SRC}" >> "$GITHUB_ENV"
+          echo "OBS_FE_INC=${FE}" >> "$GITHUB_ENV"
+          echo "DEPS=$PWD/deps/root" >> "$GITHUB_ENV"
+          echo "OBSCONFIG=$PWD/gen" >> "$GITHUB_ENV"
+          echo "--- deps versions actually fetched ---"
+          ls deps/root/lib | grep -E '^libavcodec\.[0-9]+\.' || true
+          grep -m1 'PACKAGE_VERSION "' deps/root/lib/cmake/Qt6/Qt6ConfigVersionImpl.cmake || true
+
+      - name: Configure
+        run: |
+          set -euo pipefail
+          # Every FFmpeg path is passed explicitly, and Qt6_DIR is pinned to
+          # the deps tree. The runner has Homebrew FFmpeg and Qt installed, and
+          # either would be found first and silently produce the mismatched
+          # build this job exists to avoid.
+          cmake -S . -B build \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_OBS_PLUGIN=ON -DENABLE_QT=ON \
+            -DCMAKE_PREFIX_PATH="${DEPS}" \
+            -DQt6_DIR="${DEPS}/lib/cmake/Qt6" \
+            -DFORCE_FFMPEG_MANUAL_SEARCH=ON \
+            -DFFMPEG_INCLUDE_DIR="${DEPS}/include" \
+            -DFFMPEG_avformat_LIBRARY="${DEPS}/lib/libavformat.dylib" \
+            -DFFMPEG_avcodec_LIBRARY="${DEPS}/lib/libavcodec.dylib" \
+            -DFFMPEG_avutil_LIBRARY="${DEPS}/lib/libavutil.dylib" \
+            -DFFMPEG_swresample_LIBRARY="${DEPS}/lib/libswresample.dylib" \
+            -DFFMPEG_swscale_LIBRARY="${DEPS}/lib/libswscale.dylib" \
+            -DLIBOBS_INCLUDE_DIR="${OBS_SRC}/libobs" \
+            -DLIBOBS_CONFIG_INCLUDE_DIR="${OBSCONFIG}" \
+            -DLIBOBS_FRONTEND_INCLUDE_DIR="${OBS_FE_INC}"
+
+      - name: Build
+        run: cmake --build build --config Release --target obs-multisite
+
+      # These checks are the difference between "it built" and "it will load on
+      # someone else's Mac". Each one has a failure mode that is invisible
+      # until a stranger downloads the plugin.
+      - name: Verify the bundle
+        run: |
+          set -euo pipefail
+          B=build/obs-multisite.plugin
+          BIN="$B/Contents/MacOS/obs-multisite"
+          test -d "$B" || { echo "::error::no .plugin bundle was produced"; exit 1; }
+          test -f "$BIN" || { echo "::error::bundle has no executable"; exit 1; }
+
+          # OBS skips a bundle whose package type is not BNDL, without logging
+          # anything — indistinguishable from a plugin that failed to build.
+          TYPE=$(/usr/libexec/PlistBuddy -c "Print :CFBundlePackageType" \
+                   "$B/Contents/Info.plist")
+          echo "CFBundlePackageType: ${TYPE}"
+          [ "${TYPE}" = "BNDL" ] || { echo "::error::package type must be BNDL"; exit 1; }
+
+          # obs_module_text reads the locale files out of Contents/Resources.
+          test -f "$B/Contents/Resources/locale/en-US.ini" \
+            || { echo "::error::locale files missing from the bundle"; exit 1; }
+
+          echo "--- architecture ---"
+          lipo -info "$BIN"
+          lipo -info "$BIN" | grep -q arm64 \
+            || { echo "::error::not an arm64 build"; exit 1; }
+
+          echo "--- OBS entry points ---"
+          for sym in obs_module_load obs_module_unload obs_module_set_pointer \
+                     obs_module_ver obs_module_description; do
+            nm -gU "$BIN" | grep -q " _${sym}$" \
+              || { echo "::error::missing exported symbol ${sym}"; exit 1; }
+            echo "ok: ${sym}"
+          done
+
+          echo "--- linked libraries ---"
+          otool -L "$BIN"
+
+          # A path from the build machine baked into the binary is the classic
+          # way an unsigned plugin "works for me" and nowhere else.
+          STRAY=$(otool -L "$BIN" | tail -n +2 | awk '{print $1}' \
+                  | grep -Ev '^@rpath/|^/System/|^/usr/lib/' || true)
+          if [ -n "${STRAY}" ]; then
+            echo "::error::these are neither @rpath nor OS paths, so they will not"
+            echo "::error::exist on another machine:"
+            echo "${STRAY}"
+            exit 1
+          fi
+
+          # @rpath must resolve through the HOST application, because a plugin
+          # has no executable of its own: @executable_path is OBS.app/Contents/
+          # MacOS, so ../Frameworks is OBS's framework directory wherever OBS
+          # happens to be installed.
+          echo "--- rpaths ---"
+          RPATHS=$(otool -l "$BIN" | grep -A2 LC_RPATH | awk '/ path /{print $2}')
+          echo "${RPATHS}"
+          [ "${RPATHS}" = "@executable_path/../Frameworks" ] \
+            || { echo "::error::expected exactly one rpath," \
+                      "@executable_path/../Frameworks, got: ${RPATHS}"; exit 1; }
+
+          # The crypto backend must be the platform's own. An OpenSSL link
+          # would fail to load on any Mac without Homebrew, which is most of
+          # them, and the failure looks like a broken plugin rather than a
+          # missing library.
+          if otool -L "$BIN" | grep -qi 'libssl\|libcrypto'; then
+            echo "::error::OpenSSL is linked; macOS must use CommonCrypto"
+            exit 1
+          fi
+          echo "ok: no OpenSSL"
+
+      # Recording what the binary expects makes a future ABI drift readable
+      # from the download rather than only from a crash report.
+      - name: Stage for release
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          cp -R build/obs-multisite.plugin dist/
+          BIN=dist/obs-multisite.plugin/Contents/MacOS/obs-multisite
+          {
+            echo "obs-multisite — macOS (Apple Silicon)"
+            echo
+            echo "Built against OBS ${OBS_TAG}, obs-deps ${DEPS_VER}."
+            echo "Links nothing OBS does not already ship; resolves it from"
+            echo "the running OBS.app, so no libraries are bundled."
+            echo
+            echo "Expected library versions:"
+            otool -L "$BIN" | tail -n +2 | grep '^\s*@rpath' \
+              | sed 's/^[[:space:]]*/  /'
+            echo
+            echo "Install:"
+            echo "  1. Move obs-multisite.plugin to"
+            echo "     ~/Library/Application Support/obs-studio/plugins/"
+            echo "  2. Remove the download quarantine flag, or macOS will"
+            echo "     refuse to load it — this build is not signed:"
+            echo "     xattr -dr com.apple.quarantine \\"
+            echo "       ~/Library/Application\\ Support/obs-studio/plugins/obs-multisite.plugin"
+            echo "  3. Restart OBS."
+          } > dist/INSTALL-MACOS.txt
+          cat dist/INSTALL-MACOS.txt
+
+      - uses: actions/upload-artifact@v5
+        with:
+          name: obs-multisite-macos-arm64
+          path: dist/
+
   # Publishes the release only for a v* tag; ordinary pushes just build.
   release:
-    needs: [ linux, windows ]
+    needs: [ linux, windows, macos ]
     if: startsWith(github.ref, 'refs/tags/v')
     runs-on: ubuntu-latest
     permissions:
@@ -384,6 +609,11 @@ jobs:
           # Linux: the module alone. Distros vary too much for a staged tree to
           # be useful, and the plugin links the system FFmpeg/curl.
           (cd artifacts/obs-multisite-linux && tar czf "../../dist/obs-multisite-${VER}-linux-x86_64.tar.gz" .)
+          # macOS: zip rather than tar, because unzipping in Finder is the
+          # path of least resistance and it preserves the bundle. -y keeps
+          # symlinks as symlinks, which matters for a .plugin's Contents.
+          (cd artifacts/obs-multisite-macos-arm64 && \
+             zip -ry "../../dist/obs-multisite-${VER}-macos-arm64.zip" .)
           ls -lh dist
 
       # Creating and uploading are separate so this is safe to run again.
@@ -420,7 +650,7 @@ jobs:
           count=$(gh release view "${GITHUB_REF_NAME}" --repo "${GITHUB_REPOSITORY}" \
                     --json assets -q '.assets | length')
           echo "${count} asset(s) attached to ${GITHUB_REF_NAME}"
-          if [ "${count}" -lt 2 ]; then
-            echo "::error::Expected the Windows and Linux builds to be attached, found ${count}."
+          if [ "${count}" -lt 3 ]; then
+            echo "::error::Expected the Windows, Linux and macOS builds to be attached, found ${count}."
             exit 1
           fi

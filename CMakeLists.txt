@@ -330,7 +330,14 @@ if(BUILD_OBS_PLUGIN)
     endif()
 
     if(LIBOBS_INCLUDE_DIR OR LIBOBS_LIBRARY)
-        if(NOT LIBOBS_INCLUDE_DIR OR NOT LIBOBS_LIBRARY)
+        # On macOS the library is optional, because the plugin is linked with
+        # -undefined dynamic_lookup: libobs is resolved out of the running
+        # OBS.app at load time, so the build needs libobs's HEADERS and
+        # nothing else. That is not a shortcut — carrying a link-time copy of
+        # libobs would only invite a version other than the host's. It also
+        # means a macOS build needs no OBS binary at all, just the source
+        # tarball the headers come from.
+        if(NOT LIBOBS_INCLUDE_DIR OR (NOT LIBOBS_LIBRARY AND NOT APPLE))
             message(FATAL_ERROR
                 "Give both -DLIBOBS_INCLUDE_DIR and -DLIBOBS_LIBRARY, or neither.\n"
                 "  LIBOBS_INCLUDE_DIR: ${LIBOBS_INCLUDE_DIR}\n"
@@ -348,11 +355,22 @@ if(BUILD_OBS_PLUGIN)
             list(APPEND _obs_includes "${LIBOBS_CONFIG_INCLUDE_DIR}")
             message(STATUS "libobs generated headers: ${LIBOBS_CONFIG_INCLUDE_DIR}")
         endif()
-        add_library(OBS::libobs UNKNOWN IMPORTED)
-        set_target_properties(OBS::libobs PROPERTIES
-            IMPORTED_LOCATION "${LIBOBS_LIBRARY}"
-            INTERFACE_INCLUDE_DIRECTORIES "${_obs_includes}")
-        message(STATUS "libobs used explicitly: ${LIBOBS_LIBRARY}")
+        if(LIBOBS_LIBRARY)
+            add_library(OBS::libobs UNKNOWN IMPORTED)
+            set_target_properties(OBS::libobs PROPERTIES
+                IMPORTED_LOCATION "${LIBOBS_LIBRARY}"
+                INTERFACE_INCLUDE_DIRECTORIES "${_obs_includes}")
+            message(STATUS "libobs used explicitly: ${LIBOBS_LIBRARY}")
+        else()
+            # Headers only (macOS). An INTERFACE target carries the include
+            # directories with nothing to link, so the rest of this file does
+            # not have to care which of the two cases it is in.
+            add_library(OBS::libobs INTERFACE IMPORTED)
+            set_target_properties(OBS::libobs PROPERTIES
+                INTERFACE_INCLUDE_DIRECTORIES "${_obs_includes}")
+            message(STATUS "libobs headers only: ${LIBOBS_INCLUDE_DIR} "
+                           "(resolved from the host app at load time)")
+        endif()
     else()
         if(NOT LIBOBS_MANUAL_SEARCH)
             find_package(libobs CONFIG QUIET)
@@ -402,6 +420,11 @@ if(BUILD_OBS_PLUGIN)
         find_package(Qt6 REQUIRED COMPONENTS Widgets)
         if(LIBOBS_FRONTEND_LIBRARY)
             set(_qt_frontend "${LIBOBS_FRONTEND_LIBRARY}")
+        elseif(APPLE)
+            # As with libobs: dynamic_lookup resolves the frontend API from
+            # OBS.app, so only the header is needed. Qt itself IS linked for
+            # real — its symbols are not OBS's to provide.
+            set(_qt_frontend "")
         else()
             find_library(_qt_frontend NAMES obs-frontend-api REQUIRED)
         endif()
@@ -428,10 +451,18 @@ if(BUILD_OBS_PLUGIN)
             src/obs/ui/decoder_dock.cpp
             src/obs/ui/dock_register.cpp)
         set_target_properties(obs-multisite PROPERTIES AUTOMOC ON)
-        target_link_libraries(obs-multisite PRIVATE Qt6::Widgets "${_qt_frontend}")
+        target_link_libraries(obs-multisite PRIVATE Qt6::Widgets)
+        if(_qt_frontend)
+            target_link_libraries(obs-multisite PRIVATE "${_qt_frontend}")
+        endif()
         target_compile_definitions(obs-multisite PRIVATE
             MULTISITE_HAVE_QT MULTISITE_HAVE_FRONTEND_API)
-        message(STATUS "Qt docks enabled (Qt6 ${Qt6_VERSION}, frontend ${_qt_frontend})")
+        if(_qt_frontend)
+            message(STATUS "Qt docks enabled (Qt6 ${Qt6_VERSION}, frontend ${_qt_frontend})")
+        else()
+            message(STATUS "Qt docks enabled (Qt6 ${Qt6_VERSION}, "
+                           "frontend resolved from the host app)")
+        endif()
     endif()
 
     if(ENABLE_FRONTEND_API AND NOT ENABLE_QT)
@@ -475,6 +506,27 @@ if(BUILD_OBS_PLUGIN)
         # carry a copy and must resolve it through the host application.
         target_link_options(obs-multisite PRIVATE
             -Wl,-undefined,dynamic_lookup)
+
+        # Every versioned library the plugin needs — libobs, obs-frontend-api,
+        # Qt and FFmpeg — is one OBS already ships, and each is referenced as
+        # @rpath/... So the only question is what @rpath resolves to, and the
+        # answer must not be a path from the machine that built it.
+        #
+        # @executable_path is the HOST application, because a plugin has no
+        # executable of its own: for a plugin loaded by OBS this is
+        # OBS.app/Contents/MacOS, so ../Frameworks is OBS's own framework
+        # directory wherever the user installed it. This is what OBS's
+        # bundled plugins use.
+        #
+        # BUILD_WITH_INSTALL_RPATH stops CMake adding the build-time
+        # dependency directories as well. Without it the obs-deps path from
+        # the build machine is baked in FIRST, so the plugin would load
+        # whatever it found there ahead of OBS's copies — working perfectly on
+        # the machine that built it and nowhere else.
+        set_target_properties(obs-multisite PROPERTIES
+            MACOSX_RPATH TRUE
+            BUILD_WITH_INSTALL_RPATH TRUE
+            INSTALL_RPATH "@executable_path/../Frameworks")
 
         # The data directory becomes Contents/Resources inside the bundle.
         file(GLOB_RECURSE _ms_data RELATIVE "${CMAKE_CURRENT_SOURCE_DIR}/data"

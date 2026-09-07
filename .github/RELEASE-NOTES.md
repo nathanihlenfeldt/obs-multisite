@@ -128,6 +128,24 @@ roadmap entry for an external control API aimed at Bitfocus Companion.
 
 ## Installing
 
+**macOS (Apple Silicon)** — new in this release. Unzip, move
+`obs-multisite.plugin` into `~/Library/Application Support/obs-studio/plugins/`,
+then clear the download quarantine flag before restarting OBS:
+
+```sh
+xattr -dr com.apple.quarantine ~/Library/Application\ Support/obs-studio/plugins/obs-multisite.plugin
+```
+
+**That step is not optional.** These builds are not code-signed or notarised,
+and macOS refuses to load a quarantined unsigned bundle — silently. OBS starts
+normally with no Multisite source, output or docks, and the log does not say
+why.
+
+The bundle links nothing OBS does not already ship: FFmpeg, Qt and libobs all
+resolve out of the running OBS.app, at the versions OBS pins. Built against
+OBS **32.2.2** and obs-deps `2026-07-15`; the exact versions it expects are
+listed in `INSTALL-MACOS.txt` inside the zip. Apple Silicon only.
+
 **Windows** — unzip and copy the `obs-plugins` and `data` folders into your OBS
 Studio install directory (typically `C:\Program Files\obs-studio\`), merging
 with what is there. Built against OBS **32.2.2**; a different major version may
