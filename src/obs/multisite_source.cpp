@@ -230,6 +230,12 @@ struct SourceCtx : DecoderControls {
     void pin_event(const std::string& event_id) override;
     void unpin_event() override;
 
+    // Re-anchor after any jump of the playback head, and arm the "going to…"
+    // indication. Shared by seek and jump-to-live: jumping to live used to do
+    // none of this, so it moved the picture with nothing on the dock to say
+    // it had been asked to.
+    void after_jump(long long to_wall_ms);
+
     // Marker chosen in the properties dialog, acted on by the Jump button.
     std::string pending_marker_id;
     std::string room_id_for_display;
@@ -667,6 +673,23 @@ static void poll_loop(SourceCtx* ctx) {
                     os_gettime_ns() - started > 30000000000ULL;   // 30 s
                 if (have_content || timed_out || st == RoomState::Offline)
                     ctx->loading_event = false;
+            }
+
+            // A move made while stopped or held has no frames coming to answer
+            // it — nothing is being fed to air — so the delivery path's
+            // arrival check never runs and the indication would stay up for
+            // ever. Arrival here means the content at the new position is on
+            // disk and could be played from.
+            if (ctx->seek_target_ms.load() > 0 &&
+                (!ctx->playing.load() || ctx->paused.load())) {
+                const uint64_t started = ctx->action_started_ns.load();
+                const bool timed_out = started != 0 &&
+                    os_gettime_ns() - started > 30000000000ULL;   // 30 s
+                if (sess->buffered_ahead_s() > 0.1 || timed_out ||
+                    st == RoomState::Offline) {
+                    ctx->seek_target_ms  = 0;
+                    ctx->awaiting_frames = false;
+                }
             }
 
             if (st != ctx->last_room) {
@@ -1194,9 +1217,10 @@ void SourceCtx::toggle_pause() {
 void SourceCtx::jump_to_live() {
     auto sess = get_session(this);
     if (!sess) return;
-    pause_started_ns = 0;
     sess->jump_to_live();
-    paused = false;
+    // The same re-anchor a seek does. Jumping to live is a seek to the live
+    // edge; it only ever looked different because it did none of this.
+    after_jump((long long)sess->playhead_wall_ms());
     mlog_info("source: JUMPED TO LIVE (segment %llu)",
               (unsigned long long)sess->playback_head());
 }
@@ -1375,18 +1399,21 @@ void SourceCtx::stop_playback() {
     }
     flushing = false;
     first_pts_ns = -1;
+    seek_target_ms  = 0;
+    awaiting_frames = false;
     dq_cv.notify_all();
+
+    // Take the picture off air. OBS holds the last frame handed to an async
+    // video source indefinitely, so without this the programme stayed on the
+    // screen after Stop and the button looked like it had done nothing. A
+    // null frame is how a source says it has no picture; "hold the last
+    // frame" is what Hold is for, and it is a separate control.
+    if (source) obs_source_output_video(source, nullptr);
+
     mlog_info("source: STOPPED (still downloading, ready to play again)");
 }
 
-void SourceCtx::seek_to_time(long long wall_ms) {
-    auto sess = get_session(this);
-    if (!sess) return;
-    const int64_t got = sess->seek_to_wall_ms((int64_t)wall_ms);
-    if (got == 0) {
-        mlog_warn("source: that moment is no longer available in storage");
-        return;
-    }
+void SourceCtx::after_jump(long long to_wall_ms) {
     // Treat as a discontinuity: drop what is queued and re-anchor. `flushing`
     // releases the decoder if it is waiting for queue space, so the restart
     // that follows can never block.
@@ -1408,21 +1435,29 @@ void SourceCtx::seek_to_time(long long wall_ms) {
     // then jumped. The dock marks this as provisional until frames arrive, so
     // the operator sees the intent honoured at once without being told the
     // picture has already moved.
-    playing_at_ms     = (long long)got;
+    if (to_wall_ms > 0) playing_at_ms = to_wall_ms;
     action_started_ns = os_gettime_ns();
     poll_now          = true;    // fetch what the new position needs now
 
-    // "Going to…" only means something while there is a picture that has to
-    // catch up. Stopped or held, the move IS the whole event — the position
-    // and the timeline playhead update at once — and arming the indication
-    // would leave it on screen with no frames coming to answer it.
-    if (playing.load() && !paused.load()) {
-        seek_target_ms  = (long long)got;
-        awaiting_frames = true;
-    } else {
-        seek_target_ms  = 0;
-        awaiting_frames = false;
+    // Armed whatever state the decoder is in. A move made while stopped or
+    // held still has to fetch and decode at the new position before anything
+    // could play from there, and an operator lining up a cue in a loaded
+    // recording is exactly who needs telling that the click landed. No frames
+    // will arrive to answer it in that state, so the poll loop clears it on
+    // the content being ready instead.
+    seek_target_ms  = to_wall_ms > 0 ? to_wall_ms : 0;
+    awaiting_frames = true;
+}
+
+void SourceCtx::seek_to_time(long long wall_ms) {
+    auto sess = get_session(this);
+    if (!sess) return;
+    const int64_t got = sess->seek_to_wall_ms((int64_t)wall_ms);
+    if (got == 0) {
+        mlog_warn("source: that moment is no longer available in storage");
+        return;
     }
+    after_jump((long long)got);
 
     mlog_info("source: went to %lld (%.0fs behind live)",
               (long long)got, sess->behind_live_s());
