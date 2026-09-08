@@ -419,6 +419,38 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         }.dump());
     });
 
+    // ── Storage ──────────────────────────────────────────────────────────────
+    // Is the bucket reachable, which Cloudflare edge is serving it, and what
+    // is the link managing? Asked on demand rather than on the status poll,
+    // because ?probe=1 spends a request; without it the figures come from the
+    // segment traffic already flowing and cost nothing.
+    server.route("GET", "/api/storage", [&player](const HttpRequest& req,
+                                                  HttpResponse& res) {
+        const bool probe = bool_param(req, "probe", false);
+        const Player::StorageHealth h = player.storage_health(probe);
+        json j{
+            {"configured", h.configured},
+            {"endpoint", h.endpoint},
+            {"bucket", h.bucket},
+            {"room", h.room},
+            {"reachable", h.reachable},
+            {"readable", h.readable},
+            {"http_status", h.http_status},
+            {"error", h.error},
+            {"probed", probe},
+            {"colo", h.colo},
+            {"server", h.server},
+            {"rate_samples", h.rate_samples},
+        };
+        // Only send figures that mean something. A zero rate and a zero round
+        // trip read as "the link is dead" when they actually mean "nothing has
+        // been measured", which is the sort of display that sends somebody to
+        // fix a link that is fine.
+        if (h.rate_samples > 0) j["bytes_per_s"] = h.bytes_per_s;
+        if (probe && h.round_trip_ms > 0) j["round_trip_ms"] = h.round_trip_ms;
+        res.json(j.dump());
+    });
+
     server.route("GET", "/api/system/timezones", [](const HttpRequest&,
                                                     HttpResponse& res) {
         res.json(json{{"timezones", available_timezones()}}.dump());

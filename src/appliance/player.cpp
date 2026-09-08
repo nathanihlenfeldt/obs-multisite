@@ -56,6 +56,50 @@ Config Player::config() const {
     return m_cfg;
 }
 
+Player::StorageHealth Player::storage_health(bool probe) {
+    StorageHealth h;
+    const Config cfg = config();
+    h.endpoint = cfg.endpoint_host.empty() ? cfg.r2_account_id : cfg.endpoint_host;
+    h.bucket   = cfg.bucket;
+    h.room     = cfg.room_id;
+    h.configured = !cfg.bucket.empty() && !cfg.access_key_id.empty() &&
+                   !cfg.secret_access_key.empty() && !h.endpoint.empty();
+
+    std::shared_ptr<S3Transport> tx;
+    { std::lock_guard<std::mutex> lk(m_obj_mtx); tx = m_transport; }
+    if (!tx) {
+        if (!h.configured) h.error = "storage has not been set up yet";
+        else h.error = "the player is not running";
+        return h;
+    }
+
+    // Always cheap: these come from the segment traffic already flowing, so
+    // they cost nothing and describe the link actually carrying the service.
+    h.endpoint     = tx->host();
+    h.colo         = tx->last_colo();
+    h.server       = tx->last_server();
+    h.bytes_per_s  = tx->observed_bytes_per_s();
+    h.rate_samples = tx->rate_samples();
+
+    if (!probe) {
+        // Traffic having been observed at all is itself evidence the bucket is
+        // reachable, without spending a request to prove it again.
+        h.reachable = h.rate_samples > 0 || !h.colo.empty() || !h.server.empty();
+        h.readable  = h.reachable;
+        return h;
+    }
+
+    const StorageProbe p = tx->probe(live_pointer_key(cfg.room_id));
+    h.reachable     = p.reachable;
+    h.readable      = p.readable;
+    h.http_status   = p.http_status;
+    h.error         = p.error;
+    h.round_trip_ms = p.round_trip_ms;
+    if (!p.colo.empty())   h.colo   = p.colo;
+    if (!p.server.empty()) h.server = p.server;
+    return h;
+}
+
 std::shared_ptr<DecoderSession> Player::session_ref() const {
     std::lock_guard<std::mutex> lk(m_obj_mtx);
     return m_session;

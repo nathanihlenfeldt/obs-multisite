@@ -327,6 +327,9 @@ input[type="number"] { width: 6.5rem; }
 .facts { display: grid; grid-template-columns: max-content 1fr; gap: 8px 16px; margin: 8px 0; }
 .facts dt { color: var(--muted); }
 .facts dd { margin: 0; overflow-wrap: anywhere; }
+/* A storage fault is the one fact on this panel that needs to catch the
+   eye: an operator opens it because something is wrong. */
+.facts dd.bad { color: var(--danger); font-weight: 600; }
 
 .log {
   background: #0d1015;
