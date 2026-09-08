@@ -28,6 +28,10 @@ bool obs_module_load(void) {
     mlog_info("loading obs-multisite %s (hotkeys only — this build has no "
               "operator docks)", PLUGIN_VERSION);
 #endif
+    // Both types are registered whatever role this machine is set to. The
+    // role decides which PANELS appear, never which sources exist: a scene
+    // collection holding a Multisite Source has to keep resolving it, and a
+    // preference is no reason to take a source type away from one.
     multisite_obs::register_output();   // main campus: sends
     multisite_obs::register_source();   // satellite: receives
     multisite_obs::register_ui();       // hotkeys + Tools menu (no Qt needed)
