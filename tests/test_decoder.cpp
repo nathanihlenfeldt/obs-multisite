@@ -702,6 +702,28 @@ int main() {
         // The offset applies to that segment only.
         auto seg2 = dec.next_segment();
         CHECK(seg2 && seg2->skip_to_ms == 0, "offset does not leak to the next");
+
+        // A seek that cannot be honoured must say WHICH end it hit. All of
+        // these used to be reported to the operator as "that moment is no
+        // longer available in storage", which for a seek past the end is not
+        // vague but wrong — nothing has been removed, there is simply no more
+        // of the service yet.
+        {
+            const int64_t past_end = enc.started_at_ms + 60LL * 60 * 1000;
+            CHECK(dec.seek_to_wall_ms(past_end) == 0, "a seek past the end fails");
+            const std::string why = dec.last_error();
+            CHECK(why.find("storage") == std::string::npos,
+                  "and is not blamed on storage having lost it");
+            CHECK(why.find("ahead of what has been broadcast") != std::string::npos ||
+                  why.find("past the end") != std::string::npos,
+                  "it says the moment is beyond what exists");
+
+            CHECK(dec.seek_to_wall_ms(enc.started_at_ms - 60000) == 0,
+                  "a seek before the start fails");
+            CHECK(dec.last_error().find("before this service started") !=
+                      std::string::npos,
+                  "and says so, rather than blaming retention");
+        }
     }
 
     std::printf("== 16. A finished recording plays as video-on-demand ==\n");

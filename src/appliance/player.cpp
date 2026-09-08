@@ -723,9 +723,22 @@ void Player::poll_loop() {
                     ? (double)(out - m_last_frames_out) * 1000.0 / (double)span_ms
                     : 0.0;
                 m_last_frames_out = out;
-                plog_info("head=%llu live=%llu behind=%.0fs buffered=%.0fs "
+                // What the player is actually doing. Without this the line
+                // read as perfect health while nothing was happening: two
+                // hours of "behind=0s buffered=0s fps=0.0" turned out to be
+                // playback having reached the end of a recording and stopped,
+                // which in that line looked exactly like keeping up. The
+                // head sitting one past the live edge was the only evidence,
+                // and it takes someone who knows the code to read it.
+                const char* state =
+                      sess->at_end()                          ? "at-end"
+                    : sess->play_state() == PlayState::Paused  ? "held"
+                    : sess->play_state() == PlayState::Stopped ? "stopped"
+                                                               : "playing";
+                plog_info("%s head=%llu live=%llu behind=%.0fs buffered=%.0fs "
                           "cached=%zu downloaded=%llu frames_out=%llu "
                           "fps=%.1f dropped=%llu",
+                          state,
                           (unsigned long long)sess->playback_head(),
                           (unsigned long long)sess->live_edge(),
                           sess->behind_live_s(), sess->buffered_ahead_s(),
@@ -909,8 +922,15 @@ void Player::seek_to_time(long long wall_ms) {
     if (!sess) return;
     const int64_t got = sess->seek_to_wall_ms((int64_t)wall_ms);
     if (got == 0) {
-        plog_warn("that moment is no longer available in storage");
-        note_error("that moment is no longer available in storage");
+        // The session knows which bound was hit; repeating a guess here is how
+        // "past the end of the recording" came to be reported as storage
+        // having lost it.
+        const std::string why = sess->last_error();
+        const std::string msg = why.empty()
+            ? std::string("that moment cannot be played")
+            : why;
+        plog_warn("%s", msg.c_str());
+        note_error(msg);
         return;
     }
     flush_delivery();
