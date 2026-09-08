@@ -153,8 +153,8 @@ will say so rather than showing an empty list.
 - **Not yet used for a real service.** The soak covered sustained upload,
   timeslipping and playout. It did not cover a room full of people, a volunteer
   under pressure, or a venue's network on a Sunday.
-- **The campus player has not carried a service either**, and its frame rate on
-  a Pi 5 has not been re-measured since the audio and threading fixes above.
+- **The campus player has not carried a service either**, though it now holds
+  30 fps on a Pi 5 through several runs, with a handful of dropped frames.
 - **Alignment between separate audio tracks is unverified.** Audio stays locked
   to the picture — measured, and checked by ear — but nobody has confirmed that
   a click on one track lands at the same instant as the programme on another.
