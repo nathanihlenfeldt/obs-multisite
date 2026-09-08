@@ -23,90 +23,132 @@ objects after the same number of days. Seven days is the design default, and
 **the rule is also your DVR depth**: a campus can timeslip back only as far as
 retention allows.
 
-## What's new since v0.1.3-alpha
+## 🔑 The licence has changed: MIT → GPLv3
 
-A fix-only release. Three faults in the OBS decoder, three in the campus
-player, and the test gap that let one of them ship.
+**From this release the project is GPL-3.0-or-later.** Free for any church to
+run, adapt and keep running — and if you distribute a changed version, those
+changes have to reach the next church too. That is the whole point of the
+choice. It places no condition on the services you broadcast with it, or on
+anything in your bucket.
 
-### The event list showed only the newest service
+**Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
+withdrawn:** anyone holding those versions keeps their MIT rights to that code.
 
-**If you have used this for more than one service, this is the one that
-matters.** The per-room index arrived during v0.1.0-alpha, so any service
-recorded before it has media in the bucket and no index entry. Discovery
-treated a non-empty index as the whole truth and only scanned the bucket when
-the index was completely empty — so the first service recorded with an index
-made every earlier one invisible. Services were still in storage and still
-playable; nothing would list them.
+This is compatible with OBS, which is GPL-2.0-**or-later** — the "or later" is
+what makes a GPLv3 plugin lawful in a GPLv2 host. Third-party terms are set out
+in `COPYRIGHT`.
 
-Discovery is now the union of the index and a scan, so an event with no entry
-lists alongside those that have one. It affects the **relay's Past services
-list too**, which shared the same code, and both are fixed by the same change.
+## What's new since v0.1.4-alpha
 
-Nothing needs re-uploading and nothing was lost — your older services should
-simply appear again.
+### The relay speaks SRT, so an HEVC service can go out unchanged
 
-### Jump to live and seeking gave no sign they had worked
+RTMP means FLV, and FLV means H.264 — which is why choosing HEVC for the
+campuses has until now cost a church its public stream outright. SRT means
+MPEG-TS, which carries HEVC properly, so that trade is no longer forced.
 
-Jump to live did none of the bookkeeping a seek does, so the dock had nothing
-to show and the operator got no acknowledgement that the button had done
-anything. Both now report **LOADING…** and **BUFFERING…** the same way, and the
-indication appears whatever state the decoder is in — including a recording
-that is loaded but not yet playing, which is exactly when someone is lining up
-a cue and needs to know their click landed.
+- **There is no protocol setting.** `rtmp://` and `srt://` are unmistakable, so
+  the address you paste decides. Asking a volunteer to declare which one they
+  pasted is asking them to get it wrong.
+- **Paste the whole thing.** An address arriving with the stream id, passphrase
+  and latency already in the query is pulled apart on save, and the secrets are
+  stored and treated exactly as a stream key always has been — never shown
+  again, never written to the log.
+- **Latency defaults to 2000 ms**, not ffmpeg's 120 ms. The relay already sits
+  three minutes behind the service, so two seconds is invisible and buys
+  recovery across a far longer path. SRT writes this in millionths of a second,
+  so a vendor page saying `latency=2000` is refused with the unit spelled out
+  rather than quietly taken as 2 ms.
+- **Listener mode** — for a broadcast partner or a hardware decoder that
+  connects to you rather than being pushed to — is asked for by leaving the
+  host out: `srt://:9000`. That is deliberately the only way to request it,
+  because it opens an inbound port on a machine otherwise kept closed.
 
-### Stop left the picture on air
+AV1 is still refused on both protocols: too little of what would receive it can
+decode it yet, and a stream that looks healthy here and is rejected at the far
+end is the exact failure this design exists to avoid.
 
-Stop halted the feed but never cleared the source, and OBS holds the last frame
-it was given indefinitely, so the programme stayed on the campus screen and the
-button looked broken. Stop now takes the picture off air. Holding the picture is
-what **Hold** is for, and it remains a separate control.
+**The banner above the destinations no longer lies.** It answered "can this
+service be sent at all?" with a single RTMP probe, so an HEVC service showed
+"streaming sites need H.264" across the top of the page while an SRT
+destination was busy sending it. There are three answers now — nothing can take
+this service, anything can, or some can and some cannot — and the third is
+shown as information rather than as an obstacle.
 
-### Campus player: the five-frames-a-second problem
+### The encoder dock offered two encoders out of seven
 
-Three fixes, and the first is the cause:
+On a machine with NVENC, QuickSync and x264, the dock offered the two AV1
+encoders and nothing else. The list was built while the module loaded, and OBS
+loads modules alphabetically — so `obs-ffmpeg` had registered and `obs-nvenc`,
+`obs-qsv11` and `obs-x264` had not. Even the x264 safety net failed, for the
+same reason. The list is now built when Settings is opened, which is always
+long after loading has finished.
 
-- **One audio track is played, not all of them.** A six-track service had every
-  track going into the same stereo device — six times real time of audio into
-  an output that accepts one. ALSA applied back-pressure on the same thread
-  that presents video, so the picture starved behind it. Track 0 by default,
-  with a picker in Settings ("Track to play") for a campus whose origin puts
-  the house mix somewhere else.
-- **Video decodes on more than one core.** FFmpeg defaults to a single thread
-  and nothing set otherwise, so a Pi 5 was decoding on one of four cores. The
-  log now also says which decoder FFmpeg chose and how many threads it opened.
-- **The status line reports frame rate and dropped frames**, not a running
-  total — 29042 and 23 look equally healthy until you divide by the interval.
-  With `--verbose` it also reports how long presenting a frame takes, which
-  separates a slow display path from frames that are not arriving.
+If your encoder is still missing, the log now says which encoders were offered
+and which were declined, with the reason for each.
 
-### Campus player: selecting an event lost audio
+### A machine can be set to one role
 
-Choosing an event in the web UI tore the decoder down without telling the
-session, so the new decoder never received the init segment while the session
-believed it had already sent one. The result was a burst of "first segment
-arrived with no init segment" and a silent hole in the programme.
+Both halves ship in one module, which is what lets any laptop originate a
+broadcast — but a campus that only ever receives had an encoder dock to learn
+to ignore, on the same screen as a volunteer one click from going live.
 
-### Campus player: the service and the login prompt fought over tty1
+Under Settings, a machine can be **Both**, **main site only**, or **campus
+only**. It hides panels and nothing else: the Multisite source and output are
+always registered, so this cannot break a scene collection that already uses
+one. Takes effect when OBS restarts.
 
-Raspberry Pi OS Lite starts a login prompt on tty1, and the two took turns
-evicting each other — the player got SIGHUP, died, restarted three seconds
-later, and threw the login prompt off again. The unit now claims tty1
-exclusively. `StartLimitIntervalSec` also moved to `[Unit]`, where systemd
-actually reads it.
+### You can see what the link is doing
 
-### Testing and documentation
+- **Both OBS docks** now show the plugin version on screen and a **Bucket**
+  line: the Cloudflare edge serving the feed and the observed transfer rate —
+  upload at the main site, download at a campus. A site in Johannesburg served
+  from Amsterdam explains a latency nothing local would find.
+- **The campus player** has a Storage panel: reachable or not, the colo, and
+  the link speed. The figures come from the segment traffic already flowing, so
+  opening it costs nothing; "Check now" spends one read-only request to settle
+  it, which a satellite's read-only key can make.
+- Figures that have not been measured show as `—`, never as zero. A link speed
+  of 0 Mbps reads as a dead connection when it means "nothing measured yet".
 
-The CMAF fragment tests shelled out to `cat`, `wc -l` and `test`, so they could
-never pass on Windows — and nobody noticed, because the Windows CI runner has
-no FFmpeg and never reached them. They run on all three platforms now.
+### The campus player told the truth about itself
 
-The event-listing test only covered a bucket with *no* index entries, which is
-precisely why the fault above shipped; the mixed case is covered now.
+- **It reported the wrong version.** A second version string defaulted to
+  "0.1.0" and nothing ever set it, so every box built since then said 0.1.0.
+- **A frozen playhead read as perfect health.** One status line repeated
+  identically for 112 minutes: playback had reached the end of a recording and
+  stopped, but `behind=0s buffered=0s` is also what a campus keeping up
+  perfectly reports. Every line now begins with what the player is doing —
+  playing, held, stopped, or at-end.
+- **A failed seek always blamed storage.** Five separate causes were all
+  reported as "that moment is no longer available in storage". For the common
+  case of scrubbing near the right-hand edge that was not vague but wrong:
+  nothing had been removed. It now says which bound was hit.
+- **The audio warning blamed the wrong thing.** It attributed sound breaking up
+  to heat or power unconditionally; it now asks the board, which publishes both
+  under-voltage and throttling, and says plainly when neither is the cause.
 
-Documentation: the scope document claimed the encoder queue used SQLite (it
-uses plain files, deliberately), said phases 6 and 7 were "not started"
-directly above entries marking both built, and reproduced the README's "Why
-this exists" word for word. Fixed, and about seventy duplicated lines removed.
+### An empty timeline no longer looks broken
+
+The decoder dock's timeline drew a blank strip whenever it had no span — which
+is the ordinary state before an event is loaded. "No source in the scene",
+"nothing loaded yet", "nothing on air" and "something failed" all looked
+identical. It now says which. The status row labelled "Now showing" is the
+current marker rather than the position, and is named "Current cue".
+
+### Underneath
+
+- **CI never compiled the campus player's display or audio output.** The
+  `libdrm` and ALSA development packages were not installed, so CMake quietly
+  built a player with no display and no audio — around 850 lines, including the
+  audio path whose fault made a player run at five frames a second, compiled by
+  no job at all. Both are installed now, and a missing one fails the build
+  rather than silently reverting to a headless one.
+- The CMAF fragment tests shelled out to `cat`, `wc -l` and `test`, so they
+  could never pass on Windows — and nobody noticed, because the Windows runner
+  has no FFmpeg to reach them with. They run on all three platforms now.
+- **A quick start.** The README is the long form; `QUICKSTART.md` is twenty
+  lines to a first broadcast.
+- The repository moved to `stageaudioworks/obs-multisite`.
 
 ## Installing
 
@@ -167,8 +209,15 @@ will say so rather than showing an empty list.
   chosen track is played when fed multi-track, and packed channels go out of
   HDMI in order.
 - **The relay has pushed live streams to YouTube** but has not been through a
-  full service, and it **will not send an HEVC feed** — streaming sites want
-  H.264 over RTMP and re-encoding is not built.
+  full service.
+- **HEVC to a streaming site needs SRT.** RTMP cannot carry it and re-encoding
+  is not built, so YouTube and Facebook remain H.264 only. The HEVC-over-SRT
+  remux is verified against ffmpeg — it reads back as HEVC at the far end — but
+  **no service has yet been carried from a real HEVC encoder through the
+  relay.** The transport is proven; that path is not. Rehearse it before
+  relying on it.
+- **AV1 is refused by the relay on both protocols**, deliberately: too little
+  of what would receive it can decode it yet.
 - **The relay does not terminate TLS.** It binds to localhost and expects a
   proxy in front of it; a working Caddy config is included.
 - **Replaying a past service is a proof of concept** — one at a time, started

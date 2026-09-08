@@ -842,7 +842,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Dedicated receive appliance (Raspberry Pi / mini-PC) | built, not yet run through a service |
 | Self-hosted, on storage you own | built |
 | Open protocol, no vendor lock-in | by design — the whole protocol is §4 |
-| Public simulcast to YouTube / Facebook / RTMP | built and pushing live to YouTube; not yet through a full service — H.264 feeds only (§8.2) |
+| Public simulcast to YouTube / Facebook / RTMP or SRT | built and pushing live to YouTube; not yet through a full service. H.264 over either; HEVC over SRT only, and not yet from real encoder output (§8.2) |
 | SRT output, caller or listener | built and receiving on a real client; not yet run through a full service (§8.2) |
 | HEVC out over SRT | built, and the remux verified against ffmpeg — but not yet carried from a real HEVC encoder (§8.2) |
 | Download a finished service as an MP4, all audio tracks | built (§8.2) |
@@ -896,12 +896,14 @@ carried a service; phase 8 has not been started.
   hardware-decoder selection on Pi 4. The channel de-interleaver has been
   dropped from scope rather than deferred (§4.3.1).
 - **Phase 7 — Extensions.** 🟨 Built: the public simulcast relay (§8.2), as a
-  separate container in `relay/` — copy remux to one or more RTMP
+  separate container in `relay/` — copy remux to one or more RTMP **or SRT**
   destinations, per-destination audio selection, a delay buffer, and
   supervised reconnection, with its own browser UI. Like the appliance it has
-  not yet carried a service, and it will not send an HEVC feed. Not started:
-  web/mobile simulcast served from the bucket, scheduling and auto-go-live,
-  redundancy, and local insertion.
+  not yet carried a service. HEVC now has a route out, over SRT, where RTMP
+  can carry only H.264; that remux is verified against ffmpeg but has not yet
+  carried real encoder output. Not started: re-encoding, web/mobile simulcast
+  served from the bucket, scheduling and auto-go-live, redundancy, and local
+  insertion.
 
 - **Phase 8 — External control API.** ⬜ The command surface of both plugins as
   obs-websocket vendor requests, mirroring the appliance's existing HTTP routes
