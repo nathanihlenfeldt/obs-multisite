@@ -35,8 +35,18 @@ struct ServiceStatus {
     // by name and warn before anything is started.
     std::vector<std::string> audio_labels;
     std::string video_summary;    // "1920x1080 H.264"
+    // Whether ANY destination could carry this service. The two protocols do
+    // not accept the same video, so these are three separate facts and not one:
+    // nothing can take it, everything can, or some can and some cannot.
     bool        can_send = false;
+    // Why nothing can. Empty when something can.
     std::string cannot_send_reason;
+    // Why some can and some cannot — an HEVC service, in practice, which no
+    // streaming site will take but an SRT destination carries unchanged. Kept
+    // apart from the above because it is information rather than an obstacle,
+    // and showing it as one would have an operator stop setting up a stream
+    // that was going to work.
+    std::string send_note;
     // The number an operator needs when several destinations share one VPS's
     // upload: what is going out in total, right now.
     double      total_out_kbps = 0;

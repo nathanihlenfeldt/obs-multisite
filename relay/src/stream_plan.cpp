@@ -108,6 +108,50 @@ std::vector<std::string> redact(const std::vector<std::string>& args,
     return out;
 }
 
+RoomSendability sendability(const Manifest& manifest) {
+    // Two representative destinations, differing only in the one thing that
+    // decides this. Nothing is spawned and nothing is connected to: the whole
+    // question is answered by plan_stream, which is the same code that will
+    // refuse a real destination later. Sharing it is the point — a banner
+    // that disagreed with what happens on Start would be worse than none.
+    auto probe = [](const char* url) {
+        Destination d;
+        d.name = "probe";
+        d.url = url;
+        d.stream_key = "x";
+        return d;
+    };
+    const StreamPlan rtmp = plan_stream(manifest, probe("rtmp://example.invalid/live"), "pipe:0");
+    const StreamPlan srt  = plan_stream(manifest, probe("srt://example.invalid:9000"), "pipe:0");
+
+    auto sentence = [](const StreamPlan& p) {
+        return p.problem + (p.remedy.empty() ? "" : " " + p.remedy);
+    };
+
+    RoomSendability r;
+    r.rtmp_ok = rtmp.ok;
+    r.srt_ok = srt.ok;
+    r.any = rtmp.ok || srt.ok;
+
+    if (!r.any) {
+        // Both refused. Either for the same reason — no sound, packed audio,
+        // a track that has gone — or, for AV1, for reasons that read the same
+        // to the person in front of it. One message either way.
+        r.problem = sentence(rtmp);
+        return r;
+    }
+    if (!rtmp.ok) {
+        // The HEVC case, which is the whole reason SRT is here. plan_stream's
+        // own remedy already names SRT as the way out, so it is repeated
+        // rather than reworded: two different sentences about one situation
+        // is how an operator ends up believing there are two situations.
+        r.note = sentence(rtmp);
+    } else if (!srt.ok) {
+        r.note = sentence(srt);
+    }
+    return r;
+}
+
 StreamPlan plan_stream(const Manifest& manifest,
                        const Destination& dest,
                        const std::string& input) {

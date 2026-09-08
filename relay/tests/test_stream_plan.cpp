@@ -337,6 +337,52 @@ int main() {
               "while the address itself is still legible in the log");
     }
 
+
+    // ── What the room says it can do ────────────────────────────────────────
+    // One warning line sits above every destination. It used to be answered by
+    // a single RTMP probe, which was right while RTMP was all there was and
+    // became wrong the moment SRT could carry something RTMP could not: an
+    // HEVC service was declared unsendable on the page while an SRT
+    // destination was busy sending it.
+    std::printf("\nroom sendability\n");
+    {
+        auto r = sendability(ordinary());
+        CHECK(r.any && r.rtmp_ok && r.srt_ok,
+              "an ordinary H.264 service can go anywhere");
+        CHECK(r.problem.empty() && r.note.empty(),
+              "and the operator is told nothing, because there is nothing to say");
+    }
+    {
+        Manifest m = ordinary();
+        m.video.codec = "hevc";
+        auto r = sendability(m);
+        CHECK(r.any, "an HEVC service is NOT unsendable");
+        CHECK(!r.rtmp_ok && r.srt_ok, "it just cannot go to a streaming site");
+        CHECK(r.problem.empty(),
+              "so nothing tells the operator the service cannot be streamed");
+        CHECK(!r.note.empty(), "but they are told why half of it is unavailable");
+        CHECK(r.note.find("SRT") != std::string::npos,
+              "and where it CAN go, which is the point of saying anything");
+    }
+    {
+        // Refused everywhere: the banner goes back to being an obstacle.
+        Manifest m = ordinary();
+        m.video.codec = "av1";
+        auto r = sendability(m);
+        CHECK(!r.any && !r.rtmp_ok && !r.srt_ok, "AV1 can go nowhere");
+        CHECK(!r.problem.empty(), "which is stated plainly");
+        CHECK(r.note.empty(),
+              "with no note suggesting somewhere it might work after all");
+    }
+    {
+        // A content problem, as opposed to a transport one, stops both.
+        Manifest m = ordinary();
+        m.audio_tracks.clear();
+        auto r = sendability(m);
+        CHECK(!r.any && !r.problem.empty(),
+              "a service with no sound in it can go nowhere either");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL STREAM PLAN TESTS PASSED"
                                       : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

@@ -843,7 +843,8 @@ is the better answer for a given church, section 12 says so plainly.
 | Self-hosted, on storage you own | built |
 | Open protocol, no vendor lock-in | by design — the whole protocol is §4 |
 | Public simulcast to YouTube / Facebook / RTMP | built and pushing live to YouTube; not yet through a full service — H.264 feeds only (§8.2) |
-| SRT output, caller or listener, HEVC included | built; not yet run through a full service (§8.2) |
+| SRT output, caller or listener | built and receiving on a real client; not yet run through a full service (§8.2) |
+| HEVC out over SRT | built, and the remux verified against ffmpeg — but not yet carried from a real HEVC encoder (§8.2) |
 | Download a finished service as an MP4, all audio tracks | built (§8.2) |
 | Replay a finished service to a destination | proof of concept — one at a time, by hand (§8.2) |
 | Per-channel routing of packed audio at an OBS satellite | out of scope — use [atkAudio's OBS plugins](https://github.com/atkAudio/PluginForObsRelease) (§4.3.1) |

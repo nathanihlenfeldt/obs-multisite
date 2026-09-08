@@ -94,6 +94,11 @@ without being counted as a failure; it keeps up with the service while it
 waits, so whoever attaches gets what is happening now rather than everything
 they missed.
 
+**On HEVC over SRT:** the remux is verified — ffmpeg copies HEVC into MPEG-TS
+correctly and it reads back as HEVC at the far end — but as of this writing no
+service has actually been sent from an HEVC encoder through the relay. The
+transport is proven; that one path is not. Rehearse it before you rely on it.
+
 SRT needs an ffmpeg built with it. The container's is; if you have swapped in
 your own and it is not, the page says so where the address is typed, rather
 than letting you save something that will never start.

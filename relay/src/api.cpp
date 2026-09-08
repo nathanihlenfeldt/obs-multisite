@@ -236,6 +236,7 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         j["video"] = s.video_summary;
         j["can_send"] = s.can_send;
         j["cannot_send_reason"] = s.cannot_send_reason;
+        j["send_note"] = s.send_note;
         j["total_out_kbps"] = s.total_out_kbps;
         j["audio_labels"] = s.audio_labels;
         // So the page can say, where an address is typed, that this

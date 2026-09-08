@@ -60,6 +60,28 @@ struct StreamPlan {
     int         audio_index = -1;
 };
 
+// Which protocols could carry this service at all, for the one warning line
+// the room shows above every destination.
+//
+// This stopped having a single answer when SRT arrived: the two protocols do
+// not accept the same video, so "can this service be streamed?" now depends on
+// where it is going. Asked here rather than inline in the status page so the
+// banner and the tests get the same answer, and so a service that half works
+// says so instead of being declared unsendable.
+struct RoomSendability {
+    bool any = false;        // at least one protocol can carry it
+    bool rtmp_ok = false;
+    bool srt_ok = false;
+    // Why nothing can carry it. Empty when something can.
+    std::string problem;
+    // Why some can and some cannot — an HEVC service, in practice. Empty when
+    // they agree, in either direction. Kept apart from `problem` because it is
+    // information rather than an obstacle: there IS somewhere to send this.
+    std::string note;
+};
+
+RoomSendability sendability(const multisite::Manifest& manifest);
+
 // `input` is what ffmpeg reads. In the relay this is always "pipe:0": the
 // feeder owns the write end and hands over one fragment at a time, and a pipe
 // that goes quiet is what the machine reads as a stall.

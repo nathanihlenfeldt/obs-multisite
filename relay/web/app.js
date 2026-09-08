@@ -159,6 +159,11 @@ async function refresh() {
     message = s.storage_error;
   } else if (s.cannot_send_reason) {
     message = s.cannot_send_reason;
+  } else if (s.send_note) {
+    // Some destinations can take this service and some cannot — an HEVC
+    // service, in practice. Shown in the same place, because it is the same
+    // question, and there is only ever one of the two.
+    message = s.send_note;
   }
   warn.hidden = !message;
   warn.textContent = message;

@@ -337,19 +337,17 @@ ServiceStatus Service::status() const {
         else
             s.video_summary = codec;
 
-        // Answered once for the whole room using a representative
-        // destination, so the UI can say "this service cannot be streamed"
-        // before an operator sets one up and wonders why it will not start.
-        Destination probe;
-        probe.name = "probe";
-        probe.room_id = room.room_id;
-        probe.url = "rtmp://example.invalid/live";
-        probe.stream_key = "x";
-        const auto plan = plan_stream(snap.manifest, probe, "pipe:0");
-        s.can_send = plan.ok;
-        if (!plan.ok)
-            s.cannot_send_reason = plan.problem +
-                                   (plan.remedy.empty() ? "" : " " + plan.remedy);
+        // Answered once for the whole room, so the UI can warn before an
+        // operator sets a destination up and wonders why it will not start.
+        //
+        // Once per protocol, because they do not accept the same video: a
+        // single RTMP probe used to answer this, and once SRT could carry
+        // HEVC that probe started declaring a service unsendable while an SRT
+        // destination was busy sending it.
+        const auto send = sendability(snap.manifest);
+        s.can_send = send.any;
+        s.cannot_send_reason = send.problem;
+        s.send_note = send.note;
     }
 
     for (const auto& kv : m_sessions) {
