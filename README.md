@@ -65,7 +65,10 @@ live conversation between campuses, a two-way interview, or anything else where
 people need to respond to each other in real time. For that, use SRT or WebRTC:
 both are in OBS already, and there are many good hardware products built on
 them. Those approaches trade differently, sitting much closer to the raw
-condition of the connection at the moment you need it.
+condition of the connection at the moment you need it. (The relay can *send*
+SRT — see [Streaming to the public](#streaming-to-the-public) — but it sends
+from the bucket, minutes behind, so it inherits this project's trade rather
+than SRT's own.)
 
 This project takes the opposite trade deliberately. Content is written to disk
 before it is sent, sent again until the storage confirms it, and buffered deeply
@@ -138,9 +141,10 @@ Raspberry Pi appliance — and both are built. See
 service either.
 
 The public simulcast relay is built and is the first piece of Phase 7. It has
-pushed live streams to YouTube and survives having its encoder killed
-mid-stream, but it has not yet been through a full service, and it will not
-send an HEVC feed.
+pushed live streams to YouTube, sends over SRT as well as RTMP, and survives
+having its encoder killed mid-stream — but it has not yet been through a full
+service. HEVC can now go out over SRT; that path is verified against ffmpeg
+but has not yet carried real encoder output.
 
 **What works**
 
@@ -160,8 +164,9 @@ send an HEVC feed.
   a service whose encoder crashed is still watchable afterwards.
 - Operator docks in plain language, plus hotkeys.
 - **Public simulcast.** A separate container reads the same segments and pushes
-  them to YouTube, Facebook or any RTMP destination, a few minutes behind on
-  purpose. See [Streaming to the public](#streaming-to-the-public).
+  them to YouTube, Facebook or any RTMP destination — or over SRT, to a
+  broadcast partner, a hardware decoder or a contribution CDN — a few minutes
+  behind on purpose. See [Streaming to the public](#streaming-to-the-public).
 
 **What does not, yet** — see [Known gaps](#known-gaps).
 
@@ -550,8 +555,8 @@ src/appliance/  the headless campus player: DRM/KMS and ALSA output, the
 src/appliance/web/  the operator interface. No framework, no CDN — a campus
                 box often has no internet.
 relay/          the public simulcast relay: a container that pushes the same
-                segments to YouTube, Facebook or any RTMP destination. Uses
-                the core; the core knows nothing about it.
+                segments to YouTube, Facebook or any RTMP destination, or over
+                SRT. Uses the core; the core knows nothing about it.
 tests/          every guarantee above has a test.
 scripts/player/ the install script and systemd unit for the appliance.
 scripts/        optional Lua control script, superseded by the encoder dock.
@@ -623,7 +628,7 @@ phone and no SSH.
 
 The campuses are not always the only audience. `relay/` is a small self-hosted
 service that reads the same segments and pushes them out to YouTube, Facebook,
-or any RTMP destination.
+or any RTMP destination — and over SRT to anywhere that prefers it.
 
 It relays from the bucket rather than adding a second output to OBS, which
 matters twice over. The main site uploads once whether the service is going to
@@ -656,11 +661,25 @@ re-encoded.
   how long an outage at the main site can last before the public sees it.
 - **It reconnects by itself** and resumes from where it stopped, so nothing is
   skipped. A silence under 45 seconds is ridden out without even dropping the
-  connection.
-- **It refuses rather than guesses.** An HEVC feed and packed multi-channel
-  audio are both declined with a plain explanation, because sending either
-  onward would mean a stream the destination rejects, or a mic ISO going out to
-  the public.
+  connection. It watches both directions: content failing to arrive from the
+  main site and content failing to leave for the destination look identical to
+  ffmpeg, which reports neither, so the relay notices both itself and says
+  which one happened.
+- **RTMP or SRT, decided by the address you paste.** There is no protocol
+  setting: `rtmp://` and `srt://` are unmistakable, and asking a volunteer
+  which one they were given is asking them to get it wrong. SRT can also
+  *listen*, for a broadcast partner or hardware decoder that pulls from you
+  rather than being pushed to — written down by leaving the host out of the
+  address, `srt://:9000`, which is deliberately the only way to ask for one,
+  because it opens a port on a machine otherwise kept closed.
+- **HEVC goes out over SRT.** RTMP means FLV, and FLV means H.264 — which is
+  why choosing HEVC for the campuses used to cost a church its public stream
+  outright. SRT means MPEG-TS, which carries HEVC properly, so that trade is
+  no longer forced. It still cannot go to YouTube.
+- **It refuses rather than guesses.** AV1, HEVC to an RTMP destination, and
+  packed multi-channel audio are all declined with a plain explanation,
+  because sending any of them onward would mean a stream the destination
+  rejects, or a mic ISO going out to the public.
 
 It also does two things with services that have already finished:
 
@@ -697,6 +716,16 @@ Thirteen suites, all runnable without OBS (the `cmaf*` ones need FFmpeg and
 | `s3_url` | endpoint and bucket values survive being pasted with schemes, slashes and whitespace |
 | `core_portable` | the core has not acquired an OBS or Qt dependency |
 
+Building with `-DMULTISITE_BUILD_RELAY=ON` adds three more, which the container
+image runs as part of the build so a broken relay cannot become an image
+somebody deploys on a Sunday morning:
+
+| suite | what it proves |
+|---|---|
+| `stream_plan` | what may be sent onward and what must be refused — HEVC into FLV, AV1 anywhere, packed multi-channel audio, a sound feed that has vanished, a manifest whose track positions do not line up; that HEVC over SRT is allowed where it is not over RTMP; that a pasted SRT address is pulled apart with the secrets taken out of it; and that no secret survives redaction for the log |
+| `relay_state` | the awkward cases without a destination or a wait: a stall ridden out and then given up on, an unexpected exit and its backoff, ending cleanly versus being cut short, an edit that rebuilds a stream without counting as a fault, and an SRT listener with nobody attached waiting indefinitely rather than being treated as broken |
+| `config_store` | destinations and storage settings survive a restart, an invalid one is refused before it reaches the database, and an SRT destination's stream id, passphrase and latency round-trip intact |
+
 ---
 
 ## Known gaps
@@ -712,11 +741,19 @@ Thirteen suites, all runnable without OBS (the `cmaf*` ones need FFmpeg and
   is what an eight-channel de-embedder expects.
 - **AV1 is carried but lightly exercised**, unlike H.264 and HEVC.
 - **Seeking is accurate to about a second**, not to a frame.
-- **The relay will not send an HEVC feed.** Streaming sites want H.264 over
-  RTMP, and re-encoding on the way out is not built. H.264 is the default and
-  decodes fine everywhere, Raspberry Pi campuses included, so this only bites a
-  site that has chosen HEVC to save bandwidth — for which it is currently a
-  straight trade against streaming publicly.
+- **The relay will not send an HEVC feed to a streaming site.** Those want
+  H.264 over RTMP, and re-encoding on the way out is not built. An SRT
+  destination carries HEVC unchanged, so this is no longer a straight trade
+  against streaming publicly — but it does mean YouTube and Facebook stay out
+  of reach for an HEVC site. H.264 remains the default and decodes fine
+  everywhere, Raspberry Pi campuses included.
+- **HEVC over SRT has not carried real encoder output.** The remux is verified
+  — ffmpeg copies HEVC into MPEG-TS correctly and it reads back as HEVC at the
+  far end — but no service has yet gone out that way from an actual HEVC
+  encoder. Rehearse it before relying on it.
+- **SRT in listener mode needs a port opened**, and nothing is shipped to help.
+  Publish it on the container and open it on the firewall yourself; unlike the
+  web interface there is no proxy in front of it.
 - **The relay cannot split packed multi-channel audio**, and cannot start
   itself on a schedule or when the encoder goes live.
 - **Replaying a past service is a proof of concept.** One at a time, started by
@@ -752,11 +789,13 @@ Thirteen suites, all runnable without OBS (the `cmaf*` ones need FFmpeg and
   [Known gaps](#known-gaps).
 - **Phase 7 — Extensions.** The public simulcast relay is built (see
   [Streaming to the public](#streaming-to-the-public)) and has not yet carried
-  a service. Still to come there: re-encoding, so an HEVC feed can be streamed;
-  splitting packed multi-channel audio; signing in to YouTube instead of
+  a service. SRT output, caller and listener, is in and carrying a real client.
+  Still to come there: re-encoding, so an HEVC feed can reach a streaming site
+  too; splitting packed multi-channel audio; signing in to YouTube instead of
   pasting a stream key; and starting automatically when the encoder goes live.
-  Not started at all: web and mobile simulcast served straight from the bucket,
-  redundancy, and local insertion.
+  Not started at all: a hosted streaming provider (Mux or Cloudflare Stream)
+  for a persistent web player embed, web and mobile simulcast served straight
+  from the bucket, redundancy, and local insertion.
 
 - **Phase 8 — External control API.** So a service can be run from a physical
   button rather than a dock. The plan: both plugins expose their commands as
