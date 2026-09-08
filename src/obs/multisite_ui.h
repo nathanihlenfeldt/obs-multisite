@@ -22,6 +22,14 @@ struct EncoderStats {
     unsigned long long bytes = 0;
     int         link_health = 0;      // 0 healthy, 1 degraded, 2 offline
     std::string last_error;
+    // What the link is doing, measured from the segment uploads themselves.
+    // The colo is the Cloudflare edge serving this bucket — a main site in
+    // Johannesburg uploading to Amsterdam explains a queue that will not
+    // drain, and nothing else on screen would ever say so.
+    std::string colo;
+    std::string storage_host;
+    double      upload_bytes_per_s = 0.0;
+    unsigned long long upload_samples = 0;   // 0 = show no figure at all
 };
 
 struct EncoderControls {
@@ -167,6 +175,13 @@ struct DecoderSnapshot {
     // packed multi-channel feed.
     std::vector<std::string> channel_labels;
     std::string audio_track_label;
+    // The link, measured from this campus's own segment downloads. The colo is
+    // the Cloudflare edge serving the bucket; a campus a long way from it can
+    // otherwise only see that the picture is late, never why.
+    std::string colo;
+    std::string storage_host;
+    double      download_bytes_per_s = 0.0;
+    unsigned long long download_samples = 0;   // 0 = show no figure at all
 };
 bool decoder_snapshot(DecoderSnapshot& out);
 void decoder_pause_all();

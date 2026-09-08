@@ -59,6 +59,11 @@ struct BroadcastStatus {
     int         link_health = 0;      // 0 healthy, 1 degraded, 2 offline
     std::string last_error;
     double      uptime_s = 0.0;
+    // The link, as measured from this broadcast's own uploads.
+    std::string colo;
+    std::string storage_host;
+    double      upload_bytes_per_s = 0.0;
+    unsigned long long upload_samples = 0;
 };
 
 // A video encoder OBS actually has on this machine.

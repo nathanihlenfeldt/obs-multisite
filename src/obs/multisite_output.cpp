@@ -295,6 +295,12 @@ EncoderStats OutputCtx::stats() const {
     es.link_health = st.health == LinkHealth::Healthy  ? 0
                    : st.health == LinkHealth::Degraded ? 1 : 2;
     es.last_error = session->last_error();
+    if (transport) {
+        es.colo               = transport->last_colo();
+        es.storage_host       = transport->host();
+        es.upload_bytes_per_s = transport->observed_upload_bytes_per_s();
+        es.upload_samples     = transport->upload_samples();
+    }
     return es;
 }
 

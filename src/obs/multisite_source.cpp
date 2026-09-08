@@ -1288,6 +1288,19 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     }
     out.playing = playing.load();
     out.locked  = controls_locked.load();
+    {
+        // The convention in this file: take the reference under obj_mtx and
+        // release it before doing anything with it, so the UI thread never
+        // holds that lock while the download thread wants it.
+        std::shared_ptr<S3Transport> tx;
+        { std::lock_guard<std::mutex> lk(obj_mtx); tx = transport; }
+        if (tx) {
+            out.colo                 = tx->last_colo();
+            out.storage_host         = tx->host();
+            out.download_bytes_per_s = tx->observed_download_bytes_per_s();
+            out.download_samples     = tx->download_samples();
+        }
+    }
     out.loading        = loading_event.load();
     out.seek_target_ms = seek_target_ms.load();
     // Playing, but nothing has reached OBS yet — the buffer is still filling.

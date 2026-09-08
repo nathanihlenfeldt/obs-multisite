@@ -78,8 +78,8 @@ Player::StorageHealth Player::storage_health(bool probe) {
     h.endpoint     = tx->host();
     h.colo         = tx->last_colo();
     h.server       = tx->last_server();
-    h.bytes_per_s  = tx->observed_bytes_per_s();
-    h.rate_samples = tx->rate_samples();
+    h.bytes_per_s  = tx->observed_download_bytes_per_s();
+    h.rate_samples = tx->download_samples();
 
     if (!probe) {
         // Traffic having been observed at all is itself evidence the bucket is

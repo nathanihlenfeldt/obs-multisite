@@ -100,6 +100,8 @@ private:
     QLabel* m_marker = nullptr;
     QLabel* m_audio = nullptr;
     QLabel* m_error = nullptr;
+    QLabel* m_storage = nullptr;   // colo + observed download rate
+    QLabel* m_version = nullptr;
     TimelineBar* m_timeline = nullptr;
     QPushButton* m_pause = nullptr;
     QPushButton* m_resume = nullptr;

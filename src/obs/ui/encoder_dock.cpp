@@ -21,6 +21,7 @@
 #include <QMessageBox>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QStringList>
 #include <QTimer>
 #include <QVBoxLayout>
 #include <QDateTime>
@@ -43,6 +44,19 @@ static QString friendly_duration(double seconds) {
     if (mins == 0) return QObject::tr("%1 sec").arg(secs);
     if (secs == 0) return QObject::tr("%1 min").arg(mins);
     return QObject::tr("%1 min %2 sec").arg(mins).arg(secs);
+}
+
+// The link, in one line: where the bucket answers from and what the transfer
+// is managing. Only what has actually been measured — an unmeasured rate shown
+// as 0 Mbps reads as a dead link rather than as an absence of evidence.
+static QString link_summary(const QString& colo, const QString& host,
+                            double bytes_per_s, unsigned long long samples) {
+    QStringList bits;
+    if (!colo.isEmpty())      bits << colo;
+    else if (!host.isEmpty()) bits << host.section('.', 0, 0);
+    if (samples > 0 && bytes_per_s > 0.0)
+        bits << QString::number(bytes_per_s * 8.0 / 1e6, 'f', 1) + " Mbps";
+    return bits.isEmpty() ? QString("—") : bits.join(" · ");
 }
 
 EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
@@ -75,6 +89,10 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     addStat(2, 0, "Dock.Retries",   m_retries);
     addStat(2, 1, "Dock.Uploaded",  m_data);
     addStat(3, 0, "Dock.Link",      m_link);
+    // Where the bucket is being served from and what the upload is managing.
+    // A main site whose queue will not drain has no other way to tell a slow
+    // link from a distant one.
+    addStat(3, 1, "Dock.Bucket",    m_storage);
 
     m_error = new QLabel(QString(), statusBox);
     m_error->setWordWrap(true);
@@ -111,6 +129,12 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
             this, &EncoderDock::onOpenSettings);
 
     root->addStretch(1);
+
+    // Always on screen, so the version in a bug report is the real one and
+    // nobody has to be told where to find it.
+    m_version = new QLabel(QString("obs-multisite %1").arg(PLUGIN_VERSION), this);
+    m_version->setStyleSheet("color: palette(text); opacity: 0.55;");
+    root->addWidget(m_version);
 
     // ── Settings dialog ──────────────────────────────────────────────────────
     m_settings = new QDialog(this);
@@ -411,9 +435,22 @@ void EncoderDock::refresh() {
         m_state->setText(tr_("Dock.Idle"));
         m_state->setStyleSheet("font-weight: bold; color: palette(mid);");
         m_uptime->setText("—");
+        // Not live, but the figures from the last broadcast are still the
+        // truth about this machine's link, so they stay rather than blanking.
+        if (m_storage)
+            m_storage->setText(link_summary(
+                QString::fromStdString(st.colo),
+                QString::fromStdString(st.storage_host),
+                st.upload_bytes_per_s, st.upload_samples));
         m_error->hide();
         return;
     }
+
+    if (m_storage)
+        m_storage->setText(link_summary(
+            QString::fromStdString(st.colo),
+            QString::fromStdString(st.storage_host),
+            st.upload_bytes_per_s, st.upload_samples));
 
     m_state->setText(tr_("Dock.Broadcasting"));
     m_state->setStyleSheet("font-weight: bold; color: #35c489;");

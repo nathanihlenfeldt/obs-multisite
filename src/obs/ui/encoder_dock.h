@@ -53,6 +53,8 @@ private:
     QLineEdit* m_region = nullptr;
     QLineEdit* m_room = nullptr;
     QCheckBox* m_tags = nullptr;
+    QLabel*    m_storage = nullptr;   // colo + observed upload rate
+    QLabel*    m_version = nullptr;
 
     // media
     QComboBox* m_encoder = nullptr;
