@@ -160,16 +160,8 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_markerLabels  = new QLineEdit(mediaBox);
     // Encoder choice, populated from what OBS actually has here. A hardware
     // encoder leaves the CPU free for everything else the main site is doing.
+    // Filled by populateEncoders() rather than here — see that function.
     m_encoder = new QComboBox(mediaBox);
-    for (const auto& e : available_video_encoders()) {
-        // Show the codec explicitly: two entries can have similar names, and
-        // the codec is what actually matters at the satellite.
-        QString label = QString::fromStdString(e.name);
-        label += "  —  " + QString::fromStdString(e.codec).toUpper();
-        if (e.hardware) label += tr_("Dock.HardwareSuffix");
-        if (e.codec == "av1") label += tr_("Dock.ExperimentalSuffix");
-        m_encoder->addItem(label, QString::fromStdString(e.id));
-    }
     m_encoder->setToolTip(tr_("Dock.EncoderHint"));
     mform->addRow(tr_("Dock.Encoder"), m_encoder);
 
@@ -254,9 +246,60 @@ void EncoderDock::updateAudioFields() {
 
 void EncoderDock::onOpenSettings() {
     if (!m_settings) return;
+    populateEncoders();        // by now every module has registered its own
     updateAudioFields();       // OBS's audio layout may have changed
     m_settings->exec();
     onSaveSettings();      // persist whatever was changed
+}
+
+// Refill from what OBS has registered at this moment.
+//
+// This used to run in the constructor, and the constructor runs inside
+// obs_module_load — so the list was whatever happened to be registered by the
+// time this module loaded, and OBS loads modules in alphabetical order. On a
+// machine with NVENC, QuickSync and x264, `obs-multisite` sorts before
+// `obs-nvenc`, `obs-qsv11` and `obs-x264`, so none of them existed yet and the
+// operator was offered the two AV1 encoders from `obs-ffmpeg` and nothing
+// else. Even the x264 safety net could not help: obs-x264 had not registered,
+// so asking for its codec returned nothing.
+//
+// Called when Settings is opened, which is the only time the list is seen and
+// is always long after loading has finished.
+void EncoderDock::populateEncoders() {
+    if (!m_encoder) return;
+
+    // Whatever is selected now, or the saved choice if nothing is.
+    QString want = m_encoder->currentData().toString();
+    if (want.isEmpty()) {
+        auto cfg = BroadcastController::instance().settings();
+        want = QString::fromStdString(cfg.video_encoder_id);
+    }
+
+    m_encoder->blockSignals(true);
+    m_encoder->clear();
+    for (const auto& e : available_video_encoders()) {
+        // Show the codec explicitly: two entries can have similar names, and
+        // the codec is what actually matters at the satellite.
+        QString label = QString::fromStdString(e.name);
+        label += "  —  " + QString::fromStdString(e.codec).toUpper();
+        if (e.hardware) label += tr_("Dock.HardwareSuffix");
+        if (e.codec == "av1") label += tr_("Dock.ExperimentalSuffix");
+        m_encoder->addItem(label, QString::fromStdString(e.id));
+    }
+    const int idx = want.isEmpty() ? -1 : m_encoder->findData(want);
+    if (idx >= 0) m_encoder->setCurrentIndex(idx);
+    m_encoder->blockSignals(false);
+
+    // Say how many were found and whether the saved one is among them. A
+    // missing encoder falls back to x264 at go-live, and the log is where an
+    // operator finds out why the picture is software-encoded.
+    if (!want.isEmpty() && idx < 0)
+        mlog_warn("encoder dock: %d encoder(s) available; the saved choice "
+                  "'%s' is not among them", m_encoder->count(),
+                  want.toStdString().c_str());
+    else
+        mlog_info("encoder dock: %d video encoder(s) available",
+                  m_encoder->count());
 }
 
 void EncoderDock::loadIntoFields() {
