@@ -1455,7 +1455,15 @@ void SourceCtx::seek_to_time(long long wall_ms) {
     if (!sess) return;
     const int64_t got = sess->seek_to_wall_ms((int64_t)wall_ms);
     if (got == 0) {
-        mlog_warn("source: that moment is no longer available in storage");
+        // The session reports which bound was hit — retention floor, before
+        // the start, or past the end. Reporting one of those as the others is
+        // how a seek past the end of a recording looked like data loss.
+        {
+            const std::string why = sess->last_error();
+            mlog_warn("source: %s", why.empty()
+                                        ? "that moment cannot be played"
+                                        : why.c_str());
+        }
         return;
     }
     after_jump((long long)got);

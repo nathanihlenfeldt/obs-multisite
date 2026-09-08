@@ -639,9 +639,22 @@ std::vector<std::pair<uint64_t, uint64_t>> DecoderSession::cached_ranges() const
 int64_t DecoderSession::seek_to_wall_ms(int64_t wall_ms) {
     uint64_t target = 0;
     int64_t  seg_start = 0;
+    // Five different things make a seek impossible, and the hosts reported all
+    // of them as "that moment is no longer available in storage". For a seek
+    // past the end of a recording — which is what an operator scrubbing near
+    // the right-hand edge actually hits — that sentence is not merely vague
+    // but wrong: nothing has been removed. Say which bound was hit, here,
+    // where it is known.
+    auto fail = [this](const char* why) -> int64_t {
+        std::lock_guard<std::mutex> elk(m_err_mtx);
+        m_last_error = why;
+        return 0;
+    };
     {
         std::lock_guard<std::mutex> lk(m_mtx);
-        if (m_manifest.started_at_ms <= 0) return 0;
+        if (m_manifest.started_at_ms <= 0)
+            return fail("nothing is loaded yet, so there is no timeline to "
+                        "move within");
         const double seg = m_segment_duration_s.load() > 0.1 ? m_segment_duration_s.load() : 6.0;
 
         // Prefer an exact match from the manifest window.
@@ -656,15 +669,26 @@ int64_t DecoderSession::seek_to_wall_ms(int64_t wall_ms) {
         if (!found) {
             // Outside the window: derive from the event start.
             const int64_t offset = wall_ms - m_manifest.started_at_ms;
-            if (offset < 0) return 0;
+            if (offset < 0)
+                return fail("that is before this service started");
             target = (uint64_t)((double)offset / 1000.0 / seg);
             seg_start = m_manifest.started_at_ms +
                         (int64_t)((double)target * seg * 1000.0);
         }
-        if (target < m_first_available_seq.load() || target > m_latest_seq.load()) return 0;
+        // The two ends are different problems and must not read the same. The
+        // floor has genuinely gone — retention removed it. The ceiling has
+        // not: it is simply the end of what exists so far.
+        if (target < m_first_available_seq.load())
+            return fail("that moment has passed out of storage — it is older "
+                        "than the retention rule keeps");
+        if (target > m_latest_seq.load())
+            return fail(is_vod(m_room.load())
+                            ? "that is past the end of this recording"
+                            : "that is ahead of what has been broadcast yet");
     }
 
-    if (!seek(target)) return 0;              // seek() raises the discontinuity
+    if (!seek(target))                        // seek() raises the discontinuity
+        return fail("that moment is not available to play");
     {
         std::lock_guard<std::mutex> lk(m_mtx);
         m_pending_skip_ms = wall_ms - seg_start;
