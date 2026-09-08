@@ -6,10 +6,27 @@
 // Backblaze B2, Wasabi).
 //
 #include "transport.h"
+#include "storage_health.h"
 #include <memory>
 #include <string>
 
 namespace multisite {
+
+// The answer to "is the bucket reachable, and from where?" — one read-only
+// request, so a satellite's read-only credentials are enough. self_test()
+// cannot serve here: it writes a probe object, which a decoder key is rightly
+// forbidden from doing, so it reports a permissions failure as a fault.
+struct StorageProbe {
+    bool        reachable = false;   // the endpoint answered at all
+    bool        readable = false;    // …and gave us the object
+    long        http_status = 0;
+    std::string error;               // empty when readable
+    int64_t     round_trip_ms = 0;
+    // Cloudflare's edge that served it, e.g. "JNB". Empty for other stores.
+    std::string colo;
+    std::string server;              // the Server header, verbatim
+    std::string endpoint;            // host asked, for the display
+};
 
 struct S3Config {
     // Either give a full endpoint host, or an R2 account id (which builds the
@@ -49,7 +66,24 @@ public:
 
     // Simple connectivity/credential check: PUT then GET a tiny probe object.
     // Returns an empty string on success, or a human-readable error.
+    // Encoder-side only — it writes, so a read-only key fails it by design.
     std::string self_test();
+
+    // Read-only reachability check, for a satellite or the relay. `key` should
+    // be something the site expects to exist — a room's live.json — so a 404
+    // is meaningful rather than expected.
+    StorageProbe probe(const std::string& key);
+
+    // Where the last response came from, and how fast the link has been.
+    // Populated by ordinary traffic, so during a service these reflect the
+    // real segment fetches rather than a synthetic test.
+    std::string last_colo() const;
+    std::string last_server() const;
+    // Smoothed observed throughput in bytes per second, and how many
+    // transfers large enough to be worth timing have contributed. 0 samples
+    // means no figure should be shown rather than a zero rate.
+    double observed_bytes_per_s() const;
+    uint64_t rate_samples() const;
 
     std::string host() const;
 

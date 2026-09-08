@@ -25,6 +25,20 @@ static size_t write_to_vec(void* ptr, size_t sz, size_t nm, void* ud) {
     return n;
 }
 
+// What a response told us about itself. Only the two headers worth keeping:
+// cf-ray, whose suffix is the Cloudflare edge that served the request, and
+// Server, which distinguishes R2 from AWS from MinIO without asking anybody.
+struct HeaderCtx { std::string cf_ray; std::string server; };
+static size_t collect_headers(char* ptr, size_t sz, size_t nm, void* ud) {
+    auto* hc = static_cast<HeaderCtx*>(ud);
+    const size_t n = sz * nm;
+    const std::string line(ptr, n);
+    std::string v;
+    if (header_is(line, "cf-ray", v))      hc->cf_ray = v;
+    else if (header_is(line, "server", v)) hc->server = v;
+    return n;
+}
+
 struct ReadCtx { const uint8_t* data; size_t size; size_t pos; };
 static size_t read_from_buf(void* dest, size_t sz, size_t nm, void* ud) {
     auto* rc = static_cast<ReadCtx*>(ud);
@@ -67,6 +81,22 @@ static std::string clean_segment(std::string v) {
 
 struct S3Transport::Impl {
     S3Config cfg;
+
+    // Observations from ordinary traffic. Guarded because the decoder's
+    // download thread writes them while the UI thread reads them, several
+    // times a second.
+    mutable std::mutex obs_mtx;
+    std::string last_colo;
+    std::string last_server;
+    RateMeter   rate;
+
+    void observe(const HeaderCtx& hc, uint64_t bytes, double seconds) {
+        std::lock_guard<std::mutex> lk(obs_mtx);
+        const std::string colo = cloudflare_colo(hc.cf_ray);
+        if (!colo.empty())        last_colo = colo;
+        if (!hc.server.empty())   last_server = hc.server;
+        rate.add(bytes, seconds);
+    }
 
     std::string host() const {
         const std::string ep = clean_host(cfg.endpoint_host);
@@ -167,8 +197,13 @@ struct S3Transport::Impl {
         return res;
     }
 
-    // GET used only by self_test.
-    PutResult do_get(const std::string& key, std::vector<uint8_t>& out) {
+    // The read path: every manifest, every marker file and every segment a
+    // satellite fetches comes through here. That is why the observations are
+    // taken here rather than in a separate test — the colo and the throughput
+    // shown to an operator are measured from the traffic actually carrying the
+    // service, not from a synthetic probe that might take a different route.
+    PutResult do_get(const std::string& key, std::vector<uint8_t>& out,
+                     HeaderCtx* hdrs = nullptr, int64_t* elapsed_ms = nullptr) {
         ensure_curl();
         PutResult res;
         CURL* curl = curl_easy_init();
@@ -178,10 +213,14 @@ struct S3Transport::Impl {
         auto sr = signer.sign("GET", url, {}, {});
         struct curl_slist* h = nullptr;
         for (const auto& l : sr.header_lines()) h = curl_slist_append(h, l.c_str());
+        HeaderCtx hc;
         curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
         curl_easy_setopt(curl, CURLOPT_HTTPHEADER, h);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_to_vec);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &out);
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, collect_headers);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &hc);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)cfg.connect_timeout_ms);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)cfg.request_timeout_ms);
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
         CURLcode cc = curl_easy_perform(curl);
@@ -190,7 +229,23 @@ struct S3Transport::Impl {
             res.http_status = code;
             res.success = (code >= 200 && code < 300);
             if (!res.success) res.error = "HTTP " + std::to_string(code);
-        } else res.error = curl_easy_strerror(cc);
+
+            // curl's own figure for the transfer, which excludes name
+            // resolution and the handshake — so this is the link's throughput
+            // rather than a round trip's.
+            curl_off_t t_us = 0;
+            curl_easy_getinfo(curl, CURLINFO_STARTTRANSFER_TIME_T, &t_us);
+            curl_off_t total_us = 0;
+            curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME_T, &total_us);
+            const double transfer_s = total_us > t_us
+                ? (double)(total_us - t_us) / 1e6 : 0.0;
+            if (elapsed_ms) *elapsed_ms = (int64_t)(total_us / 1000);
+            observe(hc, (uint64_t)out.size(), transfer_s);
+        } else {
+            res.error = curl_easy_strerror(cc);
+            if (elapsed_ms) *elapsed_ms = 0;
+        }
+        if (hdrs) *hdrs = hc;
         curl_slist_free_all(h);
         curl_easy_cleanup(curl);
         return res;
@@ -211,6 +266,64 @@ std::string S3Transport::base_url() const {
 S3Transport::~S3Transport() = default;
 
 std::string S3Transport::host() const { return d->host(); }
+
+std::string S3Transport::last_colo() const {
+    std::lock_guard<std::mutex> lk(d->obs_mtx);
+    return d->last_colo;
+}
+std::string S3Transport::last_server() const {
+    std::lock_guard<std::mutex> lk(d->obs_mtx);
+    return d->last_server;
+}
+double S3Transport::observed_bytes_per_s() const {
+    std::lock_guard<std::mutex> lk(d->obs_mtx);
+    return d->rate.bytes_per_s();
+}
+uint64_t S3Transport::rate_samples() const {
+    std::lock_guard<std::mutex> lk(d->obs_mtx);
+    return d->rate.samples();
+}
+
+StorageProbe S3Transport::probe(const std::string& key) {
+    StorageProbe p;
+    p.endpoint = d->host();
+    if (p.endpoint.empty()) {
+        p.error = "no endpoint or account id has been set";
+        return p;
+    }
+
+    std::vector<uint8_t> body;
+    HeaderCtx hc;
+    int64_t ms = 0;
+    const PutResult r = d->do_get(key, body, &hc, &ms);
+
+    p.http_status   = r.http_status;
+    p.round_trip_ms = ms;
+    p.colo          = cloudflare_colo(hc.cf_ray);
+    p.server        = hc.server;
+    // An HTTP status of any kind means the endpoint is there and answering,
+    // which is a different fact from whether our key may read the object —
+    // and they send an operator to different places. DNS or a dead link gives
+    // no status at all.
+    p.reachable = r.http_status > 0;
+    p.readable  = r.success;
+
+    if (r.success) return p;
+    if (!p.reachable) {
+        p.error = r.error.empty() ? "the endpoint could not be reached"
+                                  : r.error;
+    } else if (r.http_status == 404) {
+        p.error = "reached the bucket, but " + key + " is not there — check "
+                  "the feed name, or nothing has been broadcast to it yet";
+    } else if (r.http_status == 403 || r.http_status == 401) {
+        p.error = "reached the bucket, but the key was refused — check the "
+                  "access key, the secret and the bucket name";
+    } else {
+        p.error = "reached the bucket, but it answered HTTP " +
+                  std::to_string(r.http_status);
+    }
+    return p;
+}
 
 PutResult S3Transport::put(const std::string& key,
                            const std::vector<uint8_t>& body,

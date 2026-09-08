@@ -38,6 +38,7 @@ add_library(multisite_core STATIC
     src/core/decoder_session.cpp
     src/core/aws_sigv4.cpp
     src/core/s3_list_xml.cpp
+    src/core/storage_health.cpp
     src/core/event_catalog.cpp)
 target_include_directories(multisite_core PUBLIC src src/core)
 # Must be position-independent: this static lib gets linked into the shared
@@ -88,6 +89,14 @@ endif()
 add_executable(test_crypto tests/test_crypto.cpp)
 target_link_libraries(test_crypto PRIVATE multisite_core)
 add_test(NAME crypto COMMAND test_crypto)
+
+# The colo and the throughput figure an operator is shown when a campus
+# stutters. Kept out of the transport so they can be tested with no network,
+# no bucket and no libcurl — the transport itself is not built on a machine
+# without curl, which is exactly where these would go untested.
+add_executable(test_storage_health tests/test_storage_health.cpp)
+target_link_libraries(test_storage_health PRIVATE multisite_core)
+add_test(NAME storage_health COMMAND test_storage_health)
 
 add_executable(test_session tests/test_session.cpp)
 target_link_libraries(test_session PRIVATE multisite_core)
@@ -416,7 +425,8 @@ if(BUILD_OBS_PLUGIN)
         src/obs/multisite_source.cpp
         src/obs/multisite_ui.cpp
         src/obs/broadcast_controller.cpp
-        src/obs/decoder_settings.cpp)
+        src/obs/decoder_settings.cpp
+        src/obs/plugin_role.cpp)
     target_include_directories(obs-multisite PRIVATE src src/core)
     target_compile_definitions(obs-multisite PRIVATE
         PLUGIN_VERSION="${PROJECT_VERSION}")
@@ -455,6 +465,7 @@ if(BUILD_OBS_PLUGIN)
         target_sources(obs-multisite PRIVATE
             src/obs/ui/encoder_dock.cpp
             src/obs/ui/decoder_dock.cpp
+            src/obs/ui/role_selector.cpp
             src/obs/ui/dock_register.cpp)
         set_target_properties(obs-multisite PROPERTIES AUTOMOC ON)
         target_link_libraries(obs-multisite PRIVATE Qt6::Widgets)
