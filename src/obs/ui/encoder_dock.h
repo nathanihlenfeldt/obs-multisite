@@ -37,6 +37,11 @@ private slots:
 
 private:
     void loadIntoFields();
+    // Refill the encoder list from what OBS has registered *now*, preserving
+    // the operator's choice. Must not be left to construction time: the docks
+    // are built during obs_module_load, when modules later in the alphabet
+    // have not registered their encoders yet.
+    void populateEncoders();
     void setLiveState(bool live);
 
     // storage

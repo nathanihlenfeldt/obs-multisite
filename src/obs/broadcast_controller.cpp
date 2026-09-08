@@ -15,6 +15,13 @@ namespace multisite_obs {
 // with NVENC, QuickSync, AMF or nothing but x264.
 std::vector<EncoderChoice> available_video_encoders() {
     std::vector<EncoderChoice> out;
+    // Every video encoder rejected, and why. Reported once per session,
+    // because "the dock is missing my encoder" is otherwise unanswerable
+    // without a build: OBS's own log lists what exists, and nothing said why
+    // this plugin declined any of it.
+    static bool reported = false;
+    std::string rejected;
+
     const char* id = nullptr;
     for (size_t i = 0; obs_enum_encoder_types(i, &id); ++i) {
         if (!id) continue;
@@ -25,14 +32,24 @@ std::vector<EncoderChoice> available_video_encoders() {
         // encoder twice: the real one plus a deprecated alias for the same
         // hardware. OBS's own encoder list filters on these flags.
         const uint32_t caps = obs_get_encoder_caps(id);
-        if (caps & (OBS_ENCODER_CAP_DEPRECATED | OBS_ENCODER_CAP_INTERNAL))
+        if (caps & (OBS_ENCODER_CAP_DEPRECATED | OBS_ENCODER_CAP_INTERNAL)) {
+            rejected += std::string(" ") + id +
+                        ((caps & OBS_ENCODER_CAP_DEPRECATED) ? "(deprecated)"
+                                                             : "(internal)");
             continue;
+        }
 
         const char* codec = obs_get_encoder_codec(id);
-        if (!codec) continue;
+        if (!codec) {
+            rejected += std::string(" ") + id + "(no codec reported)";
+            continue;
+        }
         const std::string c = codec;
         // Only codecs the CMAF muxer and the satellite decoder handle.
-        if (c != "h264" && c != "hevc" && c != "av1") continue;
+        if (c != "h264" && c != "hevc" && c != "av1") {
+            rejected += std::string(" ") + id + "(codec " + c + ")";
+            continue;
+        }
 
         EncoderChoice e;
         e.id = id;
@@ -51,7 +68,10 @@ std::vector<EncoderChoice> available_video_encoders() {
         bool dup = false;
         for (const auto& x : out)
             if (x.name == e.name && x.codec == e.codec) { dup = true; break; }
-        if (dup) continue;
+        if (dup) {
+            rejected += std::string(" ") + id + "(duplicate name)";
+            continue;
+        }
 
         out.push_back(e);
     }
@@ -69,6 +89,16 @@ std::vector<EncoderChoice> available_video_encoders() {
             e.codec = "h264";
             out.push_back(e);
         }
+    }
+
+    if (!reported) {
+        reported = true;
+        std::string offered;
+        for (const auto& e : out) offered += " " + e.id;
+        mlog_info("video encoders offered:%s",
+                  offered.empty() ? " none" : offered.c_str());
+        if (!rejected.empty())
+            mlog_info("video encoders not offered:%s", rejected.c_str());
     }
 
     // Hardware first, then by codec, so the best option is the obvious one.
