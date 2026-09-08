@@ -245,7 +245,13 @@ endif()
 option(BUILD_PLAYER "Build the satellite appliance (headless player)" ON)
 
 if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
-    set(MULTISITE_PLAYER_VERSION "0.1.0" CACHE STRING "Player version string")
+    # The one version there is. This was a separate string defaulting to
+    # "0.1.0" that nothing ever set — not the installer, not CI — so a box
+    # reported 0.1.0 for every release after the first, in the log and in the
+    # System panel. A version an operator quotes in a bug report has to be the
+    # real one, so it comes from the project.
+    set(MULTISITE_PLAYER_VERSION "${PROJECT_VERSION}"
+        CACHE STRING "Player version string" FORCE)
     # Where the operator interface is installed. Overridable at runtime with
     # --web-root so the page can be edited on a running box.
     set(MULTISITE_PLAYER_WEB_ROOT "${CMAKE_INSTALL_PREFIX}/share/multisite-player/web"
