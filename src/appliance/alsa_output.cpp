@@ -14,6 +14,7 @@
 //
 #include "audio_output.h"
 #include "log.h"
+#include "sysinfo.h"   // to report why sound broke up, rather than guess
 
 #include <alsa/asoundlib.h>
 
@@ -196,8 +197,25 @@ bool AlsaOutput::recover(int err) {
     }
     if (m_xruns - m_logged_xruns >= 10) {
         m_logged_xruns = m_xruns;
-        plog_warn("sound has broken up %lld times — the box may be running "
-                  "hot or short of power", m_xruns);
+        // Say what the box reports rather than guessing at it. This used to
+        // blame heat or power unconditionally, and the one time it fired in
+        // the field it did so straight after five decoder restarts inside
+        // thirteen seconds — somebody scrubbing the timeline, not a hot
+        // heatsink. The Pi publishes both conditions, so ask.
+        const SystemInfo sys = system_info();
+        const char* why =
+              (sys.under_voltage && sys.throttled)
+                  ? " — the power supply is not keeping up and the board is "
+                    "throttling"
+            : sys.under_voltage
+                  ? " — the board reports under-voltage, so suspect the power "
+                    "supply or cable"
+            : sys.throttled
+                  ? " — the board is throttling, so suspect cooling"
+            : " — the board reports neither under-voltage nor throttling, so "
+              "this is most likely the feed or a burst of seeking rather than "
+              "the hardware";
+        plog_warn("sound has broken up %lld times%s", m_xruns, why);
     }
     return true;
 }
