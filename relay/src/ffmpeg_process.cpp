@@ -34,8 +34,7 @@ bool ffmpeg_supports_srt() {
         // for.
         size_t i = 0;
         while (i < out.size()) {
-            size_t nl = out.find('
-', i);
+            size_t nl = out.find('\n', i);
             if (nl == std::string::npos) nl = out.size();
             size_t a = i, b = nl;
             while (a < b && std::isspace((unsigned char)out[a])) ++a;
