@@ -75,6 +75,12 @@ TimelineBar::TimelineBar(QWidget* parent) : QWidget(parent) {
 
 QSize TimelineBar::minimumSizeHint() const { return QSize(160, 46); }
 
+void TimelineBar::setPlaceholder(const QString& why) {
+    if (m_placeholder == why) return;
+    m_placeholder = why;
+    update();
+}
+
 void TimelineBar::setSpan(long long earliest_ms, long long live_ms) {
     if (m_earliest == earliest_ms && m_live == live_ms) return;
     m_earliest = earliest_ms; m_live = live_ms;
@@ -120,7 +126,17 @@ void TimelineBar::paintEvent(QPaintEvent*) {
     p.setBrush(QColor(0x36, 0x3b, 0x41));
     p.drawRoundedRect(QRect(0, y, w, h), 4, 4);
 
-    if (m_live <= m_earliest) return;
+    if (m_live <= m_earliest) {
+        // No span to draw. Say why rather than leaving a bar that looks
+        // broken: this is the ordinary state before an event is loaded, and
+        // it should not be indistinguishable from one that has failed.
+        if (!m_placeholder.isEmpty()) {
+            p.setPen(QPen(QColor(0x8b, 0x91, 0x98)));
+            p.drawText(QRect(0, y - 4, w, h + 8),
+                       Qt::AlignCenter, m_placeholder);
+        }
+        return;
+    }
 
     // Three states, three distinct colours — and no translucent overlays.
     // Layering a see-through "played" band over the downloaded band produced
@@ -732,6 +748,14 @@ void DecoderDock::refresh() {
         m_resume->setEnabled(false);
         m_live->setEnabled(false);
         m_jumpMarker->setEnabled(false);
+        // Clear the bar rather than leaving whatever was last drawn on it.
+        // A stale timeline under a dock that says "no source" is worse than
+        // an empty one, and an empty one with no explanation is what made
+        // this state look like a fault.
+        m_timeline->setSpan(0, 0);
+        m_timeline->setDownloaded({});
+        m_timeline->setMarkers({});
+        m_timeline->setPlaceholder(tr_("Dock.TimelineNoSource"));
         refreshEvents(s);
         return;
     }
@@ -861,6 +885,13 @@ void DecoderDock::refresh() {
     } else {
         m_timeline->setSpan(s.earliest_ms, s.live_ms);
     }
+    // Which of the ordinary "nothing to draw yet" states this is. Only used
+    // when the span is empty; the bar ignores it otherwise.
+    m_timeline->setPlaceholder(
+        s.event_id.empty()
+            ? (s.room_state == 1 /* offline */ ? tr_("Dock.TimelineOffline")
+                                               : tr_("Dock.TimelineNothing"))
+            : tr_("Dock.TimelineWaiting"));
     m_timeline->setPlayhead(s.playhead_ms);
     m_timeline->setDownloaded(s.cached_spans);
     {
