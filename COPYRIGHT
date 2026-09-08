@@ -33,6 +33,17 @@ Third-party components, under their own terms
   used dynamically from the copy OBS ships (LGPL-2.1-or-later as OBS builds
   it). Neither is redistributed here.
 
+  libcurl (curl) is linked for the S3 transport, under the curl licence — an
+  MIT/X derivative, GPL-compatible.
+
+  OpenSSL 3 is linked for SHA-256 and HMAC on Linux, under Apache-2.0. That
+  licence is compatible with GPLv3 but NOT with GPLv2, so this is one place
+  the move to GPLv3 removed a difficulty rather than creating one. Windows
+  builds use the system bcrypt instead, and macOS uses CommonCrypto from
+  libSystem, so neither links OpenSSL at all — a property CI asserts.
+
+  SQLite is used by the simulcast relay only, and is in the public domain.
+
   atkAudio's OBS plugin suite is recommended in the documentation for audio
   routing. It is a separate program under AGPL-3.0; nothing here links against
   it or requires it.
