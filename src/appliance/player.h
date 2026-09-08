@@ -138,6 +138,31 @@ public:
     void reconfigure(const Config& cfg);
     Config config() const;
 
+    // ── Is the storage reachable, from where, and how fast? ─────────────────
+    // The three questions asked when a campus stutters, and the ones nothing
+    // here could answer: an operator could see the picture was wrong but not
+    // whether the bucket was reachable, which Cloudflare edge was serving it,
+    // or what the link was managing.
+    struct StorageHealth {
+        bool        configured = false;   // credentials and a feed name are set
+        std::string endpoint;
+        std::string bucket;
+        std::string room;
+        bool        reachable = false;    // the endpoint answered at all
+        bool        readable = false;     // …and our key could read the feed
+        long        http_status = 0;
+        std::string error;                // empty when readable
+        int64_t     round_trip_ms = 0;
+        std::string colo;                 // Cloudflare edge, e.g. "JNB"
+        std::string server;               // the Server header
+        double      bytes_per_s = 0.0;    // observed, from real segment traffic
+        uint64_t    rate_samples = 0;     // 0 means show no figure at all
+    };
+    // `probe` issues one read-only request for the room's live pointer; without
+    // it only the passively-observed figures are filled in, which is what a
+    // status poll several times a minute should use.
+    StorageHealth storage_health(bool probe);
+
     // ── Operator controls (the same set the Qt dock offers) ──────────────────
     void play();
     void stop_playback();

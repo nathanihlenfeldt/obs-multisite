@@ -546,6 +546,52 @@ async function loadSystem() {
         .join('');
     } catch (e) { /* leave it empty */ }
   }
+
+  loadStorage(false);
+}
+
+/* ── Storage ─────────────────────────────────────────────────────────────────
+   The three questions asked whenever a campus stutters, and the ones nothing
+   here could answer: is the bucket reachable, where is it being served from,
+   and what is the link managing. Without a probe these come from the segment
+   traffic already flowing, so opening this panel costs nothing; "Check now"
+   spends one request to say so definitively, including when nothing plays.  */
+
+function storageLine(d) {
+  if (!d.configured) return ['Not set up yet', false];
+  if (d.probed && !d.reachable) return [d.error || 'Cannot be reached', true];
+  if (d.probed && !d.readable)  return [d.error || 'Refused', true];
+  if (d.probed) return ['Reachable' + (d.round_trip_ms
+      ? ' — answered in ' + d.round_trip_ms + ' ms' : ''), false];
+  if (d.reachable) return ['Reachable', false];
+  return ['Not checked yet', false];
+}
+
+async function loadStorage(probe) {
+  const el = $('#storage-facts');
+  if (!el) return;
+  let d;
+  try {
+    d = await api('GET', '/api/storage' + (probe ? '?probe=1' : ''));
+  } catch (e) {
+    el.innerHTML = '<dt>Storage</dt><dd class="bad">' + escapeHtml(e.message) + '</dd>';
+    return;
+  }
+
+  const rows = [];
+  const add = (k, v) => rows.push(`<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`);
+  const [state, bad] = storageLine(d);
+  rows.push(`<dt>Storage</dt><dd${bad ? ' class="bad"' : ''}>${escapeHtml(state)}</dd>`);
+  if (d.endpoint) add('Endpoint', d.endpoint + (d.bucket ? ' / ' + d.bucket : ''));
+  // The most useful figure for a site a long way from its bucket: a box in
+  // Johannesburg served from Amsterdam explains a latency nothing local can.
+  if (d.colo) add('Served from', d.colo);
+  else if (d.server) add('Served by', d.server);
+  // Only once something has actually been measured. A zero would read as a
+  // dead link rather than as an absence of evidence.
+  if (d.rate_samples > 0 && d.bytes_per_s)
+    add('Link speed', (d.bytes_per_s * 8 / 1e6).toFixed(1) + ' Mbps observed');
+  el.innerHTML = rows.join('');
 }
 
 $('#btn-tz').onclick = async () => {
@@ -576,6 +622,15 @@ function confirmThen(question, path) {
     catch (e) { notify(e.message, true); }
   };
 }
+$('#storage-check').onclick = async (e) => {
+  const b = e.currentTarget;
+  const was = b.textContent;
+  b.disabled = true;
+  b.textContent = 'Checking…';
+  try { await loadStorage(true); }
+  finally { b.disabled = false; b.textContent = was; }
+};
+
 $('#btn-restart').onclick =
   confirmThen('Restart the player? The picture will go away for a few seconds.',
               '/api/system/restart');
