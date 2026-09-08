@@ -15,6 +15,13 @@ int64_t now_ms() {
 }
 constexpr int kDefaultDelayS = 180;   // three minutes, the room default
 constexpr int kGraceS        = 45;    // under YouTube's ~60s starvation window
+// How long a backlog may sit still before it counts as the far end having
+// stopped reading. A fragment is several megabytes and leaves in 64 KB bites,
+// so a pipe that is briefly full is the normal condition of a healthy stream,
+// not a symptom. Two seconds is comfortably longer than one fragment takes to
+// drain at any bitrate this carries, and short enough that the real thing is
+// noticed well inside the grace period.
+constexpr int64_t kDrainQuietMs = 2000;
 } // namespace
 
 RelaySession::RelaySession(Destination dest, RoomFeeder& feeder,
@@ -82,6 +89,8 @@ void RelaySession::pump_writes() {
     if (n < 0) return;                       // gone; the machine will notice
     m_pending_offset += (size_t)n;
     if (n > 0) {
+        m_last_accept_ms = now_ms();
+        m_ever_accepted = true;
         std::lock_guard<std::mutex> lk(m_mtx);
         m_sent_bytes += n;
     }
@@ -125,6 +134,13 @@ void RelaySession::run() {
         in.init_ready = m_feeder.load_init().has_value();
         in.delay_s = dest.delay_s > 0 ? dest.delay_s : kDefaultDelayS;
         in.grace_s = kGraceS;
+        // Nothing waiting to go out is not the same as nothing being taken.
+        // Only a backlog that has stopped moving says anything at all.
+        const bool backlog = m_pending_offset < m_pending.size();
+        in.output_accepting = !backlog ||
+                              (t - m_last_accept_ms) < kDrainQuietMs;
+        in.output_ever_accepted = m_ever_accepted;
+        in.awaits_receiver = is_listener(dest);
         in.from_beginning = m_from_beginning;
 
         // A child that exited on its own must be reported to the machine
@@ -143,6 +159,7 @@ void RelaySession::run() {
             if (m_child) { m_child->stop(); m_child.reset(); }
             m_pending.clear();
             m_pending_offset = 0;
+            m_ever_accepted = false;
             m_machine.reconfigured(t);
             rlog_info("[%s] settings changed — restarting this stream",
                       dest.name.c_str());
@@ -158,6 +175,11 @@ void RelaySession::run() {
             case RelayAction::Spawn: {
                 m_pending.clear();
                 m_pending_offset = 0;
+                // Per connection, not per session: a listener that loses its
+                // far end and rebuilds is waiting to be attached to again,
+                // which is not the same as a destination that went deaf.
+                m_ever_accepted = false;
+                m_last_accept_ms = t;
                 m_child = std::make_unique<FfmpegProcess>();
                 std::string err;
                 const auto safe = redact(plan.args, dest);
@@ -191,21 +213,30 @@ void RelaySession::run() {
             case RelayAction::FeedSegment:
                 queue_segment(d.seq);
                 break;
-            case RelayAction::CloseInput:
+            case RelayAction::CloseInput: {
                 // Drain what is queued first, or the last few seconds never
                 // leave. Measured: closing early truncates the tail.
+                //
+                // Bounded, because a drain is not guaranteed to finish: an SRT
+                // listener that nobody ever attached to will never empty its
+                // pipe, and without a deadline the end of a service would hang
+                // this thread for good. Thirty seconds is far longer than a
+                // real tail takes and far shorter than anyone would wait.
+                const int64_t give_up_at = now_ms() + 30000;
                 while (m_running && m_child &&
                        m_pending_offset < m_pending.size() &&
-                       m_child->alive()) {
+                       m_child->alive() && now_ms() < give_up_at) {
                     pump_writes();
                     std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 }
                 if (m_child) m_child->close_input();
                 break;
+            }
             case RelayAction::Kill:
                 if (m_child) { m_child->stop(); m_child.reset(); }
                 m_pending.clear();
                 m_pending_offset = 0;
+                m_ever_accepted = false;
                 break;
             case RelayAction::None:
                 break;

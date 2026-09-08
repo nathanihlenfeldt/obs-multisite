@@ -582,9 +582,61 @@ three minutes by default — so a dropout at the main site is absorbed instead
 of reaching air. It is the same trade as §1, applied to the public stream:
 latency spent to buy resilience.
 
-**Why RTMP.** Every destination accepts it, so one mechanism covers YouTube,
-Facebook and a church's own server without two code paths. The cost is that
-RTMP is H.264 in practice, which the codec rule below exists to handle.
+**Two protocols, told apart by the address alone.** RTMP is what every public
+streaming site accepts, so one mechanism covers YouTube, Facebook and a
+church's own server. SRT is what broadcast partners, hardware decoders and the
+better contribution CDNs ask for, and it is what a lossy path between the VPS
+and the destination wants: it retransmits lost packets instead of letting them
+become a glitch. There is no protocol setting and no radio button — `rtmp://`
+and `srt://` are unmistakable, and asking a volunteer to declare which one
+they pasted is asking them to get it wrong.
+
+The two differ in exactly one way that matters upward: RTMP means FLV, and FLV
+means H.264. SRT means MPEG-TS, which carries HEVC properly — a standardised
+stream type decoders have handled for years, not FLV's after-the-fact extension
+that half the receiving end has never heard of. So **the codec rule below is
+written per protocol**, and an HEVC feed that cannot go to YouTube can go to an
+SRT destination unchanged.
+
+That matters more than it sounds. Until SRT existed here, choosing HEVC for the
+campuses cost a church its public stream outright, which made a real bandwidth
+saving unusable for anyone who also streams. It now costs them the *RTMP*
+destinations only.
+
+**SRT settles for a longer latency than ffmpeg's own.** Its `latency` is the
+window in which a lost packet can be asked for again; ffmpeg's default of 120ms
+is enough only on a path short enough that the answer comes back almost
+immediately. The relay sends 2000ms unless told otherwise. That is §1 applied
+where it is cheapest — the relay is already sitting three minutes behind the
+service, so two seconds is invisible, and it buys recovery across a path many
+times longer than the default can manage. It is on the form, under Advanced,
+for the case where it is not enough.
+
+**SRT can also be listened for rather than called out to,** for a broadcast
+partner or a hardware decoder that pulls from us. It is never the default and
+is never inferred from a setting: an address with nothing before the port —
+`srt://:9000` — is how one is written down, and writing it that way is how one
+is asked for. It does mean opening an inbound port on a machine we have
+otherwise been careful to keep closed, which is why it takes a deliberately
+odd-looking address to get one.
+
+A listener nobody has attached to yet is the reason §8.2's supervision grew a
+second half. The finding it was built on is that ffmpeg says nothing when it
+is *starved*; the same is true when the far end stops *reading*. Both have to
+be noticed by watching, and they mean opposite things depending on which end
+opened the connection. A destination we called that stops taking content has
+gone wrong and is dropped and rebuilt like any other lost connection. A
+listener that has never carried anything is simply waiting, possibly for the
+whole first half of a service, and is neither reported nor acted on as a
+failure — it keeps taking up position behind the live edge while it waits, so
+whoever finally attaches gets the service as it is now rather than the forty
+minutes they missed. Once a listener has carried content, losing it is a fault
+like any other: the distinction is whether anything ever went out, not the
+mode.
+
+Watching the outbound side at all is new with SRT and fixes a latent hole in
+the RTMP path too — before it, a destination that quietly stopped reading was
+fed for ever into a pipe nobody was emptying.
 
 **Copy remux, never a silent transcode.** Segments are pushed on unchanged: no
 decode, no encode, no quality loss, and little enough CPU that the cheapest VPS
@@ -592,20 +644,25 @@ tier is the target rather than a stretch. What cannot be sent that way is
 refused rather than adapted, in the two cases where adapting it silently would
 put the wrong thing on air:
 
-- **HEVC and AV1.** RTMP wants H.264. ffmpeg will mux either of the others into
-  FLV and report success, producing a well-formed stream the destination then
-  rejects — measured, not assumed — so nothing downstream can be relied on to
-  notice. The relay refuses and says which encoder setting to change.
-  Re-encoding on the way out is the eventual answer, is not built, and would
-  end the $5-a-month claim when it is.
+- **HEVC over RTMP, and AV1 over either.** RTMP wants H.264. ffmpeg will mux
+  either of the others into FLV and report success, producing a well-formed
+  stream the destination then rejects — measured, not assumed — so nothing
+  downstream can be relied on to notice. The relay refuses and says which
+  encoder setting to change, and now also points at the way there is to send
+  it on unchanged: an SRT destination, where MPEG-TS carries HEVC properly.
 
-  This costs less than it might appear. H.264 is the default and the roadmap's
-  first codec precisely because it decodes everywhere, a Pi 5 included (§8.1:
-  software decode handles 1080p comfortably), so a site that has not gone out
-  of its way to change codec can stream publicly with nothing to reconsider.
-  What it does mean is that HEVC is not a free bandwidth saving for a site that
-  also streams to the public: choosing it for the campuses currently costs the
-  public stream.
+  AV1 is refused on both. MPEG-TS has a mapping for it, but ffmpeg's support
+  and the receiving end's support are each patchy enough that the likely
+  outcome is the same well-formed-but-rejected stream this rule exists to
+  prevent — so it is refused until that stops being true, rather than allowed
+  on the strength of the specification.
+
+  H.264 remains the default and the roadmap's first codec precisely because it
+  decodes everywhere, a Pi 5 included (§8.1: software decode handles 1080p
+  comfortably), so a site that has not gone out of its way to change codec can
+  stream publicly with nothing to reconsider. Re-encoding on the way out is
+  still the eventual answer for the RTMP case, is not built, and would end the
+  $5-a-month claim when it is.
 - **Packed multi-channel audio (§4.3.1),** where the mix, the ISOs and the
   click share one track. Selecting a pair out of it is not built, and sending
   it unchanged would put a mic ISO or the click out to the public. Multi-track
@@ -655,13 +712,62 @@ PBKDF2-HMAC-SHA256 over a random salt, and binds to localhost so that exposing
 it is a decision. It does not terminate TLS: a proxy in front of it does, and
 one is shipped as a working example.
 
-**Not built.** Re-encoding; splitting packed audio; signing in to YouTube (a
-stream key is pasted, and the broadcast is still created in YouTube's own
-page); and starting by itself, either on a schedule or when the encoder goes
-live. Scheduling matters most of the three, because services start late — the
-intended trigger is `live.json` actually going live, optionally bounded by a
-time window, and `markers.json` makes "start the public stream at Sermon
-Start" possible.
+**Not built.** Re-encoding; splitting packed audio; SRT in listener mode being
+reachable through anything (the port has to be published, and nothing is
+shipped to help); signing in to YouTube (a stream key is pasted, and the
+broadcast is still created in YouTube's own page); and starting by itself,
+either on a schedule or when the encoder goes live. Scheduling matters most,
+because services start late — the intended trigger is `live.json` actually
+going live, optionally bounded by a time window, and `markers.json` makes
+"start the public stream at Sermon Start" possible.
+
+## 8.2.1 A hosted streaming provider (planned)
+
+A church that wants a player on its own website currently has to put the
+service on YouTube or Facebook and embed theirs. The alternative is a hosted
+video API — **Mux** and **Cloudflare Stream** are the two worth supporting,
+and the point of naming both is that neither becomes the answer: the relay
+would carry a provider interface, and a church would choose.
+
+What it would buy, in the order it is worth having:
+
+- **A persistent player embed.** A hosted provider issues one playback
+  identifier that outlives every broadcast. A church embeds it once, and the
+  relay can change what is behind it — this week's service, a replay, a
+  holding card — without anybody editing the website again. That is the whole
+  feature; everything else is machinery for it. The page itself would live in
+  the bucket the church already has rather than on the relay, so the public
+  page does not depend on the $5 VPS being up and the relay gains no public,
+  unauthenticated surface.
+- **A control panel** in the relay's own page: stream state as the provider
+  reports it, the playback identifier, past recordings, and a way to reset the
+  key.
+- **Provider-side simulcast.** Both providers will push onward to YouTube,
+  Facebook and the rest on the church's behalf. The VPS then sends *one*
+  stream out however many places the service goes, instead of one ffmpeg child
+  and one full upload per destination — which on a small VPS is the difference
+  between two destinations and six.
+
+What it would cost, stated here because it is the part that would otherwise be
+discovered late:
+
+- **Per-destination audio selection and per-destination delay cannot survive
+  provider-side simulcast.** The provider resends what it received, so every
+  onward destination carries the same track and the same delay. Today a church
+  can send the main mix to one place and a different feed to another. So this
+  would be a per-destination choice — "sent by this relay" or "sent by the
+  provider" — with our own remaining the default, rather than a switch that
+  quietly flattens the two.
+- **Failure reporting moves off the ffmpeg child** and onto polling the
+  provider's API, so §8.2's supervision story does not cover it and would need
+  its own equivalent before it could be trusted unattended.
+- **It is not free, and the rest of this project is.** Both providers bill per
+  minute ingested and per minute delivered. That has to be said on the page
+  where the credentials are typed, not in a document.
+- **The provider's access token is a different class of secret** from a stream
+  key: it outlives the session and grants far more than one broadcast. It
+  belongs with §8.2's OAuth note — encrypted at rest — rather than with the
+  stream keys.
 
 ## 8.3 External control API (planned)
 
@@ -737,10 +843,12 @@ is the better answer for a given church, section 12 says so plainly.
 | Self-hosted, on storage you own | built |
 | Open protocol, no vendor lock-in | by design — the whole protocol is §4 |
 | Public simulcast to YouTube / Facebook / RTMP | built and pushing live to YouTube; not yet through a full service — H.264 feeds only (§8.2) |
+| SRT output, caller or listener, HEVC included | built; not yet run through a full service (§8.2) |
 | Download a finished service as an MP4, all audio tracks | built (§8.2) |
 | Replay a finished service to a destination | proof of concept — one at a time, by hand (§8.2) |
 | Per-channel routing of packed audio at an OBS satellite | out of scope — use [atkAudio's OBS plugins](https://github.com/atkAudio/PluginForObsRelease) (§4.3.1) |
-| Re-encoding an HEVC feed for a streaming site | not built (§8.2) |
+| Re-encoding an HEVC feed for a streaming site | not built; an SRT destination carries HEVC unchanged instead (§8.2) |
+| Hosted streaming provider (Mux / Cloudflare Stream), persistent player embed, provider-side simulcast | planned (§8.2.1) |
 | External control API (obs-websocket vendor requests, §8.3) | planned |
 | Bitfocus Companion module (buttons, feedbacks, variables) | planned; needs the API first |
 | Control from a Stream Deck via OBS hotkey triggers | available now, no parameters or feedback |

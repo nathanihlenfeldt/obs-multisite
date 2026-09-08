@@ -23,6 +23,17 @@ services:
     # readable.
     ports:
       - "127.0.0.1:8080:8080"
+      # SRT in listener mode only — where a broadcast partner or a hardware
+      # decoder connects TO the relay rather than being pushed to. Nothing
+      # else here needs an open port: an ordinary destination, RTMP or SRT,
+      # is called outward and needs nothing published at all.
+      #
+      # Uncomment and match the port to the address on the destination
+      # (srt://:9000). It is UDP, which is easy to forget and fails silently
+      # as "nothing ever connects". Open it on the host firewall too, and
+      # narrow it to the partner's address if you can — unlike the web port
+      # above there is no proxy in front of this.
+      # - "9000:9000/udp"
     volumes:
       - relay-data:/data
     environment:

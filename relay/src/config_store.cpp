@@ -66,6 +66,20 @@ std::string ConfigStore::open(const std::string& path) {
         "  delay_s INTEGER NOT NULL DEFAULT 0"
         ");");
     if (!e.empty()) return "could not prepare the database: " + e;
+
+    // SRT arrived after the first release, so a relay that has been running
+    // since then has a destinations table without these columns. Adding them
+    // one at a time and ignoring the failure is the whole migration: SQLite
+    // refuses a column that is already there, which on an up-to-date database
+    // is every one of them, and that refusal is the success case rather than
+    // something to report. The defaults are chosen so an RTMP destination
+    // saved before any of this existed reads back meaning exactly what it
+    // meant then.
+    for (const char* col : { "srt_mode TEXT NOT NULL DEFAULT 'caller'",
+                             "srt_passphrase TEXT NOT NULL DEFAULT ''",
+                             "srt_latency_ms INTEGER NOT NULL DEFAULT 0" })
+        exec(std::string("ALTER TABLE destinations ADD COLUMN ") + col + ";");
+
     return {};
 }
 
@@ -173,11 +187,19 @@ Destination read_row(sqlite3_stmt* st) {
     d.allow_transcode = sqlite3_column_int(st, 6) != 0;
     d.enabled         = sqlite3_column_int(st, 7) != 0;
     d.delay_s         = sqlite3_column_int(st, 8);
+    d.srt_mode        = text_col(st, 9) == "listener" ? SrtMode::Listener
+                                                      : SrtMode::Caller;
+    d.srt_passphrase  = text_col(st, 10);
+    d.srt_latency_ms  = sqlite3_column_int(st, 11);
     return d;
 }
 const char* kSelect =
     "SELECT id,name,room_id,url,stream_key,audio_label,allow_transcode,"
-    "enabled,delay_s FROM destinations";
+    "enabled,delay_s,srt_mode,srt_passphrase,srt_latency_ms FROM destinations";
+
+const char* mode_text(SrtMode m) {
+    return m == SrtMode::Listener ? "listener" : "caller";
+}
 } // namespace
 
 std::vector<Destination> ConfigStore::destinations() const {
@@ -205,7 +227,12 @@ std::optional<Destination> ConfigStore::destination(int64_t id) const {
     return out;
 }
 
-int64_t ConfigStore::add(const Destination& d, std::string& error) {
+int64_t ConfigStore::add(const Destination& in, std::string& error) {
+    // Tidied before it is judged, so what validate() reads and what is stored
+    // are the same thing. Doing it here rather than in the API layer means a
+    // destination cannot reach the database untidied by some other route.
+    Destination d = in;
+    normalize(d);
     error = validate(d);
     if (!error.empty()) return 0;
 
@@ -213,7 +240,8 @@ int64_t ConfigStore::add(const Destination& d, std::string& error) {
     sqlite3_stmt* st = nullptr;
     if (sqlite3_prepare_v2(m_db,
             "INSERT INTO destinations(name,room_id,url,stream_key,audio_label,"
-            "allow_transcode,enabled,delay_s) VALUES(?,?,?,?,?,?,?,?);",
+            "allow_transcode,enabled,delay_s,srt_mode,srt_passphrase,"
+            "srt_latency_ms) VALUES(?,?,?,?,?,?,?,?,?,?,?);",
             -1, &st, nullptr) != SQLITE_OK) {
         error = "could not save this destination";
         return 0;
@@ -226,13 +254,18 @@ int64_t ConfigStore::add(const Destination& d, std::string& error) {
     sqlite3_bind_int(st, 6, d.allow_transcode ? 1 : 0);
     sqlite3_bind_int(st, 7, d.enabled ? 1 : 0);
     sqlite3_bind_int(st, 8, d.delay_s);
+    bind_text(st, 9, mode_text(d.srt_mode));
+    bind_text(st, 10, d.srt_passphrase);
+    sqlite3_bind_int(st, 11, d.srt_latency_ms);
     const bool ok = sqlite3_step(st) == SQLITE_DONE;
     sqlite3_finalize(st);
     if (!ok) { error = "could not save this destination"; return 0; }
     return sqlite3_last_insert_rowid(m_db);
 }
 
-bool ConfigStore::update(const Destination& d, std::string& error) {
+bool ConfigStore::update(const Destination& in, std::string& error) {
+    Destination d = in;
+    normalize(d);
     error = validate(d);
     if (!error.empty()) return false;
 
@@ -240,7 +273,8 @@ bool ConfigStore::update(const Destination& d, std::string& error) {
     sqlite3_stmt* st = nullptr;
     if (sqlite3_prepare_v2(m_db,
             "UPDATE destinations SET name=?,room_id=?,url=?,stream_key=?,"
-            "audio_label=?,allow_transcode=?,enabled=?,delay_s=? WHERE id=?;",
+            "audio_label=?,allow_transcode=?,enabled=?,delay_s=?,srt_mode=?,"
+            "srt_passphrase=?,srt_latency_ms=? WHERE id=?;",
             -1, &st, nullptr) != SQLITE_OK) {
         error = "could not save this destination";
         return false;
@@ -253,7 +287,10 @@ bool ConfigStore::update(const Destination& d, std::string& error) {
     sqlite3_bind_int(st, 6, d.allow_transcode ? 1 : 0);
     sqlite3_bind_int(st, 7, d.enabled ? 1 : 0);
     sqlite3_bind_int(st, 8, d.delay_s);
-    sqlite3_bind_int64(st, 9, d.id);
+    bind_text(st, 9, mode_text(d.srt_mode));
+    bind_text(st, 10, d.srt_passphrase);
+    sqlite3_bind_int(st, 11, d.srt_latency_ms);
+    sqlite3_bind_int64(st, 12, d.id);
     const bool ok = sqlite3_step(st) == SQLITE_DONE;
     sqlite3_finalize(st);
     if (!ok) error = "could not save this destination";

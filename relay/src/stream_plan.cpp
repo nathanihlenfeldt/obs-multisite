@@ -10,6 +10,20 @@ using multisite::Manifest;
 
 namespace {
 
+// SRT's retransmit buffer, and deliberately far larger than ffmpeg's own
+// 120ms default. 120ms is enough to recover a lost packet only on a path
+// short enough that the retransmit arrives almost immediately; on anything
+// longer SRT gives up and the loss reaches the destination as a glitch.
+//
+// Two seconds is §1 applied to the one place in this system where it is
+// cheapest: the relay already sits three minutes behind the service, so two
+// seconds is invisible, and it buys recovery across a path many times longer
+// than the default can manage.
+constexpr int kDefaultSrtLatencyMs = 2000;
+
+// ffmpeg gives its SRT timing options in millionths of a second.
+constexpr int64_t kUsPerMs = 1000;
+
 std::string channels_word(int ch) {
     if (ch == 1) return "mono";
     if (ch == 2) return "stereo";
@@ -33,31 +47,63 @@ bool is_packed(const AudioTrack& t) {
     return !t.channel_labels.empty() || t.channels > 2;
 }
 
+// Replaces every occurrence of `secret` in `s` with `with`. Substring rather
+// than whole-argument, because under SRT a secret sits inside a URL alongside
+// things worth keeping in the log.
+void scrub(std::string& s, const std::string& secret, const char* with) {
+    if (secret.empty()) return;
+    for (size_t at = s.find(secret); at != std::string::npos;
+         at = s.find(secret, at + std::string(with).size()))
+        s.replace(at, secret.size(), with);
+}
+
 } // namespace
 
 std::string output_url(const Destination& d) {
-    if (d.stream_key.empty()) return d.url;
+    if (protocol_of(d) == Protocol::Rtmp) {
+        if (d.stream_key.empty()) return d.url;
+        std::string u = d.url;
+        if (!u.empty() && u.back() == '/') u.pop_back();
+        return u + "/" + d.stream_key;
+    }
+
+    // SRT. normalize() has already lifted our own parameters out of the
+    // address and left anything else on it, so appending here can never
+    // produce a duplicate of something the operator pasted.
     std::string u = d.url;
-    if (!u.empty() && u.back() == '/') u.pop_back();
-    return u + "/" + d.stream_key;
+    bool has_query = u.find('?') != std::string::npos;
+    auto add = [&u, &has_query](const std::string& k, const std::string& v) {
+        u += has_query ? "&" : "?";
+        has_query = true;
+        u += k + "=" + v;
+    };
+
+    if (d.srt_mode == SrtMode::Listener) {
+        add("mode", "listener");
+        // Wait indefinitely for the far end. A listener that nobody has
+        // connected to yet is not a failure and must not be given up on:
+        // a broadcast partner may well attach five minutes into the service.
+        add("listen_timeout", "-1");
+    } else if (!d.stream_key.empty()) {
+        add("streamid", d.stream_key);
+    }
+    if (!d.srt_passphrase.empty()) add("passphrase", d.srt_passphrase);
+
+    const int ms = d.srt_latency_ms > 0 ? d.srt_latency_ms
+                                        : kDefaultSrtLatencyMs;
+    add("latency", std::to_string((int64_t)ms * kUsPerMs));
+    return u;
 }
 
 std::vector<std::string> redact(const std::vector<std::string>& args,
                                 const Destination& d) {
     std::vector<std::string> out;
     out.reserve(args.size());
-    const std::string full = output_url(d);
     for (const auto& a : args) {
-        if (!d.stream_key.empty() && a == full) {
-            std::string u = d.url;
-            if (!u.empty() && u.back() == '/') u.pop_back();
-            out.push_back(u + "/<key>");
-        } else if (!d.stream_key.empty() &&
-                   a.find(d.stream_key) != std::string::npos) {
-            out.push_back("<redacted>");
-        } else {
-            out.push_back(a);
-        }
+        std::string s = a;
+        scrub(s, d.stream_key, "<key>");
+        scrub(s, d.srt_passphrase, "<passphrase>");
+        out.push_back(std::move(s));
     }
     return out;
 }
@@ -66,11 +112,13 @@ StreamPlan plan_stream(const Manifest& manifest,
                        const Destination& dest,
                        const std::string& input) {
     StreamPlan p;
+    const Protocol proto = protocol_of(dest);
 
     // ── Video ────────────────────────────────────────────────────────────────
-    // RTMP is H.264 in practice. ffmpeg will mux HEVC or AV1 into FLV without
-    // complaint, so this check is the only thing standing between an HEVC feed
-    // and a stream that looks healthy here and is dead at the destination.
+    // The codec gate, per protocol. ffmpeg will mux HEVC into FLV without
+    // complaint, so for RTMP this check is the only thing standing between an
+    // HEVC feed and a stream that looks healthy here and is dead at the
+    // destination. MPEG-TS genuinely carries HEVC, so over SRT it is allowed.
     std::string vc = manifest.video.codec;
     std::transform(vc.begin(), vc.end(), vc.begin(),
                    [](unsigned char c) { return (char)std::tolower(c); });
@@ -81,13 +129,21 @@ StreamPlan plan_stream(const Manifest& manifest,
                     "the encoder.";
         return p;
     }
-    if (vc != "h264") {
-        p.problem = "This service is being recorded as " + vc +
-                    " video, and streaming sites need H.264.";
-        p.remedy  = "The video would have to be re-encoded on the way out, "
-                    "which this server cannot do yet. Set the main site's "
-                    "encoder to H.264 for services you want to stream "
-                    "publicly.";
+    const bool video_ok =
+        vc == "h264" || (proto == Protocol::Srt && vc == "hevc");
+    if (!video_ok) {
+        p.problem = "This service is being recorded as " + vc + " video, and " +
+                    (proto == Protocol::Srt
+                       ? "this kind of connection cannot carry it."
+                       : "streaming sites need H.264.");
+        p.remedy  = proto == Protocol::Srt
+                      ? "Set the main site's encoder to H.264 or HEVC for "
+                        "services you want to send here."
+                      : "The video would have to be re-encoded on the way "
+                        "out, which this server cannot do yet. Set the main "
+                        "site's encoder to H.264 for services you want to "
+                        "stream publicly, or send this to an SRT destination "
+                        "instead — those can carry HEVC unchanged.";
         return p;
     }
     if (dest.allow_transcode) {
@@ -110,8 +166,8 @@ StreamPlan plan_stream(const Manifest& manifest,
 
     // Packed multi-channel: one stream carrying the mix, the ISOs and the
     // click together. Sending it on unchanged would put a mic ISO or the click
-    // track out to the public. Selecting a channel pair out of it is Stage 2;
-    // until then this is refused rather than guessed at.
+    // track out to the public. This has nothing to do with the transport —
+    // SRT would carry it perfectly well — so it is refused on both.
     for (const auto& t : tracks) {
         if (!is_packed(t)) continue;
         p.problem = "The main site is sending its sound as one "
@@ -174,6 +230,12 @@ StreamPlan plan_stream(const Manifest& manifest,
 
     // ── The invocation ───────────────────────────────────────────────────────
     // Copy remux only: no decode, no encode, no quality loss, almost no CPU.
+    //
+    // Both muxers convert the video from the length-prefixed form fMP4 uses to
+    // the start-code form they need, without being asked — it is part of what
+    // the muxer does, not a filter we have to add. Adding the bitstream filter
+    // by hand as well produced a stream that no destination would decode, so
+    // it is deliberately absent.
     p.args = {
         "ffmpeg",
         "-hide_banner",
@@ -185,12 +247,26 @@ StreamPlan plan_stream(const Manifest& manifest,
         "-map", "0:v:0",
         "-map", "0:a:" + std::to_string(index),
         "-c", "copy",
+    };
+    if (proto == Protocol::Srt) {
+        // The tables that say what is in the stream go out repeatedly rather
+        // than only at the start. Anything that attaches partway through — a
+        // listener's far end connecting late, a receiver reconnecting after
+        // its own outage — otherwise sits on a stream it cannot interpret
+        // until we happen to send them again.
+        p.args.insert(p.args.end(), {
+            "-mpegts_flags", "+resend_headers",
+            "-f", "mpegts",
+        });
+    } else {
         // FLV cannot rewrite its header over a socket; without this ffmpeg
         // logs two alarming failures per run that mean nothing.
-        "-flvflags", "no_duration_filesize",
-        "-f", "flv",
-        output_url(dest),
-    };
+        p.args.insert(p.args.end(), {
+            "-flvflags", "no_duration_filesize",
+            "-f", "flv",
+        });
+    }
+    p.args.push_back(output_url(dest));
 
     p.ok = true;
     p.audio_index = index;
@@ -201,8 +277,13 @@ StreamPlan plan_stream(const Manifest& manifest,
         res = std::to_string(manifest.video.width) + "x" +
               std::to_string(manifest.video.height) + " ";
     }
-    p.summary = "sending " + res + "H.264 video with the \"" + label +
+    const std::string codec_word = (vc == "hevc") ? "HEVC" : "H.264";
+    p.summary = "sending " + res + codec_word + " video with the \"" + label +
                 "\" sound feed (" + channels_word(chosen.channels) + ")";
+    if (proto == Protocol::Srt)
+        p.summary += dest.srt_mode == SrtMode::Listener
+                       ? ", over SRT, waiting for the far end to connect"
+                       : ", over SRT";
     return p;
 }
 

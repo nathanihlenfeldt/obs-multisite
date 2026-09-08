@@ -1,6 +1,9 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "ffmpeg_process.h"
 
+#include <cctype>
+#include <cstdio>
+
 #include <algorithm>
 #include <cerrno>
 #include <csignal>
@@ -12,6 +15,38 @@
 #include <unistd.h>
 
 namespace multisite_relay {
+
+bool ffmpeg_supports_srt() {
+    // Computed on first use and then never again. `-protocols` lists what the
+    // binary was compiled with, which is the actual question — an ffmpeg
+    // without libsrt still accepts an srt:// URL on the command line and only
+    // fails once it tries to open it.
+    static const bool supported = [] {
+        FILE* p = ::popen("ffmpeg -hide_banner -protocols 2>/dev/null", "r");
+        if (!p) return false;
+        std::string out;
+        char buf[4096];
+        while (std::fgets(buf, sizeof(buf), p)) out += buf;
+        ::pclose(p);
+        // One protocol per line, indented. Compared as a whole trimmed line
+        // rather than searched for, because "srtp" is in almost every build,
+        // is a different thing entirely, and contains the name we are looking
+        // for.
+        size_t i = 0;
+        while (i < out.size()) {
+            size_t nl = out.find('
+', i);
+            if (nl == std::string::npos) nl = out.size();
+            size_t a = i, b = nl;
+            while (a < b && std::isspace((unsigned char)out[a])) ++a;
+            while (b > a && std::isspace((unsigned char)out[b - 1])) --b;
+            if (out.compare(a, b - a, "srt") == 0) return true;
+            i = nl + 1;
+        }
+        return false;
+    }();
+    return supported;
+}
 
 namespace {
 

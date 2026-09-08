@@ -163,6 +163,7 @@ async function refresh() {
   warn.hidden = !message;
   warn.textContent = message;
 
+  srtAvailable = s.srt_available !== false;
   renderDestinations(s.destinations || []);
 
   const anyLive = (s.destinations || []).some((d) => d.live);
@@ -237,6 +238,7 @@ $('#add-open').onclick = () => {
     ? audioLabels.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join('')
     : '<option value="">The main mix</option>';
   $('#add-form').hidden = false;
+  addFormFollowsUrl();
   $('#add-open').hidden = true;
 };
 
@@ -245,6 +247,34 @@ $('#add-cancel').onclick = () => {
   $('#add-open').hidden = false;
   $('#add-error').hidden = true;
 };
+
+// The form follows the address, because the address is the only thing that
+// decides which protocol this is — the relay works it out the same way, from
+// the same characters, so the two can never come to different conclusions.
+// A listener is an SRT address with nothing before the port: there is no
+// switch for it, because writing it down that way IS how one is written down.
+// Whether this server's ffmpeg can do SRT at all. Assumed yes until the
+// status says otherwise, so a page that loads before the first poll does not
+// flash a warning at somebody for no reason.
+let srtAvailable = true;
+
+function addFormFollowsUrl() {
+  const url = ($('#add-url').value || '').trim();
+  const srt = /^srt:\/\//i.test(url);
+  const listener = srt && /^srt:\/\/(\/*)?:/i.test(url);
+
+  $('#add-srt').hidden = !srt;
+  const warn = $('#add-srt-unavailable');
+  warn.hidden = !(srt && !srtAvailable);
+  $('#add-key-row').hidden = listener;
+  $('#add-key-label').textContent = srt ? 'Stream ID' : 'Stream key';
+  $('#add-key-hint').textContent = srt
+    ? 'Only if the far end gave you one. If you pasted it as part of the '
+      + 'address above, leave this empty.'
+    : 'Also from the streaming site. It is kept on this server and never '
+      + 'shown again.';
+}
+$('#add-url').oninput = addFormFollowsUrl;
 
 $('#add-form').onsubmit = async (e) => {
   e.preventDefault();
@@ -256,6 +286,8 @@ $('#add-form').onsubmit = async (e) => {
       name: f.get('name'),
       url: f.get('url'),
       stream_key: f.get('stream_key'),
+      srt_passphrase: f.get('srt_passphrase') || '',
+      srt_latency_ms: Number(f.get('srt_latency_ms') || 0),
       audio_label: f.get('audio_label') || '',
       delay_s: Math.round(Number(f.get('delay_min') || 3) * 60),
     });

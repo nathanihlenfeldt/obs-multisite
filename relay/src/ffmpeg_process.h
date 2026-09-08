@@ -23,6 +23,19 @@
 
 namespace multisite_relay {
 
+// Whether the ffmpeg on this machine was built with SRT support.
+//
+// Asked once and remembered: it cannot change while the relay is running, and
+// running ffmpeg on every status poll would be absurd. It exists because the
+// failure it prevents is a bad one — an operator saves an SRT destination, it
+// validates, it plans, and then every attempt to start it dies inside ffmpeg
+// with "Protocol not found" on a Sunday morning. Better said once on the page
+// where the address is typed.
+//
+// Debian's ffmpeg, which is what the container ships, has it. A church that
+// has swapped in their own build might not.
+bool ffmpeg_supports_srt();
+
 class FfmpegProcess {
 public:
     ~FfmpegProcess();

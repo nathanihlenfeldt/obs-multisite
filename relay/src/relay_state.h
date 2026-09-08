@@ -40,6 +40,7 @@ namespace multisite_relay {
 enum class RelayState {
     Idle,          // the operator has not started this destination
     Waiting,       // started, but there is nothing to send yet
+    Awaiting,      // connected up and ready, but nothing has attached to us
     Streaming,     // content is flowing
     Stalled,       // nothing new has arrived; riding out the grace period
     Reconnecting,  // torn down, waiting to try again
@@ -80,6 +81,25 @@ struct RelayInput {
     std::string plan_problem;
 
     bool child_alive = false;
+
+    // Whether ffmpeg is still taking what it has been handed. Content goes
+    // into a pipe, and the pipe filling and staying full is the only sign
+    // there is that the far end has stopped reading — ffmpeg itself says
+    // nothing, exactly as it says nothing when it is starved (finding 1).
+    // So this is the other half of that finding: content not arriving is
+    // watched above, and content not leaving is watched here.
+    bool output_accepting = true;
+    // Whether anything at all has gone out since this connection was made.
+    // The distinction is the whole reason the two cases can be told apart:
+    // a connection that carried content and then stopped taking any is a
+    // fault, and one that has never carried any is not necessarily one.
+    bool output_ever_accepted = false;
+    // This destination waits to be connected TO rather than connecting out —
+    // an SRT listener, where a broadcast partner attaches to us. Sitting
+    // there with nothing attached is the normal resting state of one of
+    // those, possibly for the whole first half of a service, and must never
+    // be reported or acted on as a failure.
+    bool awaits_receiver = false;
 
     // Whether the segment the machine last asked for is now in the cache.
     // Answered by the caller because only it can see the disk.
@@ -162,6 +182,9 @@ private:
     uint64_t m_anchor_seq = 0;
 
     int64_t m_stalled_since_ms = 0;
+    // When the pipe first stopped draining, as distinct from a pipe that is
+    // simply mid-fragment. Zero when content is moving.
+    int64_t m_backed_up_since_ms = 0;
     // When content first went missing, as distinct from when we started
     // calling it a stall.
     int64_t m_overdue_since_ms = 0;

@@ -17,6 +17,19 @@
 // destination cannot take has to be caught HERE, before anything is spawned —
 // there is no error downstream to catch.
 //
+// What may be sent depends on the protocol, which is why the two live in one
+// function rather than two. RTMP means FLV, and FLV means H.264. SRT means
+// MPEG-TS, which carries HEVC properly — a standardised stream type that
+// decoders have handled for a decade, not FLV's after-the-fact extension that
+// half the receiving end has never heard of. So an HEVC feed that cannot go to
+// YouTube can go to an SRT destination, and the refusal is written per
+// protocol instead of once for everything.
+//
+// AV1 is still refused on both. MPEG-TS has a mapping for it, but ffmpeg's
+// support and the receiving end's support are each patchy enough that the
+// likely outcome is the same well-formed-but-rejected stream this whole file
+// exists to prevent.
+//
 #include "destination.h"
 #include "model.h"
 
@@ -54,13 +67,17 @@ StreamPlan plan_stream(const multisite::Manifest& manifest,
                        const Destination& dest,
                        const std::string& input);
 
-// The destination URL with the stream key appended, which is what ffmpeg
-// takes as its output. Exposed for testing that the key never lands anywhere
-// it should not; callers should prefer plan_stream().
+// The full output URL as ffmpeg receives it: for RTMP the address with the
+// stream key appended as a path component, and for SRT the address with the
+// stream id, passphrase, latency and mode appended as query parameters.
+// Exposed for testing that the secrets never land anywhere they should not;
+// callers should prefer plan_stream().
 std::string output_url(const Destination& d);
 
-// Everything in `args` except anything carrying the stream key, for logging.
-// A stream key in a log file is a stream key on someone's pastebin.
+// Everything in `args` with the secrets taken out, for logging. A stream key
+// in a log file is a stream key on someone's pastebin — and under SRT the
+// secrets are buried inside a URL rather than sitting in an argument of their
+// own, so this scrubs within each argument rather than dropping whole ones.
 std::vector<std::string> redact(const std::vector<std::string>& args,
                                 const Destination& d);
 

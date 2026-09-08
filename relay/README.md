@@ -20,7 +20,9 @@ main site delays the public stream rather than breaking it.
 **Does**
 
 - Reads a room's segments from your bucket and pushes them to one or more
-  RTMP destinations.
+  destinations, over **RTMP** (`rtmp://`, `rtmps://`) or **SRT** (`srt://`).
+  You do not choose which: the address you paste decides, because the two are
+  unmistakable.
 - Sends one chosen audio track per destination, picked by the name the main
   site published — "Main Mix", "Sermon ISO".
 - Sits a configurable time behind the service (three minutes by default), so
@@ -35,8 +37,13 @@ main site delays the public stream rather than breaking it.
 - **Re-encode.** Everything is a straight copy, which is why this runs on a
   tiny server. If the main site records in HEVC, streaming sites cannot take
   it over RTMP, and the relay refuses to send it rather than pushing something
-  that looks fine here and is dead at the far end. Set the main site's encoder
-  to H.264 for services you want to stream publicly.
+  that looks fine here and is dead at the far end. Either set the main site's
+  encoder to H.264 for services you want on YouTube, or send it to an SRT
+  destination — those carry HEVC unchanged.
+- **Anything but H.264 and HEVC.** AV1 is refused on both protocols. There is
+  a way to put it in an MPEG-TS stream, but too little of what would receive
+  it can actually decode it yet, and a stream that looks healthy here and is
+  rejected at the far end is the exact failure this whole design avoids.
 - **Split up packed multi-channel audio.** If the main site sends its sound as
   one multi-channel track with the mix, the microphones and the click inside
   it, the relay refuses rather than guessing which channels are the programme.
@@ -44,6 +51,52 @@ main site delays the public stream rather than breaking it.
 - **Sign in to YouTube.** You paste a stream key. Creating the broadcast still
   happens in YouTube's own page.
 - **Start by itself** at a scheduled time or when the encoder goes live.
+
+---
+
+## Sending over SRT
+
+Paste the address into **Server address** and, if the far end gave you one,
+its stream ID into the box below. If what you were handed is one long line
+with everything already in it —
+
+```
+srt://ingest.example.com:9000?streamid=abc123&passphrase=a-long-passphrase
+```
+
+— paste the whole thing into **Server address** and leave the rest empty. It
+is pulled apart on save, and the secrets are lifted out of the address so they
+are stored and treated exactly like a stream key: never shown again, never
+written to the log.
+
+**Latency**, under Advanced, is how long SRT will keep asking for a lost
+packet before giving up on it. The relay uses two seconds, which is far more
+generous than ffmpeg's own default and is nearly free here — the relay is
+already sitting three minutes behind the service, so two seconds is invisible.
+Raise it if the far end is a long way away. Note that an SRT address writes
+this in *millionths* of a second, so a pasted `latency=2000000` is the 2000
+the form shows.
+
+**Letting the far end connect to you** — for a broadcast partner or a hardware
+decoder that pulls rather than being pushed to — is done by leaving the host
+out of the address entirely:
+
+```
+srt://:9000
+```
+
+There is no switch for this, because writing the address that way is how one
+is asked for. It means opening that UDP port to whoever needs to reach it,
+which the relay cannot do for you: publish it on the container and open it on
+the firewall yourself. A listener that nothing has attached to yet shows as
+**Ready — waiting to be connected to**, and will sit there indefinitely
+without being counted as a failure; it keeps up with the service while it
+waits, so whoever attaches gets what is happening now rather than everything
+they missed.
+
+SRT needs an ffmpeg built with it. The container's is; if you have swapped in
+your own and it is not, the page says so where the address is typed, rather
+than letting you save something that will never start.
 
 ---
 

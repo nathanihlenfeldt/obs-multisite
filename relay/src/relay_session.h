@@ -105,6 +105,12 @@ private:
     // the pipe takes it in 64 KB bites, so this is normal, not a backlog.
     std::vector<uint8_t> m_pending;
     size_t m_pending_offset = 0;
+    // When the pipe last took anything, and whether it ever has on this
+    // connection. A backlog that stops moving is the only visible sign that
+    // the far end has stopped reading — or, for an SRT listener, has not
+    // attached yet. RelayMachine decides which of those it is.
+    int64_t m_last_accept_ms = 0;
+    bool    m_ever_accepted = false;
 
     mutable std::mutex m_mtx;
     std::string m_detail;

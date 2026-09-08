@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "api.h"
 #include "auth.h"
+#include "ffmpeg_process.h"
 #include "room_feeder.h"
 #include "log.h"
 #include "stream_plan.h"
@@ -78,6 +79,15 @@ json dest_json(const Destination& d) {
     j["allow_transcode"] = d.allow_transcode;
     j["enabled"] = d.enabled;
     j["delay_s"] = d.delay_s;
+    // The protocol is reported rather than stored: the address is the only
+    // thing that decides it, and having the browser work it out separately
+    // would be a second opinion that could differ from the relay's.
+    j["protocol"] = protocol_of(d) == Protocol::Srt ? "srt" : "rtmp";
+    j["srt_mode"] = d.srt_mode == SrtMode::Listener ? "listener" : "caller";
+    // Whether there is one, never what it is — the same rule the stream key
+    // has always been held to.
+    j["has_passphrase"] = !d.srt_passphrase.empty();
+    j["srt_latency_ms"] = d.srt_latency_ms;
     return j;
 }
 
@@ -228,6 +238,10 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         j["cannot_send_reason"] = s.cannot_send_reason;
         j["total_out_kbps"] = s.total_out_kbps;
         j["audio_labels"] = s.audio_labels;
+        // So the page can say, where an address is typed, that this
+        // particular ffmpeg cannot do SRT — rather than letting a
+        // destination be saved that will never start.
+        j["srt_available"] = ffmpeg_supports_srt();
         json d = json::array();
         for (const auto& x : s.destinations) d.push_back(status_json(x));
         j["destinations"] = d;
@@ -315,6 +329,9 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         d.audio.label = str(j, "audio_label");
         d.allow_transcode = flag(j, "allow_transcode");
         d.delay_s = num(j, "delay_s", 0);
+        d.srt_passphrase = str(j, "srt_passphrase");
+        d.srt_latency_ms = num(j, "srt_latency_ms", 0);
+        if (str(j, "srt_mode") == "listener") d.srt_mode = SrtMode::Listener;
         d.enabled = false;      // added stopped; the operator presses Start
 
         std::string error;
@@ -340,6 +357,15 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         d.audio.label = str(j, "audio_label", d.audio.label);
         d.allow_transcode = flag(j, "allow_transcode", d.allow_transcode);
         d.delay_s = num(j, "delay_s", d.delay_s);
+        // Blank means unchanged, exactly as it does for the stream key: the
+        // browser is never sent the old one, so it has nothing to send back.
+        const std::string pass = str(j, "srt_passphrase");
+        if (!pass.empty()) d.srt_passphrase = pass;
+        d.srt_latency_ms = num(j, "srt_latency_ms", d.srt_latency_ms);
+        const std::string mode = str(j, "srt_mode");
+        if (!mode.empty())
+            d.srt_mode = mode == "listener" ? SrtMode::Listener
+                                            : SrtMode::Caller;
 
         std::string error;
         if (!service.config().update(d, error)) return fail(res, 400, error);

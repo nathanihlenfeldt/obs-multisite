@@ -438,6 +438,114 @@ int main() {
               "with nothing on air it waits rather than failing");
     }
 
+
+    // ── Nothing is going out ────────────────────────────────────────────────
+    // The other half of the finding this machine is built around. ffmpeg says
+    // nothing when it is starved, and it says nothing when the far end stops
+    // reading either — so both have to be noticed here, and they mean
+    // different things depending on which end opened the connection.
+    {
+        RelayMachine m;
+        auto in = live_at(1000, 100);
+        m.step(in);                       // spawn
+        in.child_alive = true;
+        m.step(in);                       // first segment out
+
+        // A destination we called that stops taking content is a fault. It is
+        // ridden out first, because a receiver pausing for a moment is not
+        // worth splitting the recording over.
+        in.output_accepting = false;
+        in.output_ever_accepted = true;
+        auto d = m.step(in);
+        CHECK(d.action == RelayAction::None &&
+              m.state() == RelayState::Streaming,
+              "a destination that briefly stops reading is ridden out");
+
+        in.now_ms += 44000;
+        d = m.step(in);
+        CHECK(d.action == RelayAction::None,
+              "still ridden out at forty-four seconds");
+
+        in.now_ms += 2000;
+        d = m.step(in);
+        CHECK(d.action == RelayAction::Kill,
+              "at forty-five it is dropped, like any other lost connection");
+        CHECK(m.state() == RelayState::Reconnecting, "and rebuilt");
+        CHECK(m.last_error().find("accepting") != std::string::npos,
+              "with a reason that says the destination stopped taking it, "
+              "not that the main site stopped sending");
+    }
+    {
+        // The same silence, on a destination that waits to be connected TO.
+        // Nothing has attached yet, which is the resting state of a listener
+        // and must never be given up on: a broadcast partner may well attach
+        // twenty minutes into the service.
+        RelayMachine m;
+        auto in = live_at(1000, 100);
+        in.awaits_receiver = true;
+        m.step(in);
+        in.child_alive = true;
+        in.output_accepting = false;
+        in.output_ever_accepted = false;
+
+        auto d = m.step(in);
+        CHECK(m.state() == RelayState::Awaiting,
+              "a listener with nobody attached is waiting, not sending");
+        CHECK(d.action == RelayAction::None, "and nothing is fed into it");
+
+        // Well past the grace period, and past the point where a caller would
+        // have been torn down twice over.
+        for (int i = 0; i < 20; ++i) { in.now_ms += 60000; d = m.step(in); }
+        CHECK(m.state() == RelayState::Awaiting,
+              "twenty minutes later it is still waiting, not reconnecting");
+        CHECK(d.action != RelayAction::Kill,
+              "and has never been torn down for it");
+        CHECK(m.restarts() == 0, "nor counted against it as a fault");
+
+        // Position keeps moving with the service, so whoever finally attaches
+        // gets what is happening now rather than the twenty minutes they
+        // missed — and the cache is not pinned open holding it for them.
+        in.latest_seq = 300;
+        m.step(in);
+        CHECK(m.head() == seq_behind_live(300, 0, 6.0, 180),
+              "and it has kept up with the service while it waited");
+
+        // Somebody attaches.
+        const uint64_t waiting_at = m.head();
+        in.output_accepting = true;
+        d = m.step(in);
+        CHECK(m.state() == RelayState::Streaming,
+              "when the far end connects it starts sending");
+        CHECK(d.action == RelayAction::FeedSegment && d.seq == waiting_at,
+              "beginning with where it had got to");
+
+        // Pacing is anchored afresh, or everything that came due during the
+        // wait would be released in one burst.
+        d = m.step(in);
+        CHECK(d.action == RelayAction::None,
+              "and at real time, not all the waiting at once");
+    }
+    {
+        // A listener that HAD a partner and lost it is a fault like any other:
+        // the distinction is whether anything ever went out, not the mode.
+        RelayMachine m;
+        auto in = live_at(1000, 100);
+        in.awaits_receiver = true;
+        m.step(in);
+        in.child_alive = true;
+        m.step(in);
+
+        in.output_accepting = false;
+        in.output_ever_accepted = true;
+        auto d = m.step(in);
+        CHECK(d.action == RelayAction::None && m.state() != RelayState::Awaiting,
+              "a listener that HAS carried content is not back to waiting");
+        in.now_ms += 46000;
+        d = m.step(in);
+        CHECK(d.action == RelayAction::Kill,
+              "it is dropped and rebuilt, like any other lost connection");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL RELAY STATE TESTS PASSED"
                                       : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

@@ -46,6 +46,31 @@ static Destination dest(const std::string& label = "") {
     return d;
 }
 
+// An SRT destination as it comes back out of the store: normalized, because
+// that is the only way one ever reaches plan_stream().
+static Destination srt_dest(
+        const std::string& url = "srt://ingest.example.com:9000",
+        const std::string& key = "secret-key-1234") {
+    Destination d;
+    d.name = "Partner";
+    d.room_id = "main-auditorium";
+    d.url = url;
+    d.stream_key = key;
+    normalize(d);
+    return d;
+}
+
+static bool has_arg(const std::vector<std::string>& a, const std::string& v) {
+    for (const auto& x : a) if (x == v) return true;
+    return false;
+}
+
+static bool any_contains(const std::vector<std::string>& a,
+                         const std::string& v) {
+    for (const auto& x : a) if (x.find(v) != std::string::npos) return true;
+    return false;
+}
+
 static bool has_pair(const std::vector<std::string>& a,
                      const std::string& k, const std::string& v) {
     for (size_t i = 0; i + 1 < a.size(); ++i)
@@ -85,6 +110,8 @@ int main() {
               "and the reason says what is needed");
         CHECK(p.problem.find("codec") == std::string::npos,
               "without using the word codec at a volunteer");
+        CHECK(p.remedy.find("SRT") != std::string::npos,
+              "and points at the one way there is to send it on unchanged");
     }
     {
         Manifest m = ordinary();
@@ -153,6 +180,161 @@ int main() {
         CHECK(!validate(d).empty(), "a missing stream key is caught when saving");
         d = dest(); d.url = "https://youtube.com/watch";
         CHECK(!validate(d).empty(), "so is a web address pasted in by mistake");
+    }
+
+
+    // ── SRT ─────────────────────────────────────────────────────────────────
+    std::printf("\nSRT\n");
+    {
+        auto p = plan_stream(ordinary(), srt_dest(), "pipe:0");
+        CHECK(p.ok, "an ordinary service can go out over SRT");
+        CHECK(has_pair(p.args, "-f", "mpegts"), "as MPEG-TS, not FLV");
+        CHECK(!has_arg(p.args, "flv"), "and nothing FLV comes along with it");
+        CHECK(has_pair(p.args, "-c", "copy"),
+              "still a copy remux, exactly as RTMP is");
+        CHECK(has_pair(p.args, "-mpegts_flags", "+resend_headers"),
+              "with the stream tables resent, so a late arrival can decode it");
+    }
+    {
+        // The reason SRT is here at all: HEVC in MPEG-TS is a real, long
+        // established stream type, not FLV's after-the-fact extension.
+        Manifest m = ordinary();
+        m.video.codec = "hevc";
+        auto p = plan_stream(m, srt_dest(), "pipe:0");
+        CHECK(p.ok, "HEVC can be sent over SRT, where it could not over RTMP");
+        CHECK(p.summary.find("HEVC") != std::string::npos,
+              "and the summary says so rather than claiming H.264");
+    }
+    {
+        Manifest m = ordinary();
+        m.video.codec = "av1";
+        CHECK(!plan_stream(m, srt_dest(), "pipe:0").ok,
+              "AV1 is still refused, on SRT as much as on RTMP");
+    }
+    {
+        // Everything that is about the content rather than the transport has
+        // to refuse on both, or SRT becomes a way round the safeguards.
+        Manifest m;
+        m.video.codec = "h264";
+        AudioTrack packed = track(0, "Production", 8);
+        packed.channel_labels = { "Main L", "Main R", "Sermon", "Click" };
+        m.audio_tracks = { packed };
+        CHECK(!plan_stream(m, srt_dest(), "pipe:0").ok,
+              "a packed multi-channel feed is refused over SRT too");
+    }
+
+    // ── Pulling a pasted address apart ──────────────────────────────────────
+    // What a church is actually handed varies. All of it has to end up meaning
+    // the same thing, with the secrets out of the address so what is left can
+    // be shown back to the browser.
+    {
+        Destination d = srt_dest(
+            "srt://ingest.example.com:9000?streamid=abc123"
+            "&passphrase=hunter2hunter2&latency=1500000&pbkeylen=32", "");
+        CHECK(d.stream_key == "abc123", "a pasted stream id is lifted out");
+        CHECK(d.srt_passphrase == "hunter2hunter2",
+              "so is a pasted passphrase");
+        CHECK(d.srt_latency_ms == 1500,
+              "and a pasted latency, converted out of ffmpeg's millionths");
+        CHECK(d.url.find("streamid") == std::string::npos &&
+              d.url.find("hunter2") == std::string::npos,
+              "leaving no secret in the address the browser is shown");
+        CHECK(d.url.find("pbkeylen=32") != std::string::npos,
+              "but an option we do not manage is left exactly where it was");
+        CHECK(validate(d).empty(), "and the result is a destination we accept");
+    }
+    {
+        // A field the operator filled in themselves is the more deliberate of
+        // the two, and wins.
+        Destination d;
+        d.name = "Partner"; d.room_id = "r";
+        d.url = "srt://ingest.example.com:9000?streamid=from-the-url";
+        d.stream_key = "typed-in-the-box";
+        normalize(d);
+        CHECK(d.stream_key == "typed-in-the-box",
+              "what was typed beats what was pasted");
+    }
+    {
+        Destination d = srt_dest("srt://ingest.example.com:9000", "abc");
+        const std::string u = output_url(d);
+        CHECK(u.find("streamid=abc") != std::string::npos,
+              "the stream id goes back on as a query parameter, not a path");
+        CHECK(u.find("latency=2000000") != std::string::npos,
+              "with our own generous default, in ffmpeg's units");
+    }
+
+    // ── Listener mode ───────────────────────────────────────────────────────
+    {
+        Destination d = srt_dest("srt://:9000", "ignored");
+        CHECK(is_listener(d), "an address with no host at all is a listener");
+        CHECK(d.url == "srt://0.0.0.0:9000",
+              "written out as something ffmpeg will bind");
+        CHECK(d.stream_key.empty(),
+              "and a stream id is dropped, because a listener is never the "
+              "end that sends one");
+        CHECK(validate(d).empty(), "a listener with no host still validates");
+
+        auto p = plan_stream(ordinary(), d, "pipe:0");
+        CHECK(p.ok, "and can be planned");
+        CHECK(any_contains(p.args, "mode=listener"),
+              "ffmpeg is told to listen");
+        CHECK(any_contains(p.args, "listen_timeout=-1"),
+              "and to wait indefinitely, because nobody attached yet is not a "
+              "failure");
+        CHECK(p.summary.find("waiting") != std::string::npos,
+              "which is what the operator is told as well");
+    }
+    {
+        CHECK(!is_listener(srt_dest("srt://ingest.example.com:9000", "abc")),
+              "a caller is not mistaken for a listener");
+        CHECK(!is_listener(dest()), "and neither is an RTMP destination");
+    }
+
+    // ── SRT refusals at save time ───────────────────────────────────────────
+    {
+        CHECK(!validate(srt_dest("srt://ingest.example.com")).empty(),
+              "an SRT address with no port is caught when saving");
+        CHECK(!validate(srt_dest("srt://ingest.example.com:99999")).empty(),
+              "so is a port that is not a port");
+
+        Destination d = srt_dest();
+        d.srt_passphrase = "short";
+        CHECK(!validate(d).empty(),
+              "so is a passphrase libsrt would reject as too short");
+
+        d = srt_dest();
+        d.srt_latency_ms = 2;
+        const std::string why = validate(d);
+        CHECK(!why.empty(), "so is a latency of two milliseconds");
+        CHECK(why.find("millionths") != std::string::npos,
+              "and the reason explains the unit that caused it");
+
+        // These would be cut short by ffmpeg's own reading of the address,
+        // and the connection refused with nothing said anywhere.
+        d = srt_dest("srt://ingest.example.com:9000", "abc&def");
+        CHECK(!validate(d).empty(),
+              "a stream id containing an & is refused rather than truncated");
+    }
+
+    // ── SRT secrets ─────────────────────────────────────────────────────────
+    {
+        // Under SRT both secrets live INSIDE one URL argument, alongside
+        // things worth keeping in the log, so redaction has to reach into an
+        // argument rather than drop it whole.
+        Destination d = srt_dest();
+        d.srt_passphrase = "hunter2hunter2";
+        auto p = plan_stream(ordinary(), d, "pipe:0");
+        CHECK(any_contains(p.args, "secret-key-1234") &&
+              any_contains(p.args, "hunter2hunter2"),
+              "both secrets do reach ffmpeg");
+
+        auto safe = redact(p.args, d);
+        CHECK(!any_contains(safe, "secret-key-1234"),
+              "neither the stream id survives redaction");
+        CHECK(!any_contains(safe, "hunter2hunter2"),
+              "nor the passphrase");
+        CHECK(any_contains(safe, "ingest.example.com"),
+              "while the address itself is still legible in the log");
     }
 
     std::printf("\n%s\n", g_fail == 0 ? "ALL STREAM PLAN TESTS PASSED"

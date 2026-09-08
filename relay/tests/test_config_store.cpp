@@ -105,6 +105,49 @@ int main() {
         CHECK(cs.destinations().empty(), "leaving none");
     }
 
+    // An SRT destination has parts an RTMP one does not, and they have to
+    // survive the trip through the database intact — a passphrase that comes
+    // back empty is a stream that will not connect, on a Sunday, with nothing
+    // saying why.
+    {
+        ConfigStore cs;
+        CHECK(cs.open(path).empty(), "the database reopens");
+
+        Destination srt;
+        srt.name = "Partner feed";
+        srt.room_id = "main-auditorium";
+        // Pasted whole, the way a partner usually hands one over.
+        srt.url = "srt://ingest.example.com:9000?streamid=abc&"
+                  "passphrase=hunter2hunter2&latency=1500000";
+
+        std::string err;
+        const int64_t id = cs.add(srt, err);
+        CHECK(id > 0 && err.empty(), "a pasted SRT address saves");
+
+        auto back = cs.destination(id);
+        CHECK(back.has_value(), "and reads back");
+        CHECK(back->url == "srt://ingest.example.com:9000",
+              "with the secrets taken out of the address, as stored");
+        CHECK(back->stream_key == "abc", "the stream id kept separately");
+        CHECK(back->srt_passphrase == "hunter2hunter2",
+              "the passphrase with it");
+        CHECK(back->srt_latency_ms == 1500,
+              "and the latency in the units the operator is shown");
+
+        Destination listener;
+        listener.name = "Hardware decoder";
+        listener.room_id = "main-auditorium";
+        listener.url = "srt://:9000";
+        CHECK(cs.add(listener, err) > 0 && err.empty(),
+              "so does a listener with no host at all");
+        for (const auto& x : cs.destinations())
+            if (x.name == "Hardware decoder")
+                CHECK(x.srt_mode == SrtMode::Listener,
+                      "and it is still a listener when it comes back");
+
+        for (const auto& x : cs.destinations()) cs.remove(x.id);
+    }
+
     ::unlink(path.c_str());
     ::unlink((path + "-wal").c_str());
     ::unlink((path + "-shm").c_str());

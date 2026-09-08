@@ -85,14 +85,40 @@
       <span class="hint">Just so you can tell them apart.</span>
     </label>
     <label>Server address
-      <input name="url" placeholder="rtmp://a.rtmp.youtube.com/live2" required>
-      <span class="hint">Copy this from the streaming site's own page.</span>
+      <input name="url" id="add-url"
+             placeholder="rtmp://a.rtmp.youtube.com/live2" required>
+      <span class="hint">Copy this from the streaming site's own page. It
+        starts with rtmp://, rtmps:// or srt:// — paste the whole thing, even
+        if it has the stream key in it.</span>
     </label>
-    <label>Stream key
-      <input name="stream_key" type="password" autocomplete="off" required>
-      <span class="hint">Also from the streaming site. It is kept on this
-        server and never shown again.</span>
+    <label id="add-key-row">
+      <span class="label-text" id="add-key-label">Stream key</span>
+      <input name="stream_key" type="password" autocomplete="off">
+      <span class="hint" id="add-key-hint">Also from the streaming site. It is
+        kept on this server and never shown again.</span>
     </label>
+    <div class="error" id="add-srt-unavailable" hidden>The ffmpeg on this
+      server was built without SRT, so a destination like this will not
+      start. Use an rtmp:// address, or reinstall the relay from its own
+      container image.</div>
+    <div id="add-srt" hidden>
+      <label>Passphrase
+        <input name="srt_passphrase" type="password" autocomplete="off">
+        <span class="hint">Only if the far end gave you one. Between 10 and 79
+          characters.</span>
+      </label>
+      <details class="advanced">
+        <summary>Advanced</summary>
+        <label>SRT latency
+          <input name="srt_latency_ms" type="number" min="20" max="8000"
+                 step="10" placeholder="2000">
+          <span class="hint">Milliseconds. This is how long SRT will spend
+            asking for a lost packet again before giving up on it, and it is
+            not the same as the delay below. Two seconds suits almost
+            everything; raise it if the far end is a long way away.</span>
+        </label>
+      </details>
+    </div>
     <label>Which sound to send
       <select name="audio_label" id="add-audio"></select>
       <span class="hint">The main mix is what a congregation should hear.</span>

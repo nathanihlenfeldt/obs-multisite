@@ -8,6 +8,7 @@
 // `docker run` and a port.
 //
 #include "api.h"
+#include "ffmpeg_process.h"
 #include "log.h"
 #include "service.h"
 
@@ -143,6 +144,9 @@ int main() {
                   "in front of this is terminating TLS", bind.c_str());
     if (!service.config().storage_configured())
         rlog_info("storage is not set up yet — open the page and fill it in");
+    if (!ffmpeg_supports_srt())
+        rlog_warn("this ffmpeg was built without SRT, so only rtmp:// and "
+                  "rtmps:// destinations will work here");
 
     while (!g_stop) std::this_thread::sleep_for(std::chrono::milliseconds(200));
 

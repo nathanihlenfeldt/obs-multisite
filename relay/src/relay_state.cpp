@@ -30,6 +30,7 @@ const char* to_string(RelayState s) {
     switch (s) {
         case RelayState::Idle:         return "idle";
         case RelayState::Waiting:      return "waiting";
+        case RelayState::Awaiting:     return "awaiting";
         case RelayState::Streaming:    return "streaming";
         case RelayState::Stalled:      return "stalled";
         case RelayState::Reconnecting: return "reconnecting";
@@ -44,6 +45,7 @@ std::string describe(RelayState s) {
     switch (s) {
         case RelayState::Idle:         return "Not sending";
         case RelayState::Waiting:      return "Waiting for the service to start";
+        case RelayState::Awaiting:     return "Ready — waiting to be connected to";
         case RelayState::Streaming:    return "Sending";
         case RelayState::Stalled:      return "Nothing coming from the main site";
         case RelayState::Reconnecting: return "Reconnecting";
@@ -74,6 +76,7 @@ void RelayMachine::enter(RelayState s, int64_t now_ms, const std::string& why) {
     m_state = s;
     if (s == RelayState::Streaming) m_streaming_since_ms = now_ms;
     if (s != RelayState::Stalled) m_stalled_since_ms = 0;
+    if (s != RelayState::Awaiting) m_backed_up_since_ms = 0;
     if (!why.empty()) m_last_error = why;
 }
 
@@ -106,6 +109,7 @@ void RelayMachine::reconfigured(int64_t now_ms) {
     m_retry_at_ms = 0;           // an edit is not a failure to back off from
     m_stalled_since_ms = 0;
     m_overdue_since_ms = 0;
+    m_backed_up_since_ms = 0;
     m_streaming_since_ms = now_ms;
     m_last_error.clear();
 }
@@ -162,7 +166,8 @@ RelayDecision RelayMachine::step(const RelayInput& in) {
 
     // ── An unexpected exit ───────────────────────────────────────────────────
     if (!in.child_alive && (m_state == RelayState::Streaming ||
-                            m_state == RelayState::Stalled)) {
+                            m_state == RelayState::Stalled ||
+                            m_state == RelayState::Awaiting)) {
         enter(RelayState::Reconnecting, now,
               "the connection to the destination dropped");
         d.note = "connection lost — reconnecting";
@@ -259,6 +264,62 @@ RelayDecision RelayMachine::step(const RelayInput& in) {
         return d;   // waiting for ffmpeg to finish
     }
     if (m_state == RelayState::Ending) return d;
+
+    // ── Content is not going out ────────────────────────────────────────────
+    // Checked before anything is fed, because feeding a pipe nobody is
+    // emptying only makes the backlog bigger. What it MEANS depends on
+    // whether this destination calls out or is called:
+    //
+    //   • Called (an SRT listener) and nothing has ever gone out: the far end
+    //     has not attached yet. That is the resting state of a listener, it
+    //     may last the whole first half of a service, and it is neither a
+    //     fault nor something to give up on.
+    //   • Anything else: the destination has stopped reading. Held for the
+    //     same grace period a silence gets — a receiver pausing for a moment
+    //     is not worth splitting the recording over — and then dropped and
+    //     rebuilt like any other lost connection.
+    if (!in.output_accepting) {
+        if (in.awaits_receiver && !in.output_ever_accepted) {
+            if (m_state != RelayState::Awaiting) {
+                enter(RelayState::Awaiting, now, {});
+                d.note = "ready — waiting for the far end to connect";
+            }
+            // Keep taking up position while we wait. There is no continuity
+            // to preserve for a connection that has never carried anything,
+            // so someone attaching forty minutes in should get the service as
+            // it is now rather than the forty minutes they missed — and
+            // holding a stale position would pin the cache open besides.
+            if (!in.from_beginning)
+                m_head = seq_behind_live(in.latest_seq, in.first_available_seq,
+                                         seg_s, in.delay_s);
+            return d;
+        }
+
+        if (m_backed_up_since_ms == 0) m_backed_up_since_ms = now;
+        if (now - m_backed_up_since_ms >= (int64_t)in.grace_s * 1000) {
+            d.action = RelayAction::Kill;
+            d.note = "the destination stopped accepting content for " +
+                     std::to_string(in.grace_s) +
+                     " seconds — dropping the connection";
+            enter(RelayState::Reconnecting, now,
+                  "the destination stopped accepting content");
+            m_retry_at_ms = now + kBackoffFirstMs;
+            return d;
+        }
+        return d;   // still inside the grace period: ride it out
+    }
+
+    if (m_state == RelayState::Awaiting) {
+        // Something attached. Pacing is anchored afresh at this moment: the
+        // segments that came due during the wait were never sent and must not
+        // now all be released at once.
+        m_anchor_ms = now;
+        m_anchor_seq = m_head;
+        m_overdue_since_ms = 0;
+        enter(RelayState::Streaming, now, {});
+        d.note = "the far end connected";
+    }
+    m_backed_up_since_ms = 0;
 
     const int64_t due_ms = m_anchor_ms +
                            (int64_t)(m_head - m_anchor_seq) * seg_ms;
