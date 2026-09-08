@@ -40,6 +40,11 @@ public:
     void setPlayhead(long long ms);
     void setDownloaded(std::vector<std::pair<long long, long long>> spans);
     void setMarkers(std::vector<long long> times_ms);
+    // Why the bar has nothing to show, when it has nothing to show. An empty
+    // trough looked identical whether no source existed, nothing had been
+    // loaded yet, or something had genuinely failed — which is exactly how a
+    // normal startup state came to be reported as the timeline being broken.
+    void setPlaceholder(const QString& why);
 
     QSize minimumSizeHint() const override;
 
@@ -57,6 +62,7 @@ private:
     long long timeAt(int x) const;
 
     long long m_earliest = 0, m_live = 0, m_head = 0;
+    QString   m_placeholder;
     std::vector<std::pair<long long, long long>> m_downloaded;
     std::vector<long long> m_markers;
     int  m_hoverX = -1;
