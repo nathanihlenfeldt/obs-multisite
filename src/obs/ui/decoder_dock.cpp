@@ -4,6 +4,7 @@
 #include "../multisite_ui.h"
 #include "../decoder_settings.h"
 #include "../plugin_log.h"
+#include "role_selector.h"
 
 #include <obs-module.h>
 
@@ -452,6 +453,9 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     m_bufferMins->setToolTip(tr_("BufferMinutesHint"));
     form->addRow(tr_("BufferMinutes"), m_bufferMins);
     dlgRoot->addWidget(storeBox);
+    // In both dialogs on purpose: choosing a role hides the other dock, so a
+    // control in only one of them could hide the way back.
+    dlgRoot->addWidget(make_role_selector(m_settings));
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, m_settings);
     dlgRoot->addWidget(buttons);

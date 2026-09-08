@@ -12,6 +12,7 @@
 #include "encoder_dock.h"
 #include "decoder_dock.h"
 #include "../plugin_log.h"
+#include "../plugin_role.h"
 
 namespace multisite_obs {
 
@@ -29,15 +30,37 @@ static QWidget* scrollable(QWidget* inner) {
 }
 
 void register_docks() {
+    // A machine set to one role gets one dock. A campus that only receives has
+    // no business being one click from going live, and an operator should not
+    // have to learn to ignore half of what is on screen.
+    //
+    // The output and source types are registered regardless — see
+    // plugin_role.h. This hides panels; it does not take a source type away
+    // from a scene collection that is using it.
+    const Role role = plugin_role();
+
     // add_dock_by_id takes ownership of the widget and remembers its geometry
     // and visibility between sessions, so an operator's layout persists.
-    obs_frontend_add_dock_by_id("multisite_encoder",
-                                obs_module_text("Dock.Encoder"),
-                                scrollable(new EncoderDock()));
-    obs_frontend_add_dock_by_id("multisite_decoder",
-                                obs_module_text("Dock.Decoder"),
-                                scrollable(new DecoderDock()));
-    mlog_info("registered encoder and decoder docks");
+    if (role != Role::DecoderOnly)
+        obs_frontend_add_dock_by_id("multisite_encoder",
+                                    obs_module_text("Dock.Encoder"),
+                                    scrollable(new EncoderDock()));
+    if (role != Role::EncoderOnly)
+        obs_frontend_add_dock_by_id("multisite_decoder",
+                                    obs_module_text("Dock.Decoder"),
+                                    scrollable(new DecoderDock()));
+
+    switch (role) {
+        case Role::EncoderOnly:
+            mlog_info("registered the encoder dock only (role 'encoder')");
+            break;
+        case Role::DecoderOnly:
+            mlog_info("registered the decoder dock only (role 'decoder')");
+            break;
+        default:
+            mlog_info("registered encoder and decoder docks");
+            break;
+    }
 }
 
 } // namespace multisite_obs

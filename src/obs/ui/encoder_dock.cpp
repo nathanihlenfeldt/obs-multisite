@@ -4,6 +4,7 @@
 #include "../broadcast_controller.h"
 #include "../multisite_ui.h"
 #include "../plugin_log.h"
+#include "role_selector.h"
 
 #include <obs-module.h>
 
@@ -184,6 +185,9 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     mform->addRow(QString(), m_audioNote);
     mform->addRow(tr_("MarkerLabels"), m_markerLabels);
     dlgRoot->addWidget(mediaBox);
+    // In both dialogs on purpose: choosing a role hides the other dock, so a
+    // control in only one of them could hide the way back.
+    dlgRoot->addWidget(make_role_selector(m_settings));
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, m_settings);
     dlgRoot->addWidget(buttons);
