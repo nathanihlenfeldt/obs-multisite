@@ -220,6 +220,19 @@ void TimelineBar::leaveEvent(QEvent*) {
 }
 
 // ── DecoderDock ──────────────────────────────────────────────────────────────
+// Worded exactly as the encoder dock words it, and for the same reason: an
+// operator who has seen one should not have to learn the other. Only measured
+// figures appear — 0 Mbps would read as a dead link, not as no evidence yet.
+static QString link_summary(const QString& colo, const QString& host,
+                            double bytes_per_s, unsigned long long samples) {
+    QStringList bits;
+    if (!colo.isEmpty())      bits << colo;
+    else if (!host.isEmpty()) bits << host.section('.', 0, 0);
+    if (samples > 0 && bytes_per_s > 0.0)
+        bits << QString::number(bytes_per_s * 8.0 / 1e6, 'f', 1) + " Mbps";
+    return bits.isEmpty() ? QString("—") : bits.join(" · ");
+}
+
 DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     auto* root = new QVBoxLayout(this);
     root->setContentsMargins(8, 8, 8, 8);
@@ -407,11 +420,15 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     addStat(0, 1, "Dock.CanRewind", m_cached);
     addStat(1, 0, "Dock.Marker",   m_marker);
     addStat(1, 1, "Dock.Audio",    m_audio);
+    // Where the bucket answers from and what the download is managing. A
+    // campus that cannot hold a buffer has no other way to tell a slow link
+    // from a distant bucket.
+    addStat(2, 0, "Dock.Bucket",   m_storage);
     m_error = new QLabel(QString(), box);
     m_error->setWordWrap(true);
     m_error->setStyleSheet("color: #e5484d;");
     m_error->hide();
-    grid->addWidget(m_error, 2, 0, 1, 4);
+    grid->addWidget(m_error, 3, 0, 1, 4);
     root->addWidget(box);
 
     // ── Storage: entered once for this machine ──────────────────────────────
@@ -482,6 +499,12 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
                 &DecoderDock::onSaveSettings);
 
     root->addStretch(1);
+
+    // Always on screen, so the version in a bug report is the real one and
+    // nobody has to be told where to find it.
+    m_version = new QLabel(QString("obs-multisite %1").arg(PLUGIN_VERSION), this);
+    m_version->setStyleSheet("color: palette(text); opacity: 0.55;");
+    root->addWidget(m_version);
 
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, &DecoderDock::refresh);
@@ -866,6 +889,11 @@ void DecoderDock::refresh() {
     // The reliability figure: how long this campus could keep broadcasting if
     // the connection died right now.
     m_buffered->setText(friendly_duration(s.buffered_ahead_s));
+    if (m_storage)
+        m_storage->setText(link_summary(
+            QString::fromStdString(s.colo),
+            QString::fromStdString(s.storage_host),
+            s.download_bytes_per_s, s.download_samples));
     m_buffered->setToolTip(tr_("Dock.BufferedHint"));
     // How far back the recording still exists in storage (not on this PC).
     {

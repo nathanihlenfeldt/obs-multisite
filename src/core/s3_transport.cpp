@@ -88,14 +88,20 @@ struct S3Transport::Impl {
     mutable std::mutex obs_mtx;
     std::string last_colo;
     std::string last_server;
-    RateMeter   rate;
+    // Kept apart because they answer different questions and a site only ever
+    // does one of them: a main site's figure is what its upload is managing, a
+    // campus's is whether it can bank a buffer. Averaging them together would
+    // describe neither.
+    RateMeter   down;
+    RateMeter   up;
 
-    void observe(const HeaderCtx& hc, uint64_t bytes, double seconds) {
+    void observe(const HeaderCtx& hc, uint64_t bytes, double seconds,
+                 bool uploading) {
         std::lock_guard<std::mutex> lk(obs_mtx);
         const std::string colo = cloudflare_colo(hc.cf_ray);
         if (!colo.empty())        last_colo = colo;
         if (!hc.server.empty())   last_server = hc.server;
-        rate.add(bytes, seconds);
+        (uploading ? up : down).add(bytes, seconds);
     }
 
     std::string host() const {
@@ -167,6 +173,9 @@ struct S3Transport::Impl {
         curl_easy_setopt(curl, CURLOPT_INFILESIZE_LARGE, (curl_off_t)body.size());
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_to_vec);
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &resp);
+        HeaderCtx hc;
+        curl_easy_setopt(curl, CURLOPT_HEADERFUNCTION, collect_headers);
+        curl_easy_setopt(curl, CURLOPT_HEADERDATA, &hc);
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)cfg.connect_timeout_ms);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)cfg.request_timeout_ms);
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
@@ -177,6 +186,17 @@ struct S3Transport::Impl {
             curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
             res.http_status = code;
             res.success = (code >= 200 && code < 300);
+
+            // Measured from the segment uploads themselves, so a main site's
+            // figure is what its own connection is actually managing during a
+            // service — which is the number an operator wants when the queue
+            // starts to build.
+            curl_off_t start_us = 0, total_us = 0;
+            curl_easy_getinfo(curl, CURLINFO_STARTTRANSFER_TIME_T, &start_us);
+            curl_easy_getinfo(curl, CURLINFO_TOTAL_TIME_T, &total_us);
+            const double transfer_s = total_us > start_us
+                ? (double)(total_us - start_us) / 1e6 : 0.0;
+            observe(hc, (uint64_t)body.size(), transfer_s, true);
             if (!res.success) {
                 // 4xx (except 408/429) are permanent: bad creds, bad bucket,
                 // bad request. Retrying those forever would mask a config error.
@@ -240,7 +260,7 @@ struct S3Transport::Impl {
             const double transfer_s = total_us > t_us
                 ? (double)(total_us - t_us) / 1e6 : 0.0;
             if (elapsed_ms) *elapsed_ms = (int64_t)(total_us / 1000);
-            observe(hc, (uint64_t)out.size(), transfer_s);
+            observe(hc, (uint64_t)out.size(), transfer_s, false);
         } else {
             res.error = curl_easy_strerror(cc);
             if (elapsed_ms) *elapsed_ms = 0;
@@ -275,13 +295,21 @@ std::string S3Transport::last_server() const {
     std::lock_guard<std::mutex> lk(d->obs_mtx);
     return d->last_server;
 }
-double S3Transport::observed_bytes_per_s() const {
+double S3Transport::observed_upload_bytes_per_s() const {
     std::lock_guard<std::mutex> lk(d->obs_mtx);
-    return d->rate.bytes_per_s();
+    return d->up.bytes_per_s();
 }
-uint64_t S3Transport::rate_samples() const {
+uint64_t S3Transport::upload_samples() const {
     std::lock_guard<std::mutex> lk(d->obs_mtx);
-    return d->rate.samples();
+    return d->up.samples();
+}
+double S3Transport::observed_download_bytes_per_s() const {
+    std::lock_guard<std::mutex> lk(d->obs_mtx);
+    return d->down.bytes_per_s();
+}
+uint64_t S3Transport::download_samples() const {
+    std::lock_guard<std::mutex> lk(d->obs_mtx);
+    return d->down.samples();
 }
 
 StorageProbe S3Transport::probe(const std::string& key) {

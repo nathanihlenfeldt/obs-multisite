@@ -363,6 +363,10 @@ BroadcastStatus BroadcastController::status() const {
         st.link_health = es.link_health;
         st.last_error  = es.last_error;
         if (es.bytes) st.bytes = es.bytes;
+        st.colo               = es.colo;
+        st.storage_host       = es.storage_host;
+        st.upload_bytes_per_s = es.upload_bytes_per_s;
+        st.upload_samples     = es.upload_samples;
     }
     return st;
 }

@@ -82,8 +82,14 @@ public:
     // Smoothed observed throughput in bytes per second, and how many
     // transfers large enough to be worth timing have contributed. 0 samples
     // means no figure should be shown rather than a zero rate.
-    double observed_bytes_per_s() const;
-    uint64_t rate_samples() const;
+    //
+    // Up and down are separate because a site only ever does one of them, and
+    // they answer different questions: a main site needs to know what its
+    // upload is managing, a campus whether it can bank a buffer.
+    double   observed_upload_bytes_per_s() const;
+    uint64_t upload_samples() const;
+    double   observed_download_bytes_per_s() const;
+    uint64_t download_samples() const;
 
     std::string host() const;
 
