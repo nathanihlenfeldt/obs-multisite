@@ -1,0 +1,153 @@
+# Choosing a satellite
+
+A campus can receive in one of two ways, and they suit different rooms.
+
+**OBS on a PC** — the decoder is a *source in a scene*, so the campus can
+produce around the relayed service. **The Pi appliance** — a fixed-function box
+that plays the service and nothing else. Both are built; neither has yet run a
+real service.
+
+### What running the decoder in OBS makes possible
+
+Because the relayed programme is an ordinary source, everything OBS does applies
+to it. This is the reason to choose a PC over the appliance, and for many
+churches it is the deciding factor.
+
+**Local content over the relayed service**
+
+- Lower thirds, campus announcements, scripture graphics, a countdown before the
+  service, a logo bug — keyed over the incoming picture with OBS's normal
+  sources and filters.
+- Cut away entirely to a local camera for a campus host, a local worship set or
+  notices, then back to the relay. The decoder keeps downloading while it is off
+  screen, so returning does not mean re-buffering.
+- Record the campus feed locally and simulcast it to YouTube or Facebook at the
+  same time as it plays in the room.
+
+**Video in and out**
+
+- **Blackmagic DeckLink** and **AJA** are supported by OBS itself, in and out.
+  A campus can take SDI to the house system and bring SDI in from a local
+  camera on the same machine.
+- **NDI** in and out through the DistroAV plugin (formerly obs-ndi), where the
+  house system already runs NDI.
+- Anything else OBS can see: HDMI capture cards, USB cameras, screen capture.
+
+**Audio into the house system**
+
+- **Dante** via Dante Virtual Soundcard or a Dante-enabled interface: OBS sees
+  it as a normal output device, so the relayed programme lands on the Dante
+  network alongside everything else the church already runs. The same approach
+  works for AES67/AVB interfaces, USB interfaces, or an analogue break-out.
+- Audio leaves OBS through its monitoring device, so whichever interface the
+  room uses is the one to select there.
+
+Multi-track audio is what makes that practical: each track is a separate source
+in OBS, so the main mix can go to the house system while the click goes to
+in-ears, routed independently like any other source.
+
+One caveat worth knowing before planning around this: every third-party plugin
+named above is someone else's project, on its own release schedule.
+
+If the main site sends *packed* multi-channel rather than separate tracks, the
+channels arrive as one stream and something has to route them to their
+destinations. That is not built here, deliberately — it is a solved problem in
+OBS. [atkAudio's plugin suite](https://github.com/atkAudio/PluginForObsRelease)
+hosts VST3/AU/LV2 plugins, mixes OBS sources, and routes audio to ASIO,
+CoreAudio and Windows Audio devices, which covers channel mapping better than a
+narrow de-interleaver of our own would. It is a separate install under the
+AGPL-3.0 licence and nothing here depends on it; a packed feed carries eight
+channels through this pipeline with the channel order intact either way.
+
+### Any location can be the origin
+
+Both plugins are one module, so any machine running OBS can take either role.
+What originates a service is a laptop with OBS on it, so a broadcast can start
+anywhere someone can run it:
+
+- a guest speaker or travelling pastor, publishing from wherever they are;
+- a conference or camp venue, for a week, and then never again;
+- a second campus hosting this week's combined service, with the usual main
+  site receiving for once;
+- a temporary or overflow site set up at short notice.
+
+Adding an origin costs a room name and a key that can write to it. There is no
+hardware to specify a year ahead, nothing to ship or clear through customs, and
+nothing licensed per location — which matters most in exactly the places this
+project is for.
+
+The reliability argument is *stronger* for an occasional origin than for a
+permanent one. A speaker broadcasting from a hotel, a phone hotspot or a venue
+nobody surveyed has the worst connection anyone in the chain will have, and can
+least afford a dropout halfway through a sermon. Because segments are written to
+disk and resent until storage confirms them, that broadcast survives a link
+which would kill a direct stream — it arrives whole or visibly incomplete, never
+broken in the middle.
+
+The latency rule is unchanged: tens of seconds each way means this relays a
+service, it does not hold a conversation between sites.
+
+Keep rooms separate — a guest publishes to `guest-speaker`, not to
+`main-auditorium` — so an occasional broadcast can never be mistaken for the
+main programme.
+
+### When the appliance is the better answer
+
+The appliance gives all of that up on purpose. No scene, no overlays, no local
+sources: it plays the relayed service, on a box that costs less than a monitor,
+boots into the service on power-up, and is driven from a phone with no desktop
+to leave in the wrong state.
+
+Choose it where a campus needs the service on a screen and nothing more — an
+overflow room, a chapel, a plant meeting in a school hall. Choose OBS where the
+campus produces around the relay, or where it has to reach existing SDI, NDI or
+Dante infrastructure.
+
+---
+
+## The campus player (satellite appliance)
+
+The alternative to running the decoder in OBS: a small box at a campus that
+receives, decodes and plays out, with no operator-facing desktop software. See
+[Choosing a satellite](#choosing-a-satellite) for which suits a given room. On
+stock **Raspberry Pi OS Lite (64-bit)**:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/install.sh | sudo bash
+```
+
+That installs the dependencies, builds the player, installs it as a service
+that starts on power-up, and puts a screen up on the HDMI output showing the
+box's own address. Everything else is done from a phone or tablet on the same
+network — storage credentials, which room to follow, the output resolution and
+frame rate, the sound device, the clock, and the transport controls during a
+service.
+
+- **It owns the display.** The player sets the KMS mode itself, so the output
+  resolution and frame rate are exactly what was asked for and there is no
+  desktop to be left in the wrong state. Pi OS Lite is the right image.
+- **Production audio over HDMI.** Up to eight channels of LPCM, recovered at
+  the campus with a de-embedder. If the device will not take every channel the
+  feed carries, it says so loudly rather than silently dropping the click. This
+  is the one place *packed* multi-channel is the better mode: eight channels in
+  one stream map straight onto HDMI's eight, in order, with nothing to route.
+  An appliance fed multi-track plays one chosen track — the first by default,
+  with a picker in Settings; combining several tracks onto output channels
+  there is not built, and packed is the answer for a campus that needs more
+  than one.
+- **The preview is not the output.** The web UI shows the incoming picture at
+  a rate the browser chooses, independently of what is on the screen in the
+  room — so a cue can be lined up while the picture is held.
+- **The cache belongs on a USB SSD.** It writes roughly 3 GB an hour, which
+  will wear an SD card out. The installer looks for a USB drive and uses it;
+  if there is none, both it and the interface say so.
+
+Run it by hand while setting one up:
+
+```bash
+sudo multisite-player --config /etc/multisite-player/config.json --verbose
+```
+
+`journalctl -u multisite-player -f` is the whole diagnostic story; the last few
+hundred lines are also in the interface, under Log, for an operator with a
+phone and no SSH.

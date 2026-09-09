@@ -5,8 +5,9 @@ campuses, reliably, over ordinary venue internet — using nothing but an
 S3-compatible bucket you control.
 
 **New here? [QUICKSTART.md](QUICKSTART.md) gets you broadcasting in twenty
-minutes.** This README is the long form — what it does, why it is built this
-way, and where it falls short.
+minutes.** This README is the overview: what this is, how far along it is, and
+where it falls short. The long-form material lives under
+[Where to go next](#where-to-go-next).
 
 Two OBS Studio plugins in one module: an **encoder** at the main site that
 publishes the programme as CMAF segments, and a **decoder** at each satellite
@@ -32,7 +33,27 @@ far more than one that is two seconds behind and stutters.
 
 ---
 
+## Where to go next
+
+| You want to… | Start here |
+|---|---|
+| Get broadcasting in about twenty minutes | [QUICKSTART.md](QUICKSTART.md) |
+| Install, configure and operate in depth | [Operator guide](docs/OPERATOR.md) |
+| Choose between a PC and the Pi box | [Choosing a satellite](docs/SATELLITE.md) |
+| Send the service to YouTube or Facebook | [Streaming to the public](docs/STREAMING.md) |
+| Build, test or contribute | [Developer guide](docs/DEVELOPER.md) |
+| Read the design and storage protocol | [PROJECT-SCOPE.md](PROJECT-SCOPE.md) |
+
+What works, what does not yet, and what is planned next is in
+[Status](#status), [Known gaps](#known-gaps) and [Roadmap](#roadmap) below.
+
+---
+
 ## Why this exists
+
+<details>
+<summary>The longer story — who this is for, what it deliberately is not, what
+it asks of your network, and the licensing position.</summary>
 
 This project is developed by the projects team at **Stage Audio Works**, a
 worship AVL integrator working across Africa, to support churches that are
@@ -66,7 +87,7 @@ people need to respond to each other in real time. For that, use SRT or WebRTC:
 both are in OBS already, and there are many good hardware products built on
 them. Those approaches trade differently, sitting much closer to the raw
 condition of the connection at the moment you need it. (The relay can *send*
-SRT — see [Streaming to the public](#streaming-to-the-public) — but it sends
+SRT — see [Streaming to the public](docs/STREAMING.md) — but it sends
 from the bucket, minutes behind, so it inherits this project's trade rather
 than SRT's own.)
 
@@ -114,6 +135,8 @@ see the change come back. If it fails you in an interesting way, a good bug
 report is a real contribution: much of what works well here was fixed because
 someone took the time to paste a log.
 
+</details>
+
 ---
 
 ## Status
@@ -137,7 +160,7 @@ looping media is not a Sunday morning with people in the room.
 
 A campus can receive in either of two ways — the OBS decoder on a PC, or the
 Raspberry Pi appliance — and both are built. See
-[Choosing a satellite](#choosing-a-satellite). The appliance has not run a
+[Choosing a satellite](docs/SATELLITE.md). The appliance has not run a
 service either.
 
 The public simulcast relay is built and is the first piece of Phase 7. It has
@@ -166,7 +189,7 @@ but has not yet carried real encoder output.
 - **Public simulcast.** A separate container reads the same segments and pushes
   them to YouTube, Facebook or any RTMP destination — or over SRT, to a
   broadcast partner, a hardware decoder or a contribution CDN — a few minutes
-  behind on purpose. See [Streaming to the public](#streaming-to-the-public).
+  behind on purpose. See [Streaming to the public](docs/STREAMING.md).
 
 **What does not, yet** — see [Known gaps](#known-gaps).
 
@@ -195,351 +218,6 @@ the object exists. Everything else — retries, crash resume, deep buffering —
 builds on that.
 
 For the full design, see [PROJECT-SCOPE.md](PROJECT-SCOPE.md).
-
----
-
-## Using it
-
-**In a hurry?** [QUICKSTART.md](QUICKSTART.md) is the short version of
-everything below.
-
-### Installing the plugin
-
-Builds are attached to each [release](https://github.com/stageaudioworks/obs-multisite/releases),
-one per platform. All of them are built against the OBS version named in the
-release notes; a different major version of OBS may refuse to load them.
-
-**macOS** (Apple Silicon) — unzip, move `obs-multisite.plugin` into
-`~/Library/Application Support/obs-studio/plugins/`, then clear the download
-quarantine flag before restarting OBS:
-
-```sh
-xattr -dr com.apple.quarantine ~/Library/Application\ Support/obs-studio/plugins/obs-multisite.plugin
-```
-
-That step is required because these builds are **not code-signed or
-notarised**, and macOS refuses to load a quarantined unsigned bundle. What you
-see if you skip it is nothing at all: OBS starts normally with no Multisite
-source, output or docks, and its log does not say why. Signing is deferred
-until there is a stable version to sign.
-
-**Windows** — copy the `obs-plugins` and `data` folders into your OBS Studio
-install directory (typically `C:\Program Files\obs-studio\`), merging with
-what is there.
-
-**Linux** — place `obs-multisite.so` in
-`~/.config/obs-studio/plugins/obs-multisite/bin/64bit/` with the contents of
-`data/` alongside. Links the system FFmpeg and libcurl.
-
-Restart OBS. The encoder appears as an output and the decoder as a source,
-with **Multisite Encoder** and **Multisite Decoder** docks under View → Docks.
-
-You need an S3-compatible bucket and a key that can read and write it. For the
-decoder's event list the key also needs `s3:ListBucket` — Cloudflare's "Object
-Read & Write" token includes it, an object-scoped token does not, and the dock
-says so rather than showing an empty list.
-
-### First, a retention rule on the bucket
-
-**Do this once, before your first broadcast.** Nothing in this project deletes
-anything — the plugins only write and read. Expiry is a **bucket lifecycle
-rule** you configure in your storage provider's console, and without one every
-service you ever broadcast stays in the bucket and the bill grows without
-limit. At 6 Mbps that is roughly **2.7 GB per hour** of service.
-
-Two prefixes need a rule, both with the same age:
-
-| Prefix | What it holds |
-|---|---|
-| `events/` | the media — all of the volume |
-| `rooms/` | the per-room event index — tiny, but if it outlives the media the event list fills with recordings that cannot be played |
-
-**Seven days is the design default, and the rule *is* your DVR depth** — a
-campus can timeslip back only as far as retention allows, so this setting is
-not merely housekeeping.
-
-On **Cloudflare R2**: your bucket → Settings → Object lifecycle rules → Add
-rule → prefix `events/`, delete objects 7 days after creation; then the same
-for `rooms/`. (`rooms/{room}/live.json` is rewritten on every heartbeat, so it
-stays fresh while a room is in use, and ageing out between services is
-harmless — the next Go Live recreates it.)
-
-On **AWS S3, MinIO, Backblaze B2 or Wasabi**: the equivalent lifecycle
-configuration with an Expiration rule per prefix.
-
-Object *tagging* is off by default and is deliberately not the mechanism: R2
-rejects `x-amz-tagging`, and a tag never deletes anything by itself. Enable it
-only if your store expires by tag and you have a rule that matches.
-
-Expiry is passive on purpose. A paused or behind-live campus can still fetch
-older segments for the whole retention window, which is what makes deep
-timeslipping possible; an encoder that actively deleted as it went would take
-that away.
-
-### Main site (encoder)
-
-1. Open the **Multisite Encoder** dock (View → Docks).
-2. **Settings…** — enter your bucket details, choose a video encoder, name your
-   markers. Settings are saved as you type.
-3. **Go live.** Watch the status readout: how much of the service has been sent,
-   how much is waiting, and link health.
-
-**Production audio** is set up in OBS itself, not in the dock. In Settings →
-Output → Recording, enable the audio tracks you intend to send; in Advanced
-Audio Properties (right-click the mixer), assign each source to its tracks —
-main mix on track 1, a click on its own track, ISOs on theirs. Name them under
-**Settings… → Track labels** so satellites see "Click" rather than "Track 3".
-Every enabled track travels in the same segment, locked to the picture.
-
-Sending stereo only? Do nothing: track 1 is the default at both ends.
-
-### Satellite (decoder)
-
-1. Open the **Multisite Decoder** dock and enter the same bucket details under
-   **Settings…**. These are stored per machine, so every source you add
-   afterwards is already configured.
-2. Add a **Multisite Source (Decoder)** to a scene.
-3. **Load event**, let the buffer fill, then **Play** when you are ready. Use
-   **Lock** during the service so nothing can be clicked by accident.
-
-To play something other than the live service, use the **Recordings** list:
-pick a past service and press **Load recording**. Playback then stays on it —
-if a new service starts mid-watch the dock offers the switch rather than taking
-it, because being pulled out of a recording you are part-way through is worse
-than being told. **Back to live** returns to following the room.
-
-For production audio, the Multisite Source carries the video plus **one** audio
-track (track 1 by default — the main mix). To bring in an ISO or the click as
-well, add a **Multisite Audio Track (Decoder)** source for the same room and
-pick the track. It attaches to the decoder already running, so it costs no extra
-download: every track arrives in the same segment either way, and all of them
-play from one clock.
-
-Hotkeys for play, stop, hold, resume, catch-up, jog and markers are in
-Settings → Hotkeys.
-
-> The event list needs the **`s3:ListBucket`** permission. Cloudflare's "Object
-> Read & Write" token has it; an object-scoped or read-only token often does
-> not, and the dock will say so rather than showing an empty list.
-
----
-
-## Choosing a satellite
-
-A campus can receive in one of two ways, and they suit different rooms.
-
-**OBS on a PC** — the decoder is a *source in a scene*, so the campus can
-produce around the relayed service. **The Pi appliance** — a fixed-function box
-that plays the service and nothing else. Both are built; neither has yet run a
-real service.
-
-### What running the decoder in OBS makes possible
-
-Because the relayed programme is an ordinary source, everything OBS does applies
-to it. This is the reason to choose a PC over the appliance, and for many
-churches it is the deciding factor.
-
-**Local content over the relayed service**
-
-- Lower thirds, campus announcements, scripture graphics, a countdown before the
-  service, a logo bug — keyed over the incoming picture with OBS's normal
-  sources and filters.
-- Cut away entirely to a local camera for a campus host, a local worship set or
-  notices, then back to the relay. The decoder keeps downloading while it is off
-  screen, so returning does not mean re-buffering.
-- Record the campus feed locally and simulcast it to YouTube or Facebook at the
-  same time as it plays in the room.
-
-**Video in and out**
-
-- **Blackmagic DeckLink** and **AJA** are supported by OBS itself, in and out.
-  A campus can take SDI to the house system and bring SDI in from a local
-  camera on the same machine.
-- **NDI** in and out through the DistroAV plugin (formerly obs-ndi), where the
-  house system already runs NDI.
-- Anything else OBS can see: HDMI capture cards, USB cameras, screen capture.
-
-**Audio into the house system**
-
-- **Dante** via Dante Virtual Soundcard or a Dante-enabled interface: OBS sees
-  it as a normal output device, so the relayed programme lands on the Dante
-  network alongside everything else the church already runs. The same approach
-  works for AES67/AVB interfaces, USB interfaces, or an analogue break-out.
-- Audio leaves OBS through its monitoring device, so whichever interface the
-  room uses is the one to select there.
-
-Multi-track audio is what makes that practical: each track is a separate source
-in OBS, so the main mix can go to the house system while the click goes to
-in-ears, routed independently like any other source.
-
-One caveat worth knowing before planning around this: every third-party plugin
-named above is someone else's project, on its own release schedule.
-
-If the main site sends *packed* multi-channel rather than separate tracks, the
-channels arrive as one stream and something has to route them to their
-destinations. That is not built here, deliberately — it is a solved problem in
-OBS. [atkAudio's plugin suite](https://github.com/atkAudio/PluginForObsRelease)
-hosts VST3/AU/LV2 plugins, mixes OBS sources, and routes audio to ASIO,
-CoreAudio and Windows Audio devices, which covers channel mapping better than a
-narrow de-interleaver of our own would. It is a separate install under the
-AGPL-3.0 licence and nothing here depends on it; a packed feed carries eight
-channels through this pipeline with the channel order intact either way.
-
-### Any location can be the origin
-
-Both plugins are one module, so any machine running OBS can take either role.
-What originates a service is a laptop with OBS on it, so a broadcast can start
-anywhere someone can run it:
-
-- a guest speaker or travelling pastor, publishing from wherever they are;
-- a conference or camp venue, for a week, and then never again;
-- a second campus hosting this week's combined service, with the usual main
-  site receiving for once;
-- a temporary or overflow site set up at short notice.
-
-Adding an origin costs a room name and a key that can write to it. There is no
-hardware to specify a year ahead, nothing to ship or clear through customs, and
-nothing licensed per location — which matters most in exactly the places this
-project is for.
-
-The reliability argument is *stronger* for an occasional origin than for a
-permanent one. A speaker broadcasting from a hotel, a phone hotspot or a venue
-nobody surveyed has the worst connection anyone in the chain will have, and can
-least afford a dropout halfway through a sermon. Because segments are written to
-disk and resent until storage confirms them, that broadcast survives a link
-which would kill a direct stream — it arrives whole or visibly incomplete, never
-broken in the middle.
-
-The latency rule is unchanged: tens of seconds each way means this relays a
-service, it does not hold a conversation between sites.
-
-Keep rooms separate — a guest publishes to `guest-speaker`, not to
-`main-auditorium` — so an occasional broadcast can never be mistaken for the
-main programme.
-
-### When the appliance is the better answer
-
-The appliance gives all of that up on purpose. No scene, no overlays, no local
-sources: it plays the relayed service, on a box that costs less than a monitor,
-boots into the service on power-up, and is driven from a phone with no desktop
-to leave in the wrong state.
-
-Choose it where a campus needs the service on a screen and nothing more — an
-overflow room, a chapel, a plant meeting in a school hall. Choose OBS where the
-campus produces around the relay, or where it has to reach existing SDI, NDI or
-Dante infrastructure.
-
----
-
-## Build and test
-
-Core and tests, no OBS required:
-
-```sh
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
-cmake --build build
-ctest --test-dir build --output-on-failure
-```
-
-Requires CMake ≥ 3.16 and a C++17 compiler. On Linux and macOS you also need
-OpenSSL headers; on Windows the crypto backend uses the built-in bcrypt, so
-OpenSSL is not needed.
-
-With the OBS plugin (adds libobs and FFmpeg):
-
-```sh
-cmake -S . -B build -DBUILD_OBS_PLUGIN=ON
-```
-
-With the operator docks (adds Qt6 and obs-frontend-api):
-
-```sh
-cmake -S . -B build -DBUILD_OBS_PLUGIN=ON -DENABLE_QT=ON
-```
-
-### macOS
-
-Apple Silicon only, and the core needs no OpenSSL — it uses CommonCrypto from
-libSystem, so a built plugin loads on a Mac that has never had Homebrew.
-`ctest` should pass 13/13 with nothing installed but CMake and FFmpeg.
-
-For the **plugin**, the only real difficulty is ABI matching. OBS.app carries
-its own FFmpeg, Qt and libobs, and a plugin has to use those exact copies. A
-build against Homebrew's FFmpeg or Qt loads on the machine that built it and
-fails elsewhere, because Homebrew tracks the latest version and OBS pins one —
-at the time of writing that is libavcodec 63 against OBS's 62, and Qt 6.11.2
-against 6.11.1. A second Qt is the worse of the two: the docks attach to the
-host's `QApplication`, and a duplicate `QtCore` has none.
-
-So take the dependencies from **obs-deps at the version OBS itself pins**,
-which is in `CMakePresets.json` in the OBS source under the `dependencies`
-preset. For OBS 32.2.2 that is `2026-07-15`:
-
-```sh
-OBS_TAG=32.2.2; DEPS_VER=2026-07-15
-mkdir -p deps/root
-for n in macos-deps-$DEPS_VER-arm64.tar.xz macos-deps-qt6-$DEPS_VER-arm64.tar.xz; do
-  curl -L "https://github.com/obsproject/obs-deps/releases/download/$DEPS_VER/$n" | tar x -C deps/root
-done
-curl -L "https://github.com/obsproject/obs-studio/archive/refs/tags/$OBS_TAG.tar.gz" | tar xz
-printf '#pragma once\n#define OBS_RELEASE_CANDIDATE 0\n#define OBS_BETA 0\n' > obsconfig.h
-
-DEPS=$PWD/deps/root; OBS_SRC=$PWD/obs-studio-$OBS_TAG
-cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
-  -DBUILD_OBS_PLUGIN=ON -DENABLE_QT=ON \
-  -DCMAKE_PREFIX_PATH="$DEPS" -DQt6_DIR="$DEPS/lib/cmake/Qt6" \
-  -DFORCE_FFMPEG_MANUAL_SEARCH=ON \
-  -DFFMPEG_INCLUDE_DIR="$DEPS/include" \
-  -DFFMPEG_avformat_LIBRARY="$DEPS/lib/libavformat.dylib" \
-  -DFFMPEG_avcodec_LIBRARY="$DEPS/lib/libavcodec.dylib" \
-  -DFFMPEG_avutil_LIBRARY="$DEPS/lib/libavutil.dylib" \
-  -DFFMPEG_swresample_LIBRARY="$DEPS/lib/libswresample.dylib" \
-  -DFFMPEG_swscale_LIBRARY="$DEPS/lib/libswscale.dylib" \
-  -DLIBOBS_INCLUDE_DIR="$OBS_SRC/libobs" \
-  -DLIBOBS_CONFIG_INCLUDE_DIR="$PWD" \
-  -DLIBOBS_FRONTEND_INCLUDE_DIR="$OBS_SRC/frontend/api"
-cmake --build build --target obs-multisite
-```
-
-Two things are worth knowing about that. Passing every FFmpeg path explicitly
-and pinning `Qt6_DIR` is not belt-and-braces: if Homebrew's copies are
-installed they are found first, and the result is the mismatched build this
-recipe exists to avoid. And **no OBS binary is needed** — only headers. The
-plugin is linked with `-undefined dynamic_lookup`, so libobs and
-obs-frontend-api resolve out of the running OBS at load time. Qt *is* linked
-for real, because those symbols are not OBS's to provide.
-
-The result is `obs-multisite.plugin`, whose every versioned dependency is an
-`@rpath` reference to something OBS already ships, with one rpath —
-`@executable_path/../Frameworks`. A plugin has no executable of its own, so
-`@executable_path` is the host: `OBS.app/Contents/MacOS`, making
-`../Frameworks` OBS's own framework directory wherever OBS is installed.
-Check a build with `otool -L` and `otool -l | grep -A2 LC_RPATH`; anything
-that is not `@rpath`, `/System` or `/usr/lib` is a path from your machine and
-will not exist on anybody else's. CI asserts exactly that.
-
-With the public simulcast relay (adds SQLite; needs the `ffmpeg` command at
-run time, not at build time):
-
-```sh
-cmake -S . -B build -DMULTISITE_BUILD_RELAY=ON -DBUILD_PLAYER=OFF
-cmake --build build --target multisite-relay
-```
-
-Or build the container, which runs the relay's tests as part of the image so a
-broken build cannot become something somebody deploys:
-
-```sh
-docker build -f relay/Dockerfile -t multisite-relay .
-```
-
-CI builds and tests the core on Linux x86, **Linux ARM64**, Windows and macOS,
-and produces the installable Windows and macOS plugins. The ARM64 job exists
-because the planned appliance runs there, so a regression is caught in CI
-rather than on hardware. The macOS job asserts what makes a bundle loadable on
-a machine other than the one that built it: package type `BNDL`, arm64, the
-module entry points exported, exactly one rpath, no OpenSSL, and no absolute
-path outside `/System` and `/usr/lib`.
 
 ---
 
@@ -575,160 +253,12 @@ to find SQLite for something it does not use.
 
 ---
 
-## The campus player (satellite appliance)
-
-The alternative to running the decoder in OBS: a small box at a campus that
-receives, decodes and plays out, with no operator-facing desktop software. See
-[Choosing a satellite](#choosing-a-satellite) for which suits a given room. On
-stock **Raspberry Pi OS Lite (64-bit)**:
-
-```bash
-curl -fsSL https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/install.sh | sudo bash
-```
-
-That installs the dependencies, builds the player, installs it as a service
-that starts on power-up, and puts a screen up on the HDMI output showing the
-box's own address. Everything else is done from a phone or tablet on the same
-network — storage credentials, which room to follow, the output resolution and
-frame rate, the sound device, the clock, and the transport controls during a
-service.
-
-- **It owns the display.** The player sets the KMS mode itself, so the output
-  resolution and frame rate are exactly what was asked for and there is no
-  desktop to be left in the wrong state. Pi OS Lite is the right image.
-- **Production audio over HDMI.** Up to eight channels of LPCM, recovered at
-  the campus with a de-embedder. If the device will not take every channel the
-  feed carries, it says so loudly rather than silently dropping the click. This
-  is the one place *packed* multi-channel is the better mode: eight channels in
-  one stream map straight onto HDMI's eight, in order, with nothing to route.
-  An appliance fed multi-track plays one chosen track — the first by default,
-  with a picker in Settings; combining several tracks onto output channels
-  there is not built, and packed is the answer for a campus that needs more
-  than one.
-- **The preview is not the output.** The web UI shows the incoming picture at
-  a rate the browser chooses, independently of what is on the screen in the
-  room — so a cue can be lined up while the picture is held.
-- **The cache belongs on a USB SSD.** It writes roughly 3 GB an hour, which
-  will wear an SD card out. The installer looks for a USB drive and uses it;
-  if there is none, both it and the interface say so.
-
-Run it by hand while setting one up:
-
-```bash
-sudo multisite-player --config /etc/multisite-player/config.json --verbose
-```
-
-`journalctl -u multisite-player -f` is the whole diagnostic story; the last few
-hundred lines are also in the interface, under Log, for an operator with a
-phone and no SSH.
-
----
-
-## Streaming to the public
-
-The campuses are not always the only audience. `relay/` is a small self-hosted
-service that reads the same segments and pushes them out to YouTube, Facebook,
-or any RTMP destination — and over SRT to anywhere that prefers it.
-
-It relays from the bucket rather than adding a second output to OBS, which
-matters twice over. The main site uploads once whether the service is going to
-two campuses or to two campuses and the internet — often the difference between
-possible and not on a venue connection. And the public stream inherits the
-buffering the campus feed already has: it runs a few minutes behind on purpose,
-so a dropout at the main site delays it rather than breaking it.
-
-```bash
-docker run -d --name multisite-relay \
-  -p 8080:8080 \
-  -v multisite-relay-data:/data \
-  -e RELAY_ROOM=main-auditorium \
-  ghcr.io/stageaudioworks/multisite-relay:latest
-```
-
-Then open it in a browser, put in the bucket details, and add a destination.
-A $5/month VPS is the target rather than a stretch, because nothing is being
-re-encoded.
-
-- **It has a login, and binds to localhost by default.** This service decides
-  where your services are sent, so exposing it is a decision rather than a
-  default. Put HTTPS in front of it; `relay/Caddyfile.example` is a working
-  config.
-- **One chosen sound feed per destination**, picked by the name the main site
-  gave it — "Main Mix", "Sermon ISO" — never a track number. A future
-  "clean feed to Facebook, main mix to YouTube" is just two destinations.
-- **A delay you choose**, three minutes by default. This is the setting worth
-  understanding: it is how much of the service the relay holds in hand, and so
-  how long an outage at the main site can last before the public sees it.
-- **It reconnects by itself** and resumes from where it stopped, so nothing is
-  skipped. A silence under 45 seconds is ridden out without even dropping the
-  connection. It watches both directions: content failing to arrive from the
-  main site and content failing to leave for the destination look identical to
-  ffmpeg, which reports neither, so the relay notices both itself and says
-  which one happened.
-- **RTMP or SRT, decided by the address you paste.** There is no protocol
-  setting: `rtmp://` and `srt://` are unmistakable, and asking a volunteer
-  which one they were given is asking them to get it wrong. SRT can also
-  *listen*, for a broadcast partner or hardware decoder that pulls from you
-  rather than being pushed to — written down by leaving the host out of the
-  address, `srt://:9000`, which is deliberately the only way to ask for one,
-  because it opens a port on a machine otherwise kept closed.
-- **HEVC goes out over SRT.** RTMP means FLV, and FLV means H.264 — which is
-  why choosing HEVC for the campuses used to cost a church its public stream
-  outright. SRT means MPEG-TS, which carries HEVC properly, so that trade is
-  no longer forced. It still cannot go to YouTube.
-- **It refuses rather than guesses.** AV1, HEVC to an RTMP destination, and
-  packed multi-channel audio are all declined with a plain explanation,
-  because sending any of them onward would mean a stream the destination
-  rejects, or a mic ISO going out to the public.
-
-It also does two things with services that have already finished:
-
-- **Download one as an MP4**, streamed straight from storage — nothing is
-  assembled on the server, so a two-hour service costs no disk. The file
-  carries every audio track the main site sent, not just the streamed one, so
-  the ISOs and the click are there for whoever edits it.
-- **Replay one to a destination** as though it were happening now, for a
-  second congregation or an evening repeat. This is a proof of concept: one at
-  a time, started by hand, no scheduling yet.
-
-Full deployment notes, including bandwidth and disk, are in
-[relay/README.md](relay/README.md).
-
----
-
-## What the tests cover
-
-Thirteen suites, all runnable without OBS (the `cmaf*` ones need FFmpeg and
-`s3_url` needs libcurl; the rest need neither):
-
-| suite | what it proves |
-|---|---|
-| `reliability` | durability across a crash, ordered drain through an outage, checksum rejection, permanent-failure handling |
-| `session` | the write-ordering invariant holds continuously, including across a crash and resume; packed multi-channel audio round-trips, channel order intact |
-| `decoder` | timeslipping: the cache fills while paused, resume continues exactly where it stopped, markers, seek-by-time, VOD playback, and that a gap stalls rather than silently skipping |
-| `responsive` | UI queries stay fast while downloading — the property that keeps OBS usable during a service |
-| `snapshot` | the figures the dock reads agree with the session they are built from |
-| `s3_list` | a ListObjectsV2 response is read correctly, including pagination and an access-denied body; a signed query string is canonicalised the way S3 does it |
-| `event_catalog` | events are classified as live / recording / interrupted, rooms stay separate, a listing failure is not shown as "no recordings", an event that recorded nothing is not offered, and an event with no room-index entry still lists alongside those that have one |
-| `crypto` | SHA-256 and HMAC-SHA256 match the NIST and RFC 4231 vectors on whichever backend was compiled in — OpenSSL, Windows bcrypt or Apple CommonCrypto. Each CI platform runs its own, so all three are held to the same published answers and a signed request cannot differ by platform |
-| `cmaf`, `cmaf_hevc` | the muxer produces decodable fragments for H.264 and HEVC, with multi-track audio |
-| `cmaf_decode` | the round trip: what the muxer wrote, the decoder plays back |
-| `s3_url` | endpoint and bucket values survive being pasted with schemes, slashes and whitespace |
-| `core_portable` | the core has not acquired an OBS or Qt dependency |
-
-Building with `-DMULTISITE_BUILD_RELAY=ON` adds three more, which the container
-image runs as part of the build so a broken relay cannot become an image
-somebody deploys on a Sunday morning:
-
-| suite | what it proves |
-|---|---|
-| `stream_plan` | what may be sent onward and what must be refused — HEVC into FLV, AV1 anywhere, packed multi-channel audio, a sound feed that has vanished, a manifest whose track positions do not line up; that HEVC over SRT is allowed where it is not over RTMP; that a pasted SRT address is pulled apart with the secrets taken out of it; and that no secret survives redaction for the log |
-| `relay_state` | the awkward cases without a destination or a wait: a stall ridden out and then given up on, an unexpected exit and its backoff, ending cleanly versus being cut short, an edit that rebuilds a stream without counting as a fault, and an SRT listener with nobody attached waiting indefinitely rather than being treated as broken |
-| `config_store` | destinations and storage settings survive a restart, an invalid one is refused before it reaches the database, and an SRT destination's stream id, passphrase and latency round-trip intact |
-
----
-
 ## Known gaps
+
+<details>
+<summary>What does not work yet, and what has not yet been proven. The short
+version: never carried a real service, packed-channel routing is deliberately
+out of scope, and the relay cannot re-encode.</summary>
 
 - **Routing packed channels to separate outputs is not our job.** A packed
   feed arrives as one multi-channel stream, and in OBS
@@ -777,9 +307,15 @@ somebody deploys on a Sunday morning:
   on a Sunday. The relay has run 44 minutes unattended without a fault, which
   is encouraging and is not a service.
 
+</details>
+
 ---
 
 ## Roadmap
+
+<details>
+<summary>What is planned next: finishing the appliance (Phase 6), the relay's
+remaining extensions (Phase 7), and an external control API (Phase 8).</summary>
 
 - **Phase 6 — Satellite appliance.** Built and installable for the ARM64 /
   Raspberry Pi HDMI tier (see above), and now proven on a Pi 5 — though not
@@ -788,8 +324,8 @@ somebody deploys on a Sunday morning:
   de-interleaver has been dropped rather than deferred; see
   [Known gaps](#known-gaps).
 - **Phase 7 — Extensions.** The public simulcast relay is built (see
-  [Streaming to the public](#streaming-to-the-public)) and has not yet carried
-  a service. SRT output, caller and listener, is in and carrying a real client.
+  [Streaming to the public](docs/STREAMING.md)) and has not yet carried a
+  service. SRT output, caller and listener, is in and carrying a real client.
   Still to come there: re-encoding, so an HEVC feed can reach a streaming site
   too; splitting packed multi-channel audio; signing in to YouTube instead of
   pasting a stream key; and starting automatically when the encoder goes live.
@@ -804,8 +340,8 @@ somebody deploys on a Sunday morning:
   surface written against either works against both. obs-websocket ships with
   OBS 28 and later, so there is nothing extra to install, and the plugin gains
   no dependency: if it is absent, control simply is not there. Then a
-  **Bitfocus Companion** module for buttons that light up and displays that show
-  how far behind live a campus is — that needs a real module, because
+  **Bitfocus Companion** module for buttons that light up and displays that
+  show how far behind live a campus is — that needs a real module, because
   Companion's generic vendor-request action can send commands but cannot read
   state back.
 
@@ -813,6 +349,8 @@ somebody deploys on a Sunday morning:
   Companion's OBS module can trigger hotkeys by id — so play, stop, hold,
   resume, catch-up, jog and drop-marker work from a Stream Deck now, without
   parameters or feedback. Worth wiring up before any of the above is built.
+
+</details>
 
 ---
 
