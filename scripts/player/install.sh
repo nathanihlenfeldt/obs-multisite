@@ -80,11 +80,16 @@ if [ -d "$SRC_DIR/.git" ]; then
   if [ "${SKIP_GIT_UPDATE:-0}" != "1" ]; then
     # Fetch into the branch's own remote-tracking ref. A plain `git fetch
     # origin $BRANCH` writes only FETCH_HEAD, so the reset below would fail
-    # the first time a box is moved from one branch to another.
+    # the first time a box is moved from one branch to another. The `+` force
+    # is deliberate: in a shallow clone git can decide an update is not a
+    # fast-forward because it cannot see the shared history, and without the
+    # force the fetch is rejected — silently, if --quiet is hiding the
+    # rejection. Remote-tracking refs are bookkeeping; a plain `git fetch
+    # origin` force-updates them, so this matches normal behaviour.
     fetched=""
     for attempt in 1 2 3 4 5; do
-      if git -C "$SRC_DIR" fetch --quiet --depth 1 \
-            origin "$BRANCH:refs/remotes/origin/$BRANCH"; then
+      if git -C "$SRC_DIR" fetch --depth 1 \
+            origin "+$BRANCH:refs/remotes/origin/$BRANCH"; then
         fetched=1
         break
       fi
