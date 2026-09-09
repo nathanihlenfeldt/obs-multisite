@@ -1010,6 +1010,23 @@ static void stop_workers(SourceCtx* ctx) {
     ctx->flushing = true;             // release any blocked decoder callback
     if (!ctx->running.exchange(false)) { ctx->flushing = false; return; }
     ctx->dq_cv.notify_all();      // release anyone blocked on the queue
+
+    // Abort whatever network request poll_loop or feed_loop happens to be
+    // mid-flight on, right now, rather than letting it run to its own
+    // timeout. Without this, tearing a source down while a request was in
+    // flight blocked whichever thread called stop_workers — usually OBS's
+    // own UI thread, during scene teardown or Quit — for as long as that one
+    // request had left. Long enough, in practice, for an operator to see OBS
+    // stop responding and force-quit it, which OBS then reports as a crash
+    // on the next launch. The thread is still joined below either way; this
+    // just makes the join fast instead of a race against a 30-second curl
+    // timeout.
+    {
+        std::shared_ptr<S3Transport> tx;
+        { std::lock_guard<std::mutex> lk(ctx->obj_mtx); tx = ctx->transport; }
+        if (tx) tx->cancel_pending();
+    }
+
     if (ctx->poll_thread.joinable())    ctx->poll_thread.join();
     if (ctx->feed_thread.joinable())    ctx->feed_thread.join();
     if (ctx->deliver_thread.joinable()) ctx->deliver_thread.join();

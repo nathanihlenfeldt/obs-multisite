@@ -5,6 +5,7 @@
 
 #include <curl/curl.h>
 
+#include <atomic>
 #include <cstring>
 #include <mutex>
 #include <sstream>
@@ -15,6 +16,20 @@ namespace multisite {
 static std::once_flag g_curl_once;
 static void ensure_curl() {
     std::call_once(g_curl_once, [] { curl_global_init(CURL_GLOBAL_DEFAULT); });
+}
+
+// libcurl calls this periodically DURING a transfer, on the same thread that
+// called curl_easy_perform — which is exactly the thread stop_workers() is
+// trying to join. Returning non-zero aborts the transfer right there, rather
+// than waiting out CURLOPT_TIMEOUT_MS.
+static int curl_abort_cb(void* clientp, curl_off_t, curl_off_t, curl_off_t, curl_off_t) {
+    auto* cancel = static_cast<std::atomic<bool>*>(clientp);
+    return (cancel && cancel->load()) ? 1 : 0;
+}
+static void arm_cancel(CURL* curl, std::atomic<bool>* cancel) {
+    curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);   // off by default; this needs it on
+    curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, curl_abort_cb);
+    curl_easy_setopt(curl, CURLOPT_XFERINFODATA, cancel);
 }
 
 static size_t write_to_vec(void* ptr, size_t sz, size_t nm, void* ud) {
@@ -81,6 +96,12 @@ static std::string clean_segment(std::string v) {
 
 struct S3Transport::Impl {
     S3Config cfg;
+
+    // Set by cancel_pending(), read by curl_abort_cb on whichever thread is
+    // mid-request. One instance, one direction: never cleared, because the
+    // transport that gets cancelled is the one about to be discarded, not
+    // reused.
+    std::atomic<bool> cancel{false};
 
     // Observations from ordinary traffic. Guarded because the decoder's
     // download thread writes them while the UI thread reads them, several
@@ -179,6 +200,7 @@ struct S3Transport::Impl {
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)cfg.connect_timeout_ms);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)cfg.request_timeout_ms);
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        arm_cancel(curl, &cancel);
 
         CURLcode cc = curl_easy_perform(curl);
         if (cc == CURLE_OK) {
@@ -243,6 +265,7 @@ struct S3Transport::Impl {
         curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)cfg.connect_timeout_ms);
         curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)cfg.request_timeout_ms);
         curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        arm_cancel(curl, &cancel);
         CURLcode cc = curl_easy_perform(curl);
         if (cc == CURLE_OK) {
             long code = 0; curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
@@ -284,6 +307,8 @@ std::string S3Transport::base_url() const {
            clean_segment(d->cfg.bucket);
 }
 S3Transport::~S3Transport() = default;
+
+void S3Transport::cancel_pending() { d->cancel = true; }
 
 std::string S3Transport::host() const { return d->host(); }
 
@@ -412,6 +437,7 @@ ListResult S3Transport::list(const std::string& prefix,
     curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)d->cfg.connect_timeout_ms);
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)d->cfg.request_timeout_ms);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    arm_cancel(curl, &d->cancel);
 
     CURLcode cc = curl_easy_perform(curl);
     if (cc != CURLE_OK) {
@@ -474,6 +500,7 @@ int64_t S3Transport::object_size(const std::string& key) {
     curl_easy_setopt(curl, CURLOPT_NOBODY, 1L);          // HEAD
     curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)d->cfg.request_timeout_ms);
     curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+    arm_cancel(curl, &d->cancel);
 
     int64_t size = -1;
     if (curl_easy_perform(curl) == CURLE_OK) {

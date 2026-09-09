@@ -153,6 +153,17 @@ if(CURL_FOUND)
     add_executable(test_s3_url tests/test_s3_url.cpp)
     target_link_libraries(test_s3_url PRIVATE multisite_s3)
     add_test(NAME s3_url COMMAND test_s3_url)
+
+    # Proves cancel_pending() actually aborts a stalled request quickly rather
+    # than trusting that wiring curl's progress callback was enough. POSIX
+    # sockets only — stands up a bare TCP listener to simulate a stalled link,
+    # which needs WinSock2 init and different socket headers on Windows that
+    # nothing else in this project uses; not worth adding for one test.
+    if(NOT WIN32)
+        add_executable(test_s3_cancel tests/test_s3_cancel.cpp)
+        target_link_libraries(test_s3_cancel PRIVATE multisite_s3)
+        add_test(NAME s3_cancel COMMAND test_s3_cancel)
+    endif()
 else()
     message(STATUS "libcurl not found — skipping S3 transport")
 endif()

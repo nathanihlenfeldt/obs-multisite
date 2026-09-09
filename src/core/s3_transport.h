@@ -74,6 +74,18 @@ public:
     // is meaningful rather than expected.
     StorageProbe probe(const std::string& key);
 
+    // Abandon whatever request is currently in flight (and refuse to start
+    // a new one) as soon as libcurl next checks in, rather than letting it run
+    // to its up-to-30-second timeout. Call this before joining a thread that
+    // might be blocked inside get()/list()/put(): without it, tearing a
+    // source down while it happened to be mid-request blocked the OBS UI
+    // thread for as long as that single request had left — long enough that
+    // an operator quitting OBS saw it stop responding and force-quit, which
+    // is indistinguishable from a crash on the next launch. One-way and safe
+    // to call from any thread; the caller discards this instance afterwards
+    // rather than reusing it, so there is nothing to "un-cancel".
+    void cancel_pending();
+
     // Where the last response came from, and how fast the link has been.
     // Populated by ordinary traffic, so during a service these reflect the
     // real segment fetches rather than a synthetic test.
