@@ -144,6 +144,8 @@ async function refresh() {
   audioLabels = s.audio_labels || [];
 
   $('#room-state').textContent = s.room_state_text || 'Nothing is on air';
+  // The version an operator can read out, rather than one only the log knows.
+  if (s.version) $('#version').textContent = 'Simulcast relay ' + s.version;
   const bits = [];
   if (s.room_id) bits.push('Feed: ' + s.room_id);
   if (s.video) bits.push(s.video);

@@ -281,3 +281,18 @@ details.advanced > summary {
 }
 details.advanced > summary:hover { color: var(--text); }
 details.advanced[open] > summary { margin-bottom: 0.5rem; }
+
+/* Footer: the version and where this came from. Quiet — it is reference
+   material for a bug report, not something to compete with the controls. */
+.foot {
+  display: flex;
+  gap: 12px;
+  align-items: center;
+  justify-content: space-between;
+  margin-top: 28px;
+  padding-top: 12px;
+  border-top: 1px solid var(--line);
+  font-size: 12px;
+  color: var(--dim);
+}
+.foot a { color: inherit; }

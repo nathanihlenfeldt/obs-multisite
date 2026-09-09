@@ -46,6 +46,12 @@ find_package(OpenSSL REQUIRED)
 target_link_libraries(multisite-relay PRIVATE
     relay_logic multisite_s3 PkgConfig::SQLITE3 OpenSSL::Crypto)
 
+# The version comes from the top-level project(), never from a string of its
+# own. A second copy is what left the Pi player reporting 0.1.0 for four
+# releases: nothing sets a value nobody remembers exists.
+target_compile_definitions(multisite-relay PRIVATE
+    MULTISITE_RELAY_VERSION="${PROJECT_VERSION}")
+
 install(TARGETS multisite-relay RUNTIME DESTINATION bin)
 install(DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}/web/" DESTINATION share/multisite-relay/web)
 

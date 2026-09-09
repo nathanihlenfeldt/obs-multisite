@@ -16,12 +16,17 @@
 #include <chrono>
 #include <csignal>
 #include <cstdlib>
+#include <cstdio>
 #include <string>
 #include <sys/stat.h>
 #include <unistd.h>
 #include <thread>
 
 using namespace multisite_relay;
+
+#ifndef MULTISITE_RELAY_VERSION
+#define MULTISITE_RELAY_VERSION "dev"
+#endif
 
 namespace {
 
@@ -75,7 +80,17 @@ void seed_from_environment(Service& service) {
 
 } // namespace
 
-int main() {
+int main(int argc, char** argv) {
+    // Answering --version matters more here than for a desktop app: this ships
+    // as a container, and `docker run --rm <image> --version` is how somebody
+    // finds out what they actually deployed without starting a relay.
+    for (int i = 1; i < argc; ++i) {
+        const std::string a = argv[i];
+        if (a == "--version" || a == "-V") {
+            std::printf("%s\n", MULTISITE_RELAY_VERSION);
+            return 0;
+        }
+    }
     ::signal(SIGINT, on_signal);
     ::signal(SIGTERM, on_signal);
 
@@ -130,7 +145,8 @@ int main() {
         rlog_error("could not listen on port %d: %s", port, err.c_str());
         return 1;
     }
-    rlog_info("relay ready on %s:%d", bind.c_str(), port);
+    rlog_info("multisite relay %s ready on %s:%d",
+              MULTISITE_RELAY_VERSION, bind.c_str(), port);
     if (!auth.configured())
         rlog_warn("no login is set yet — open the page and set one before "
                   "anyone else can reach this");

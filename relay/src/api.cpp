@@ -1,4 +1,8 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
+#ifndef MULTISITE_RELAY_VERSION
+#define MULTISITE_RELAY_VERSION "dev"
+#endif
+
 #include "api.h"
 #include "auth.h"
 #include "ffmpeg_process.h"
@@ -227,6 +231,8 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
                                                   HttpResponse& res) {
         const auto s = service.status();
         json j;
+        // What an operator reads off the page into a bug report.
+        j["version"] = MULTISITE_RELAY_VERSION;
         j["storage_configured"] = s.storage_configured;
         j["room_id"] = s.room_id;
         j["room_state"] = s.room_state;
