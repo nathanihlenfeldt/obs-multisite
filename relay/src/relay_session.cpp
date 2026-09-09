@@ -146,7 +146,13 @@ void RelaySession::run() {
         // A child that exited on its own must be reported to the machine
         // before it decides anything, so the backoff is applied.
         if (m_child && !in.child_alive && !m_child->exited_cleanly()) {
-            const std::string line = m_child->last_error_line();
+            // ffmpeg's stderr, with the secrets taken out. It echoes the
+            // output URL in its error messages, and for SRT that URL carries
+            // the passphrase and stream id while for RTMP it ends in the
+            // stream key — so the unredacted line would put them on the
+            // operator's screen, in /api/destinations, and in the container
+            // log, having carefully kept them out of the command line.
+            const std::string line = redact(m_child->last_error_line(), dest);
             if (!line.empty()) {
                 std::lock_guard<std::mutex> lk(m_mtx);
                 m_error = line;

@@ -103,4 +103,10 @@ std::string output_url(const Destination& d);
 std::vector<std::string> redact(const std::vector<std::string>& args,
                                 const Destination& d);
 
+// The same, for a single line of text — specifically ffmpeg's own stderr.
+// Redacting the command line is not enough: ffmpeg echoes the output URL back
+// in its error messages ("Error opening output srt://host?passphrase=..."),
+// and that line is what reaches the operator's screen and the container log.
+std::string redact(const std::string& text, const Destination& d);
+
 } // namespace multisite_relay

@@ -95,6 +95,13 @@ std::string output_url(const Destination& d) {
     return u;
 }
 
+std::string redact(const std::string& text, const Destination& d) {
+    std::string s = text;
+    scrub(s, d.stream_key, "<key>");
+    scrub(s, d.srt_passphrase, "<passphrase>");
+    return s;
+}
+
 std::vector<std::string> redact(const std::vector<std::string>& args,
                                 const Destination& d) {
     std::vector<std::string> out;

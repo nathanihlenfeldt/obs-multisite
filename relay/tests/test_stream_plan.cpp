@@ -383,6 +383,47 @@ int main() {
               "a service with no sound in it can go nowhere either");
     }
 
+    std::printf("== ffmpeg's own stderr is redacted too ==\n");
+    {
+        // Verified against real ffmpeg output: it echoes the output URL in
+        // its error messages, so the secrets come back out through the
+        // channel that reports the failure even when the command line was
+        // clean. RTMP has always been exposed this way; SRT added a second
+        // secret to leak.
+        Destination d;
+        d.name = "Partner";
+        d.url = "srt://feed.example.org:9000";
+        d.stream_key = "mystreamid";
+        d.srt_passphrase = "SUPERSECRET123";
+
+        const std::string srt_err =
+            "[out#0/mpegts @ 0x1] Error opening output "
+            "srt://feed.example.org:9000?streamid=mystreamid"
+            "&passphrase=SUPERSECRET123&latency=2000000: Protocol not found";
+        const std::string safe = redact(srt_err, d);
+        CHECK(safe.find("SUPERSECRET123") == std::string::npos,
+              "the SRT passphrase is gone from ffmpeg's error line");
+        CHECK(safe.find("mystreamid") == std::string::npos,
+              "the SRT stream id is gone from ffmpeg's error line");
+        CHECK(safe.find("Protocol not found") != std::string::npos,
+              "the part an operator needs survives redaction");
+        CHECK(safe.find("feed.example.org") != std::string::npos,
+              "the address stays, so the message still says where");
+
+        Destination r;
+        r.name = "YouTube";
+        r.url = "rtmp://a.rtmp.youtube.com/live2";
+        r.stream_key = "abcd-efgh-ijkl";
+        const std::string rtmp_err =
+            "[out#0/flv @ 0x1] Error opening output "
+            "rtmp://a.rtmp.youtube.com/live2/abcd-efgh-ijkl: Connection refused";
+        const std::string rsafe = redact(rtmp_err, r);
+        CHECK(rsafe.find("abcd-efgh-ijkl") == std::string::npos,
+              "the RTMP stream key is gone from ffmpeg's error line");
+        CHECK(rsafe.find("Connection refused") != std::string::npos,
+              "the reason still reaches the operator");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL STREAM PLAN TESTS PASSED"
                                       : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;
