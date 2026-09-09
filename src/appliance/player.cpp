@@ -621,7 +621,7 @@ void Player::update_screen() {
     info.configured = cfg.configured();
     for (const auto& n : network_interfaces()) {
         if (n.ipv4.empty()) continue;
-        info.addresses.push_back("HTTP://" + n.ipv4 + ":" +
+        info.addresses.push_back("http://" + n.ipv4 + ":" +
                                  std::to_string(cfg.web_port));
     }
 

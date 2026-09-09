@@ -118,10 +118,11 @@ curl -fsSL https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/
 
 That installs the dependencies, builds the player, installs it as a service
 that starts on power-up, and puts a screen up on the HDMI output showing the
-box's own address. Everything else is done from a phone or tablet on the same
-network — storage credentials, which room to follow, the output resolution and
-frame rate, the sound device, the clock, and the transport controls during a
-service.
+box's own address and a QR code of it: point a phone at the screen and the
+control page opens, nothing to type. Everything else is done from a phone or
+tablet on the same network — storage credentials, which room to follow, the
+output resolution and frame rate, the sound device, the clock, and the
+transport controls during a service.
 
 - **It owns the display.** The player sets the KMS mode itself, so the output
   resolution and frame rate are exactly what was asked for and there is no

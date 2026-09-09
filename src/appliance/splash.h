@@ -8,7 +8,8 @@
 // configure it, no way to see whether it is working, and nothing to type into
 // a phone. So the very first thing it does with the display it has just
 // claimed is put its own address on it, in letters readable from the far side
-// of a room.
+// of a room — and, when the box has a network, a QR code of that same address,
+// so a phone pointed at the screen opens the operator page without typing.
 //
 // The text is drawn from a 5x7 bitmap font defined in the source rather than
 // loaded from a font file. It is not beautiful, but it needs no font package,

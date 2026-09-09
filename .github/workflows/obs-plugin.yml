@@ -32,7 +32,8 @@ jobs:
           sudo apt-get update -o Acquire::Retries=3
           sudo apt-get install -y --no-install-recommends \
             libobs-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev \
-            libswresample-dev libswscale-dev libcurl4-openssl-dev
+            libswresample-dev libswscale-dev libcurl4-openssl-dev \
+            libqrencode-dev
           echo "--- versions ---"
           pkg-config --modversion libobs
           pkg-config --modversion libavformat

@@ -57,6 +57,7 @@ apt-get install -y --no-install-recommends \
   libcurl4-openssl-dev libssl-dev \
   libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev \
   libdrm-dev libasound2-dev \
+  libqrencode-dev \
   >/dev/null
 note "done"
 
@@ -188,7 +189,8 @@ say "Done. Finish setting it up from a browser on this network:"
 ip -4 -o addr show scope global 2>/dev/null \
   | awk -v p="$PORT" '{split($4,a,"/"); printf "        http://%s:%s   (%s)\n", a[1], p, $2}'
 echo
-note "The same address is on the screen attached to this box."
+note "The same address is on the screen attached to this box — as text and as a"
+note "QR code, so a phone pointed at the screen opens the control page."
 note "Enter the bucket details under Settings, then press Play."
 echo
 note "If something is wrong:  journalctl -u $SERVICE -f"

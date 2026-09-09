@@ -12,6 +12,16 @@ extern "C" {
 #include <cctype>
 #include <cstring>
 
+#ifdef MULTISITE_HAVE_QRCODE
+// The QR tile on the identity screen. libqrencode is a system package, found
+// by the build rather than shipped; without it the splash compiles and simply
+// has no code on it. The installer and CI install the library, which is where
+// a Pi's build gets it.
+extern "C" {
+#include <qrencode.h>
+}
+#endif
+
 namespace multisite_player {
 
 namespace {
@@ -94,6 +104,11 @@ constexpr uint32_t kDim     = 0x0093a1b5;
 constexpr uint32_t kAccent  = 0x004a9de0;
 constexpr uint32_t kWarn    = 0x00c8871d;
 constexpr uint32_t kRule    = 0x002e3644;
+#ifdef MULTISITE_HAVE_QRCODE
+constexpr uint32_t kCard    = 0x00ffffff;  // ground the QR tile is scanned against
+constexpr uint32_t kShadow  = 0x001d242e;  // flat offset "shadow" under the tile
+constexpr uint32_t kQrDark  = 0x00000000;  // the modules themselves
+#endif
 
 } // namespace
 
@@ -142,6 +157,53 @@ void Canvas::text_centred(int y, const std::string& s, int scale,
     text((m_width - text_width(s, scale)) / 2, y, s, scale, bgrx);
 }
 
+#ifdef MULTISITE_HAVE_QRCODE
+
+namespace {
+
+// A QR tile for the primary address, built once per redraw. libqrencode keeps
+// one byte per module; bit 0 set means a dark module.
+struct QrBlock {
+    QRcode* code = nullptr;
+    int modules  = 0;
+    int scale    = 2;
+    // The tile includes a 4-module quiet zone on every side, which scanners
+    // need and which would otherwise have to be drawn as extra white.
+    int side() const { return (modules + 8) * scale; }
+};
+
+bool build_qr(const std::string& url, int max_side, QrBlock& out) {
+    QRcode* code = QRcode_encodeString(url.c_str(), 0, QR_ECLEVEL_M,
+                                       QR_MODE_8, 1);
+    if (!code) return false;
+    out.code = code;
+    out.modules = code->width;
+    out.scale = std::max(2, max_side / (out.modules + 8));
+    return true;
+}
+
+void draw_qr(Canvas& canvas, int x, int y, const QrBlock& b) {
+    const int side = b.side();
+    // A flat offset block behind the tile reads as a shadow using the pixel
+    // renderer's whole vocabulary: rectangles, no blending.
+    const int off = std::max(2, b.scale);
+    canvas.rect(x + off, y + off, side, side, kShadow);
+    canvas.rect(x, y, side, side, kCard);
+    const int q = 4 * b.scale;
+    for (int row = 0; row < b.modules; ++row) {
+        const unsigned char* line = b.code->data + (size_t)row * b.modules;
+        for (int col = 0; col < b.modules; ++col) {
+            if (line[col] & 1)
+                canvas.rect(x + q + col * b.scale, y + q + row * b.scale,
+                            b.scale, b.scale, kQrDark);
+        }
+    }
+}
+
+} // namespace
+
+#endif // MULTISITE_HAVE_QRCODE
+
 void render_splash(Canvas& canvas, const SplashInfo& info) {
     const int W = canvas.width(), H = canvas.height();
     canvas.fill(kBg);
@@ -153,30 +215,89 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
     const int mid   = unit;
     const int small = std::max(1, unit * 2 / 3);
 
-    // The block is built before it is drawn, so its true height is known and
-    // it can be centred. Laying it out as it goes left a screen weighted to
-    // the top with a third of it empty.
+    // Header: what the box is, up top, with a hairline under it. Everything a
+    // person standing in the room needs is below that, in one glance.
+    const std::string brand = "MULTISITE PLAYER";
+    canvas.text(unit * 6, unit * 4, brand, small, kDim);
+    if (!info.version.empty()) {
+        const std::string v = "V" + info.version;
+        canvas.text(W - unit * 6 - Canvas::text_width(v, small), unit * 4, v,
+                    small, kDim);
+    }
+    canvas.rect(unit * 6, unit * 11, W - unit * 12, std::max(1, unit / 3),
+                kRule);
+
+    const int top   = unit * 16;       // below the header
+    const int floor = H - unit * 6;    // bottom margin
+
+    // The QR tile. One box is enough: whatever the room needs to reach, the
+    // web page on this box is where it starts.
+    bool have_qr = false;
+    int  qr_x = 0, qr_y = 0, tile = 0;
+#ifdef MULTISITE_HAVE_QRCODE
+    QrBlock block;
+    if (!info.addresses.empty()) {
+        const int avail = std::min((W * 3) / 10, floor - top);
+        if (build_qr(info.addresses.front(), std::max(unit * 12, avail),
+                     block)) {
+            have_qr = true;
+            tile = block.side();
+            qr_x = W - unit * 6 - tile;
+            const int caption = Canvas::text_height(small) + unit * 2;
+            qr_y = top + std::max(0, (floor - top - tile - caption) / 2);
+        }
+    }
+#else
+    (void)qr_x;
+    (void)qr_y;
+    (void)tile;
+#endif
+
+    // The words occupy the space left of the tile, centred in it — or the whole
+    // width, when there is nothing to scan.
+    const int text_right = have_qr ? qr_x - unit * 4 : W - unit * 6;
+    const int cx         = (unit * 6 + text_right) / 2;
+    auto centred = [&](int y, const std::string& s, int scale, uint32_t c) {
+        canvas.text(cx - Canvas::text_width(s, scale) / 2, y, s, scale, c);
+    };
+
+    // The message block is built before it is drawn so its true height is
+    // known and it can sit centred in the space it has been given.
     struct Line { std::string text; int scale; uint32_t colour; int gap_below; };
     std::vector<Line> lines;
 
-    lines.push_back({info.hostname.empty() ? "CAMPUS PLAYER" : info.hostname,
-                     big, kText, unit * 5});
-    lines.push_back({"", 0, kRule, unit * 5});      // the rule
+    // A long hostname must not push the title across the room; trim it to the
+    // column rather than letting it collide with the tile.
+    std::string title = info.hostname.empty() ? "CAMPUS PLAYER"
+                                              : info.hostname;
+    const int title_max = std::max(1, text_right - unit * 12);
+    while (!title.empty() && Canvas::text_width(title, big) > title_max)
+        title.pop_back();
+    lines.push_back({title, big, kText, unit * 4});
+    lines.push_back({"", 0, kRule, unit * 4});       // the rule
+
+    if (!info.configured)
+        lines.push_back({"THIS BOX HAS NO STORAGE DETAILS YET", mid, kWarn,
+                         unit * 4});
 
     if (info.addresses.empty()) {
         lines.push_back({"NO NETWORK CONNECTION", mid, kWarn, unit * 3});
         lines.push_back({"PLUG IN AN ETHERNET CABLE", small, kDim, unit * 4});
     } else {
-        lines.push_back({"OPEN THIS ON A PHONE OR TABLET", small, kDim, unit * 3});
+        if (have_qr) {
+            lines.push_back({"SCAN THE CODE ON THE RIGHT", small, kDim,
+                             unit * 2});
+            lines.push_back({"OR TYPE ONE OF THESE", small, kDim, unit * 3});
+        } else {
+            lines.push_back({"OPEN ONE OF THESE ON A PHONE OR TABLET", small,
+                             kDim, unit * 3});
+        }
         for (const auto& a : info.addresses)
             lines.push_back({a, mid, kAccent, unit * 2});
         lines.back().gap_below = unit * 5;
     }
 
-    if (!info.configured)
-        lines.push_back({"THIS BOX HAS NO STORAGE DETAILS YET", small, kWarn,
-                         unit * 3});
-    else if (!info.room.empty())
+    if (info.configured && !info.room.empty())
         lines.push_back({"ROOM  " + info.room, small, kDim, unit * 3});
 
     if (!info.state.empty())
@@ -190,23 +311,29 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
                           : std::max(1, unit / 3)) + l.gap_below;
     total -= lines.empty() ? 0 : lines.back().gap_below;
 
-    int y = std::max(unit * 4, (H - total) / 2);
+    const int y0 = top + std::max(0, (floor - top - total) / 2);
+    int y = y0;
     for (const auto& l : lines) {
         if (l.scale == 0) {
             const int thickness = std::max(1, unit / 3);
-            canvas.rect(W / 6, y, W * 2 / 3, thickness, l.colour);
+            canvas.rect(unit * 6, y, std::max(1, text_right - unit * 6),
+                        thickness, l.colour);
             y += thickness + l.gap_below;
             continue;
         }
-        canvas.text_centred(y, l.text, l.scale, l.colour);
+        centred(y, l.text, l.scale, l.colour);
         y += Canvas::text_height(l.scale) + l.gap_below;
     }
 
-    if (!info.version.empty()) {
-        const std::string v = "MULTISITE PLAYER " + info.version;
-        canvas.text((W - Canvas::text_width(v, small)) / 2,
-                    H - Canvas::text_height(small) - unit * 4, v, small, kRule);
+#ifdef MULTISITE_HAVE_QRCODE
+    if (have_qr) {
+        draw_qr(canvas, qr_x, qr_y, block);
+        QRcode_free(block.code);
+        const std::string cap = "SCAN WITH YOUR PHONE";
+        canvas.text(qr_x + tile / 2 - Canvas::text_width(cap, small) / 2,
+                    qr_y + tile + unit * 2, cap, small, kDim);
     }
+#endif
 }
 
 bool load_still(const std::string& path, int width, int height, Canvas& out,

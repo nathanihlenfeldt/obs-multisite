@@ -30,7 +30,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             ffmpeg libavformat-dev libavcodec-dev libavutil-dev \
             libswresample-dev libswscale-dev libcurl4-openssl-dev \
-            libdrm-dev libasound2-dev
+            libdrm-dev libasound2-dev libqrencode-dev
           echo "--- dependency versions ---"
           ffmpeg -version | head -1
           pkg-config --modversion libavformat
@@ -42,6 +42,8 @@ jobs:
           # fault was what made a campus player run at five frames a second.
           pkg-config --modversion libdrm
           pkg-config --modversion alsa
+          # libqrencode draws the QR tile on the identity screen; same rule.
+          pkg-config --modversion libqrencode
 
       - name: Install FFmpeg (macOS)
         if: runner.os == 'macOS'

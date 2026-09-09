@@ -313,6 +313,22 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         message(STATUS "player: no ALSA — building without audio output")
     endif()
 
+    # QR code on the identity screen. Found, not required: a development build
+    # without the library still compiles, and the splash simply has no code to
+    # scan. The installer and CI install it, which is where a Pi's build gets
+    # it — the same policy as libdrm and ALSA above.
+    if(PkgConfig_FOUND)
+        pkg_check_modules(QRENCODE IMPORTED_TARGET libqrencode)
+    endif()
+    if(TARGET PkgConfig::QRENCODE)
+        target_link_libraries(multisite-player PRIVATE PkgConfig::QRENCODE)
+        target_compile_definitions(multisite-player PRIVATE
+            MULTISITE_HAVE_QRCODE=1)
+        message(STATUS "player: QR code on the identity screen (libqrencode)")
+    else()
+        message(STATUS "player: no libqrencode — identity screen without a QR code")
+    endif()
+
     install(TARGETS multisite-player RUNTIME DESTINATION bin)
     install(DIRECTORY src/appliance/web/
             DESTINATION share/multisite-player/web)
