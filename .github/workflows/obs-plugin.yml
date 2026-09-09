@@ -29,15 +29,19 @@ jobs:
 
       - name: Install libobs, FFmpeg and libcurl
         run: |
-          # A hash-sum mismatch on an unrelated third-party repo (observed:
-          # dl.google.com/linux/chrome-stable, which GitHub's runner image
-          # ships preinstalled for Chrome and which nothing here needs) fails
-          # `apt-get update` outright, even though every repo this job
-          # actually uses fetched cleanly. Drop any repo we did not add
-          # ourselves before updating, so a stale mirror we have no use for
-          # cannot block a build that does not depend on it.
-          sudo rm -f /etc/apt/sources.list.d/google-chrome.list
-          sudo apt-get update -o Acquire::Retries=3
+          # apt-get update is allowed to fail here: a hash-sum mismatch on an
+          # unrelated third-party repo (observed: dl.google.com/linux/
+          # chrome-stable, which GitHub's runner image ships preinstalled for
+          # Chrome and which nothing here needs) makes the WHOLE step exit
+          # nonzero, even though every repo this job actually depends on is
+          # already visible a few lines above as fetched. Deleting that repo's
+          # source file first was tried and did not work — its filename on
+          # this runner image does not match what Chrome's installer usually
+          # writes elsewhere, and guessing again is a worse bet than not
+          # depending on this step's exit code at all. What has to actually
+          # succeed is the install two lines down, which only needs the
+          # indices this job cares about, and those are already current.
+          sudo apt-get update -o Acquire::Retries=3 || true
           sudo apt-get install -y --no-install-recommends \
             libobs-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev \
             libswresample-dev libswscale-dev libcurl4-openssl-dev \
