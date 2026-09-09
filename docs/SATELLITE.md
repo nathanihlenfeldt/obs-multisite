@@ -33,6 +33,35 @@ churches it is the deciding factor.
   house system already runs NDI.
 - Anything else OBS can see: HDMI capture cards, USB cameras, screen capture.
 
+**More than one camera angle, in guaranteed sync**
+
+The protocol carries exactly one video stream per event — there is no
+equivalent of multi-track audio on the video side, and adding one would be a
+much bigger change than audio tracks were, which just reuse the fragment
+multiplexing that was already there. So a room that needs several angles
+delivered to a satellite — a wide shot and a stage-left ISO, say, or four SDI
+sources for a video wall — has to get them there some other way.
+
+Our recommendation: **composite the feeds into one canvas at the main site**
+before they ever reach the encoder, and split them back apart at the
+satellite. Two SDI inputs side by side make a 3840×1080 canvas; four in a
+grid make 3840×2160. That single wide frame is the one thing this pipeline
+sends and guarantees in sync — every camera is a region of the same decoded
+picture, so there is no possibility of the angles drifting apart the way
+independently-encoded streams could.
+
+At the decoder machine, add the Multisite Source once and pull the angles
+back apart onto their own outputs with OBS's own **Transform** and **Crop/Pad**
+filters — one scene item per angle, each cropped to its region of the
+composite and routed to wherever it needs to go (a DeckLink output, a
+separate program feed, a video wall processor). Nothing here needs a plugin;
+crop and transform are built into OBS.
+
+The cost is bandwidth: a 3840×2160 canvas costs roughly what a single 4K
+stream does, whatever number of cameras are inside it. Worth it for a room
+that needs several angles kept in lock-step; not worth building for a room
+that only ever needs one.
+
 **Audio into the house system**
 
 - **Dante** via Dante Virtual Soundcard or a Dante-enabled interface: OBS sees

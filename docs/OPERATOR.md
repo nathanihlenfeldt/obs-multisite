@@ -73,6 +73,17 @@ harmless — the next Go Live recreates it.)
 On **AWS S3, MinIO, Backblaze B2 or Wasabi**: the equivalent lifecycle
 configuration with an Expiration rule per prefix.
 
+**Wanting the storage itself self-hosted, not only self-configured?** Every
+provider above still means somebody else's servers. If that matters to you —
+data residency, a church that already runs its own infrastructure, or simply
+keeping a third party out of the chain entirely — the bucket only needs to
+speak the S3 API, so a self-hosted object store works exactly like MinIO
+does above. [Alarik](https://github.com/achtungsoftware/alarik) is one such
+project: S3-compatible with lifecycle rules included, and it runs on hardware
+you own — on premises, at a colo, wherever. It is a separate project, in
+beta, and one we have not run this pipeline against ourselves; nothing here
+depends on it, the same as any other storage provider on this page.
+
 Object *tagging* is off by default and is deliberately not the mechanism: R2
 rejects `x-amz-tagging`, and a tag never deletes anything by itself. Enable it
 only if your store expires by tag and you have a rule that matches.
