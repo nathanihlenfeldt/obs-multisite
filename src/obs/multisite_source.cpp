@@ -152,9 +152,31 @@ struct SourceCtx : DecoderControls {
     // being delivered, so it advances continuously rather than jumping once
     // per segment — which is why the displayed time appeared frozen.
     std::atomic<long long> playing_at_ms{0};
-    // Wall time and first media pts of the current segment, used to convert a
-    // frame's pts into a clock reading.
-    std::atomic<long long> seg_starts_at_ms{0};
+    // Converting a frame's pts into a clock reading.
+    //
+    // This used to pair the wall time of whichever fragment the FEED thread
+    // had most recently pushed with a pts base taken from whatever the
+    // DELIVERY thread happened to be emitting. Those are different fragments
+    // by design — kFeedLeadNs keeps the feed 2.5 s ahead — so the clock was
+    // routinely a fragment out, and after a jump it paired the new position's
+    // wall time with the old position's pts base, which is minutes.
+    //
+    // Instead the offset between the media timeline and the wall clock is
+    // latched ONCE per decoder, from the first fragment pushed into it. That
+    // pairing is safe: a restart tears the decoder down and clears the
+    // delivery queue, so the first frame out afterwards belongs to the first
+    // fragment in. Every reading after that is the frame's own pts plus a
+    // constant — no shared state between the two threads at all.
+    static constexpr long long kOffsetUnset = LLONG_MIN;
+    std::atomic<long long> pts_wall_offset_ms{kOffsetUnset};
+    // Wall time of the first fragment pushed since the decoder started, and a
+    // flag consumed by that fragment. The flag matters: if the first fragment
+    // has no wall time, this must stay unlatched and fall back to the
+    // segment-granular clock — taking a LATER fragment's wall time would
+    // pair it with the first fragment's pts and reintroduce exactly the
+    // mispairing being fixed.
+    std::atomic<long long> restart_wall_ms{0};
+    std::atomic<bool>      restart_wall_pending{true};
     std::atomic<long long> seg_first_pts_ns{-1};
     // After a timed seek, frames earlier than this point in the segment are
     // dropped, giving roughly one-second accuracy instead of six.
@@ -454,9 +476,21 @@ static void deliver_loop(SourceCtx* ctx) {
             const long long pts = item.is_video ? item.video.pts_ns
                                                 : item.audio.pts_ns;
             if (base < 0) { ctx->seg_first_pts_ns = pts; base = pts; }
-            const long long segstart = ctx->seg_starts_at_ms.load();
-            if (segstart > 0)
-                ctx->playing_at_ms = segstart + (pts - base) / 1000000LL;
+
+            long long off = ctx->pts_wall_offset_ms.load();
+            if (off == SourceCtx::kOffsetUnset) {
+                // First frame since the decoder started. `base` is this
+                // fragment's first pts and restart_wall_ms is that same
+                // fragment's wall start, because the queue was cleared and
+                // this is the first frame to come out.
+                const long long w = ctx->restart_wall_ms.load();
+                if (w > 0) {
+                    off = w - base / 1000000LL;
+                    ctx->pts_wall_offset_ms = off;
+                }
+            }
+            if (off != SourceCtx::kOffsetUnset)
+                ctx->playing_at_ms = off + pts / 1000000LL;
         }
 
         // Has playback actually ARRIVED where it was sent?
@@ -882,6 +916,11 @@ static void feed_loop(SourceCtx* ctx) {
                     if (old) old->stop();      // stop() blocks: outside the lock
                     ctx->decoder_started = false;
                     ctx->first_pts_ns = -1;      // re-anchor the playout clock
+                    // The media timeline restarts with the new decoder, so
+                    // the offset has to be learned again.
+                    ctx->pts_wall_offset_ms   = SourceCtx::kOffsetUnset;
+                    ctx->restart_wall_ms      = 0;
+                    ctx->restart_wall_pending = true;
                     ctx->logged_av_offset = false;
                     ctx->last_video_pts_ns = 0;
                     {
@@ -914,6 +953,11 @@ static void feed_loop(SourceCtx* ctx) {
             ctx->decoder_started = true;
             ctx->feed_start_ns = os_gettime_ns();
             ctx->pushed_media_ns = 0;
+            // Also on a first start, not only on a restart: this is reached
+            // without going through the teardown above.
+            ctx->pts_wall_offset_ms   = SourceCtx::kOffsetUnset;
+            ctx->restart_wall_ms      = 0;
+            ctx->restart_wall_pending = true;
             mlog_info("source: decoder started (init %zu bytes)",
                       seg->init.size());
         }
@@ -931,9 +975,13 @@ static void feed_loop(SourceCtx* ctx) {
         }
         if (!ctx->running.load()) break;
 
-        // Record this segment's wall time so delivered frames can be turned
-        // into a clock reading, and carry any mid-segment seek offset.
-        ctx->seg_starts_at_ms = (long long)seg->starts_at_ms;
+        // The FIRST fragment since the decoder started defines the media
+        // timeline's offset from the wall clock. Later fragments must not
+        // touch it: their wall times are correct, but by then the delivery
+        // thread is several seconds behind and would pair them with the wrong
+        // frames — which is the bug this replaced.
+        if (ctx->restart_wall_pending.exchange(false))
+            ctx->restart_wall_ms = (long long)seg->starts_at_ms;
         ctx->seg_first_pts_ns = -1;              // set by the first frame
         if (seg->skip_to_ms > 0)
             ctx->skip_until_pts_ns = seg->skip_to_ms * 1000000LL;
