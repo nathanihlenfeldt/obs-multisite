@@ -2,11 +2,21 @@
 #
 # install.sh — turn a stock Raspberry Pi OS install into a campus player.
 #
-#   curl -fsSL https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/install.sh | sudo bash
+# One line, cloning the repo rather than trusting the raw-CDN download (which
+# has been known to return 503s):
+#
+#   sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends \
+#     git ca-certificates >/dev/null && sudo mkdir -p /opt/multisite-player && \
+#     sudo rm -rf /opt/multisite-player/src && \
+#     sudo git clone --depth 1 https://github.com/stageaudioworks/obs-multisite.git \
+#     /opt/multisite-player/src && \
+#     sudo SKIP_GIT_UPDATE=1 bash /opt/multisite-player/src/scripts/player/install.sh
+#
+# (From a checkout it is simply: sudo bash scripts/player/install.sh)
 #
 # It installs the build dependencies, builds the player, installs it as a
 # service that starts on power-up, and leaves the box showing a screen with its
-# own address on it so somebody can finish the job from a phone.
+# own address and a QR code on it so somebody can finish the job from a phone.
 #
 # Safe to run again: it updates an existing installation in place and keeps the
 # settings and the segment cache.
@@ -64,13 +74,30 @@ note "done"
 # ── Source ───────────────────────────────────────────────────────────────────
 if [ -d "$SRC_DIR/.git" ]; then
   say "Updating the source"
-  # Fetch into the branch's own remote-tracking ref. A plain `git fetch origin
-  # $BRANCH` writes only FETCH_HEAD, so the reset below would fail the first
-  # time a box is moved from one branch to another (the tracking ref does not
-  # exist yet) — which is exactly how an update to an older version is run.
-  git -C "$SRC_DIR" fetch --quiet --depth 1 \
-      origin "$BRANCH:refs/remotes/origin/$BRANCH"
-  git -C "$SRC_DIR" reset --quiet --hard "origin/$BRANCH"
+  current="$(git -C "$SRC_DIR" log -1 --format='%h %s' 2>/dev/null || true)"
+  note "current: ${current:-unknown}"
+  # The one-line bootstrap clones the branch itself and asks to skip this
+  # step; an ordinary re-run of the script fetches and resets. Fetching is
+  # retried, because GitHub's servers hiccup and a box mid-install has no one
+  # to ask — this is the step that must never end the script silently.
+  if [ "${SKIP_GIT_UPDATE:-0}" != "1" ]; then
+    # Fetch into the branch's own remote-tracking ref. A plain `git fetch
+    # origin $BRANCH` writes only FETCH_HEAD, so the reset below would fail
+    # the first time a box is moved from one branch to another.
+    fetched=""
+    for attempt in 1 2 3 4 5; do
+      if git -C "$SRC_DIR" fetch --quiet --depth 1 \
+            origin "$BRANCH:refs/remotes/origin/$BRANCH"; then
+        fetched=1
+        break
+      fi
+      warn "could not reach GitHub (attempt $attempt of 5) — retrying in ${attempt}s"
+      sleep "$attempt"
+    done
+    [ -n "$fetched" ] \
+      || die "could not fetch the '$BRANCH' branch from GitHub — check this box's internet and run this again"
+    git -C "$SRC_DIR" reset --quiet --hard "origin/$BRANCH"
+  fi
 else
   say "Fetching the source"
   mkdir -p "$(dirname "$SRC_DIR")"
