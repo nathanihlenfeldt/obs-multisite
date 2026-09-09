@@ -38,6 +38,11 @@ public:
     void fill(uint32_t bgrx);
     void rect(int x, int y, int w, int h, uint32_t bgrx);
 
+    // Read one pixel (clipped to the frame), for blending text over it.
+    uint32_t pixel(int x, int y) const;
+    // Blend `rgb` (0x00RRGGBB) over the current pixel with `alpha` 0..255.
+    void blend(int x, int y, uint32_t rgb, uint8_t alpha);
+
     // Draws in capitals; the font has no lowercase, which reads as deliberate
     // on a title card and saves half the glyph table.
     void text(int x, int y, const std::string& s, int scale, uint32_t bgrx);

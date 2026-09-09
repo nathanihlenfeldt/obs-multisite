@@ -212,6 +212,8 @@ private:
     // than a timer of its own: it only ever needs to act a few times a
     // minute, and never while frames are flowing.
     void update_screen();
+    // Everything the identity screen needs to say right now.
+    SplashInfo splash_info() const;
 
     void rebuild_session();          // under m_obj_mtx
     void teardown_decoder();
@@ -305,6 +307,10 @@ private:
     // page-flip the display for no reason.
     std::string m_idle_signature;
     bool        m_idle_showing = false;
+    // Boot splash: show the identity screen for the first few seconds even if
+    // auto-play is about to put a service on the screen.
+    std::atomic<uint64_t> m_boot_splash_until_ns{0};
+    std::atomic<bool>     m_boot_splash_drawn{false};
     // The sound card is opened by the delivery thread, once the first decoded
     // frame reveals the feed's rate and channel count. Setting this asks it to
     // let the current device go and open the newly chosen one — otherwise a

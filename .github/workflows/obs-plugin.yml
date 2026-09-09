@@ -33,7 +33,7 @@ jobs:
           sudo apt-get install -y --no-install-recommends \
             libobs-dev ffmpeg libavformat-dev libavcodec-dev libavutil-dev \
             libswresample-dev libswscale-dev libcurl4-openssl-dev \
-            libqrencode-dev
+            libqrencode-dev libfreetype-dev
           echo "--- versions ---"
           pkg-config --modversion libobs
           pkg-config --modversion libavformat

@@ -40,6 +40,9 @@ constexpr uint64_t kPlayoutCushionNs = 500000000ULL;          // 500 ms
 // Keep the decoder a couple of seconds ahead of the wall clock so the first
 // frames of each fragment are never late, without running seconds ahead.
 constexpr uint64_t kFeedLeadNs = 2500000000ULL;               // 2.5 s
+// How long the identity screen stays up after power-on, whatever is about to
+// air: the box proves it is alive before the picture takes over.
+constexpr uint64_t kBootSplashNs = 5000000000ULL;             // 5 s
 
 } // namespace
 
@@ -168,6 +171,11 @@ void Player::start() {
         std::lock_guard<std::mutex> lk(m_obj_mtx);
         rebuild_session();
     }
+
+    // The identity screen comes up immediately and stays for a few seconds,
+    // even though a service may be about to take the picture over.
+    m_boot_splash_until_ns = now_ns() + kBootSplashNs;
+    m_boot_splash_drawn = false;
 
     m_poll_thread    = std::thread([this] { poll_loop(); });
     m_feed_thread    = std::thread([this] { feed_loop(); });
@@ -513,6 +521,11 @@ void Player::deliver_loop() {
                 m_playing_at_ms = segstart + (pts - base) / 1000000LL;
         }
 
+        // Boot splash: while it is showing, drop video and audio alike so the
+        // picture stays on the identity screen and the playout clock keeps
+        // running — the box simply comes in a few seconds into the service.
+        if (now_ns() < m_boot_splash_until_ns.load()) continue;
+
         // Something has reached the output, so whatever was asked for has
         // landed. Keyed on delivery rather than on the seek returning: the
         // seek is instant, arriving there is not.
@@ -575,45 +588,8 @@ void Player::deliver_loop() {
 
 // ── The idle screen ──────────────────────────────────────────────────────────
 
-void Player::update_screen() {
-    // Frames are reaching the display: there is a service on, and nothing
-    // here should touch the screen.
-    const uint64_t last = m_last_frame_ns.load();
-    if (last != 0 && now_ns() - last < 2000000000ULL) {
-        m_idle_showing = false;
-        return;
-    }
-
+SplashInfo Player::splash_info() const {
     const Config cfg = config();
-
-    // Holding the last picture is the pause behaviour, so there is by
-    // definition nothing to draw: leave the screen exactly as it is.
-    if (cfg.idle_mode == IdleMode::HoldFrame && m_frames_out.load() > 0) return;
-
-    if (cfg.idle_mode == IdleMode::Black) {
-        if (!m_idle_showing) { m_video.blank(); m_idle_showing = true; }
-        return;
-    }
-
-    int width = 1920, height = 1080;
-    m_video.size(width, height);
-
-    if (cfg.idle_mode == IdleMode::Image) {
-        if (m_idle_showing) return;      // a still does not change
-        Canvas canvas(width, height);
-        std::string err;
-        if (load_still(cfg.idle_image_path, width, height, canvas, err)) {
-            m_video.present_bgrx(canvas.width(), canvas.height(),
-                                 canvas.stride(), canvas.pixels());
-            m_idle_showing = true;
-            return;
-        }
-        // A holding slide that cannot be read must not leave a black screen
-        // with no explanation — fall through to the splash, which at least
-        // says where the box is.
-        plog_warn("holding slide: %s", err.c_str());
-    }
-
     SplashInfo info;
     info.hostname   = hostname();
     info.room       = cfg.room_id;
@@ -657,6 +633,69 @@ void Player::update_screen() {
     } else {
         info.state = "WAITING FOR THE MAIN SITE";
     }
+    return info;
+}
+
+void Player::update_screen() {
+    // Boot splash: the identity screen owns the display for the first few
+    // seconds after power-on, whatever idle mode is set and whether a service
+    // is already arriving (delivery holds its frames back meanwhile).
+    if (now_ns() < m_boot_splash_until_ns.load()) {
+        if (!m_boot_splash_drawn.exchange(true)) {
+            int width = 1920, height = 1080;
+            m_video.size(width, height);
+            Canvas canvas(width, height);
+            render_splash(canvas, splash_info());
+            m_video.present_bgrx(canvas.width(), canvas.height(),
+                                 canvas.stride(), canvas.pixels());
+            m_idle_showing = true;
+        }
+        return;
+    }
+    if (m_boot_splash_drawn.exchange(false)) {
+        // Hand the screen over to the ordinary idle behaviour.
+        m_idle_showing = false;
+    }
+
+    // Frames are reaching the display: there is a service on, and nothing
+    // here should touch the screen.
+    const uint64_t last = m_last_frame_ns.load();
+    if (last != 0 && now_ns() - last < 2000000000ULL) {
+        m_idle_showing = false;
+        return;
+    }
+
+    const Config cfg = config();
+
+    // Holding the last picture is the pause behaviour, so there is by
+    // definition nothing to draw: leave the screen exactly as it is.
+    if (cfg.idle_mode == IdleMode::HoldFrame && m_frames_out.load() > 0) return;
+
+    if (cfg.idle_mode == IdleMode::Black) {
+        if (!m_idle_showing) { m_video.blank(); m_idle_showing = true; }
+        return;
+    }
+
+    int width = 1920, height = 1080;
+    m_video.size(width, height);
+
+    if (cfg.idle_mode == IdleMode::Image) {
+        if (m_idle_showing) return;      // a still does not change
+        Canvas canvas(width, height);
+        std::string err;
+        if (load_still(cfg.idle_image_path, width, height, canvas, err)) {
+            m_video.present_bgrx(canvas.width(), canvas.height(),
+                                 canvas.stride(), canvas.pixels());
+            m_idle_showing = true;
+            return;
+        }
+        // A holding slide that cannot be read must not leave a black screen
+        // with no explanation — fall through to the splash, which at least
+        // says where the box is.
+        plog_warn("holding slide: %s", err.c_str());
+    }
+
+    SplashInfo info = splash_info();
 
     // Nothing has changed, so nothing needs redrawing.
     std::string signature = info.state + "|" + info.detail + "|" + info.room;
@@ -675,6 +714,9 @@ void Player::update_screen() {
 
 void Player::poll_loop() {
     plog_info("receive loop started");
+    // Put the identity screen up straight away, before the first network poll
+    // can take seconds.
+    update_screen();
     long long next_poll = 0;
     long long last_status_log = now_ms();
 

@@ -329,6 +329,22 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         message(STATUS "player: no libqrencode — identity screen without a QR code")
     endif()
 
+    # Smooth text on the identity screen, when freetype is present. Optional,
+    # exactly like the QR code: a development build without it still compiles
+    # (the splash falls back to its built-in bitmap font), and the installer
+    # and CI install it so a Pi gets the nicer rendering.
+    if(PkgConfig_FOUND)
+        pkg_check_modules(FREETYPE IMPORTED_TARGET freetype2)
+    endif()
+    if(TARGET PkgConfig::FREETYPE)
+        target_link_libraries(multisite-player PRIVATE PkgConfig::FREETYPE)
+        target_compile_definitions(multisite-player PRIVATE
+            MULTISITE_HAVE_FREETYPE=1)
+        message(STATUS "player: anti-aliased splash text (freetype)")
+    else()
+        message(STATUS "player: no freetype — splash uses the built-in bitmap font")
+    endif()
+
     install(TARGETS multisite-player RUNTIME DESTINATION bin)
     install(DIRECTORY src/appliance/web/
             DESTINATION share/multisite-player/web)

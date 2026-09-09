@@ -64,7 +64,8 @@ apt-get install -y --no-install-recommends \
   libcurl4-openssl-dev libssl-dev \
   libavformat-dev libavcodec-dev libavutil-dev libswresample-dev libswscale-dev \
   libdrm-dev libasound2-dev \
-  libqrencode-dev \
+  libqrencode-dev libfreetype-dev \
+  fonts-dejavu-core \
   >/dev/null
 note "done"
 

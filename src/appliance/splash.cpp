@@ -22,6 +22,13 @@ extern "C" {
 }
 #endif
 
+#ifdef MULTISITE_HAVE_FREETYPE
+// Smooth text on the identity screen. Like libqrencode, found by the build
+// rather than shipped; without it the splash falls back to its bitmap font.
+#include <ft2build.h>
+#include FT_FREETYPE_H
+#endif
+
 namespace multisite_player {
 
 namespace {
@@ -99,6 +106,7 @@ constexpr int kAdvance = 6;      // 5 wide + 1 gap
 // A dark ground rather than black: a screen showing pure black in a lit room
 // looks broken, and a campus wants to be able to tell "waiting" from "off".
 constexpr uint32_t kBg      = 0x00121519;
+constexpr uint32_t kBgTop   = 0x001a2732;  // identity screen gradient top
 constexpr uint32_t kText    = 0x00e8edf4;
 constexpr uint32_t kDim     = 0x0093a1b5;
 constexpr uint32_t kAccent  = 0x004a9de0;
@@ -127,6 +135,24 @@ void Canvas::rect(int x, int y, int w, int h, uint32_t bgrx) {
         std::fill(m_px.begin() + (size_t)row * m_width + x0,
                   m_px.begin() + (size_t)row * m_width + x1, bgrx);
 }
+
+uint32_t Canvas::pixel(int x, int y) const {
+    if (x < 0 || y < 0 || x >= m_width || y >= m_height) return 0;
+    return m_px[(size_t)y * m_width + x];
+}
+
+void Canvas::blend(int x, int y, uint32_t rgb, uint8_t alpha) {
+    if (x < 0 || y < 0 || x >= m_width || y >= m_height || alpha == 0) return;
+    if (alpha == 255) { rect(x, y, 1, 1, rgb); return; }
+    const uint32_t back = m_px[(size_t)y * m_width + x];
+    const uint8_t fr = (rgb >> 16) & 0xff, fg = (rgb >> 8) & 0xff, fb = rgb & 0xff;
+    const uint8_t br = (back >> 16) & 0xff, bg = (back >> 8) & 0xff, bb = back & 0xff;
+    const uint32_t r = ((uint32_t)fr * alpha + (uint32_t)br * (255 - alpha)) / 255;
+    const uint32_t g = ((uint32_t)fg * alpha + (uint32_t)bg * (255 - alpha)) / 255;
+    const uint32_t b = ((uint32_t)fb * alpha + (uint32_t)bb * (255 - alpha)) / 255;
+    m_px[(size_t)y * m_width + x] = (r << 16) | (g << 8) | b;
+}
+
 
 int Canvas::text_width(const std::string& s, int scale) {
     if (s.empty()) return 0;
@@ -204,9 +230,135 @@ void draw_qr(Canvas& canvas, int x, int y, const QrBlock& b) {
 
 #endif // MULTISITE_HAVE_QRCODE
 
+namespace {
+
+// A vertical gradient under the identity screen: flat navy reads as a dead
+// monitor, a gentle lift reads as deliberate.
+void fill_gradient(Canvas& canvas, uint32_t top, uint32_t bottom) {
+    const int w = canvas.width(), h = canvas.height();
+    const int tr = (top >> 16) & 0xff, tg = (top >> 8) & 0xff, tb = top & 0xff;
+    const int br = (bottom >> 16) & 0xff, bg = (bottom >> 8) & 0xff, bb = bottom & 0xff;
+    for (int y = 0; y < h; ++y) {
+        const int t = h > 1 ? (y * 256) / (h - 1) : 0;
+        const uint32_t c = 0x00000000u
+            | ((uint32_t)((tr * (256 - t) + br * t) / 256) << 16)
+            | ((uint32_t)((tg * (256 - t) + bg * t) / 256) << 8)
+            |  (uint32_t)((tb * (256 - t) + bb * t) / 256);
+        canvas.rect(0, y, w, 1, c);
+    }
+}
+
+#ifdef MULTISITE_HAVE_FREETYPE
+// Text drawn with the system font through FreeType: genuinely smooth letters
+// rather than the 5x7 grid the bitmap fallback uses.
+class Font {
+public:
+    Font() {
+        if (FT_Init_FreeType(&m_lib)) return;
+        for (const char* path : kCandidates) {
+            if (FT_New_Face(m_lib, path, 0, &m_face) == 0) { m_ok = true; return; }
+        }
+    }
+    bool ok() const { return m_ok && m_face; }
+
+    // Set the em size for `scale` and return the ascent in pixels (the baseline
+    // sits this far below the top of the text box).
+    int set_size(int scale) {
+        FT_Set_Pixel_Sizes(m_face, 0, std::max(7, scale * 7));
+        return (int)(m_face->size->metrics.ascender >> 6);
+    }
+    int width(const std::string& s) {
+        int pen = 0;
+        for (unsigned char c : s) {
+            FT_UInt gi = FT_Get_Char_Index(m_face, c);
+            if (gi == 0) { pen += space(); continue; }
+            if (FT_Load_Glyph(m_face, gi, FT_LOAD_DEFAULT) == 0)
+                pen += (int)(m_face->glyph->advance.x >> 6);
+        }
+        return pen;
+    }
+    void draw(Canvas& canvas, int x, int baseline, const std::string& s,
+              uint32_t colour) {
+        int pen = x;
+        for (unsigned char c : s) {
+            FT_UInt gi = FT_Get_Char_Index(m_face, c);
+            if (gi == 0) { pen += space(); continue; }
+            if (FT_Load_Glyph(m_face, gi, FT_LOAD_RENDER)) continue;
+            FT_GlyphSlot g = m_face->glyph;
+            const FT_Bitmap& bmp = g->bitmap;
+            for (unsigned row = 0; row < bmp.rows; ++row) {
+                const unsigned char* line = bmp.buffer + (size_t)row * bmp.pitch;
+                for (unsigned col = 0; col < bmp.width; ++col) {
+                    const uint8_t a = line[col];
+                    if (a) canvas.blend(pen + g->bitmap_left + (int)col,
+                                        baseline - g->bitmap_top + (int)row,
+                                        colour, a);
+                }
+            }
+            pen += (int)(g->advance.x >> 6);
+        }
+    }
+
+private:
+    int space() {
+        FT_UInt gi = FT_Get_Char_Index(m_face, ' ');
+        if (gi && FT_Load_Glyph(m_face, gi, FT_LOAD_DEFAULT) == 0)
+            return (int)(m_face->glyph->advance.x >> 6);
+        return (int)(m_face->size->metrics.x_ppem) / 2;
+    }
+    static constexpr const char* kCandidates[] = {
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans-Bold.ttf",
+        "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Bold.ttf",
+        "/usr/share/fonts/truetype/liberation/LiberationSans-Regular.ttf",
+    };
+    FT_Library m_lib = nullptr;
+    FT_Face    m_face = nullptr;
+    bool       m_ok = false;
+};
+#endif
+
+// The single seam all splash text flows through: smooth when freetype and a
+// font are available, the bitmap grid otherwise. Line spacing still comes from
+// Canvas::text_height, so the two renderings lay out the same.
+class Text {
+public:
+    int width(const std::string& s, int scale) {
+#ifdef MULTISITE_HAVE_FREETYPE
+        if (m_font.ok()) { m_font.set_size(scale); return m_font.width(s); }
+#endif
+        return Canvas::text_width(s, scale);
+    }
+    int ascent(int scale) {
+#ifdef MULTISITE_HAVE_FREETYPE
+        if (m_font.ok()) return m_font.set_size(scale);
+#endif
+        (void)scale;
+        return 0;
+    }
+    void draw(Canvas& c, int x, int top, const std::string& s, int scale,
+              uint32_t colour) {
+#ifdef MULTISITE_HAVE_FREETYPE
+        if (m_font.ok()) {
+            const int a = m_font.set_size(scale);
+            m_font.draw(c, x, top + a, s, colour);
+            return;
+        }
+#endif
+        c.text(x, top, s, scale, colour);
+    }
+
+private:
+#ifdef MULTISITE_HAVE_FREETYPE
+    Font m_font;
+#endif
+};
+
+} // namespace
+
 void render_splash(Canvas& canvas, const SplashInfo& info) {
     const int W = canvas.width(), H = canvas.height();
-    canvas.fill(kBg);
+    fill_gradient(canvas, kBgTop, kBg);
 
     // Scale everything off the display height, so the same layout works on a
     // 720p monitor in an office and a 4K screen in an auditorium.
@@ -214,15 +366,16 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
     const int big   = unit * 2;
     const int mid   = unit;
     const int small = std::max(1, unit * 2 / 3);
+    Text tx;
 
     // Header: what the box is, up top, with a hairline under it. Everything a
     // person standing in the room needs is below that, in one glance.
     const std::string brand = "MULTISITE PLAYER";
-    canvas.text(unit * 6, unit * 4, brand, small, kDim);
+    tx.draw(canvas, unit * 6, unit * 4, brand, small, kDim);
     if (!info.version.empty()) {
         const std::string v = "V" + info.version;
-        canvas.text(W - unit * 6 - Canvas::text_width(v, small), unit * 4, v,
-                    small, kDim);
+        tx.draw(canvas, W - unit * 6 - tx.width(v, small), unit * 4, v, small,
+                kDim);
     }
     canvas.rect(unit * 6, unit * 11, W - unit * 12, std::max(1, unit / 3),
                 kRule);
@@ -258,7 +411,7 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
     const int text_right = have_qr ? qr_x - unit * 4 : W - unit * 6;
     const int cx         = (unit * 6 + text_right) / 2;
     auto centred = [&](int y, const std::string& s, int scale, uint32_t c) {
-        canvas.text(cx - Canvas::text_width(s, scale) / 2, y, s, scale, c);
+        tx.draw(canvas, cx - tx.width(s, scale) / 2, y, s, scale, c);
     };
 
     // The message block is built before it is drawn so its true height is
@@ -271,7 +424,7 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
     std::string title = info.hostname.empty() ? "CAMPUS PLAYER"
                                               : info.hostname;
     const int title_max = std::max(1, text_right - unit * 12);
-    while (!title.empty() && Canvas::text_width(title, big) > title_max)
+    while (!title.empty() && tx.width(title, big) > title_max)
         title.pop_back();
     lines.push_back({title, big, kText, unit * 4});
     lines.push_back({"", 0, kRule, unit * 4});       // the rule
@@ -330,8 +483,8 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
         draw_qr(canvas, qr_x, qr_y, block);
         QRcode_free(block.code);
         const std::string cap = "SCAN WITH YOUR PHONE";
-        canvas.text(qr_x + tile / 2 - Canvas::text_width(cap, small) / 2,
-                    qr_y + tile + unit * 2, cap, small, kDim);
+        tx.draw(canvas, qr_x + tile / 2 - tx.width(cap, small) / 2,
+                qr_y + tile + unit * 2, cap, small, kDim);
     }
 #endif
 }
