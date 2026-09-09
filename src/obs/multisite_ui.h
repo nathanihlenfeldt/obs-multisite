@@ -121,6 +121,11 @@ void forward_marker_to_encoder(const std::string& label);
 struct DecoderSnapshot {
     std::string room_id;
     int         room_state = 0;       // matches RoomState
+    // Connection health, measured from this campus's own downloads. 0 healthy,
+    // 1 degraded, 2 offline — the same meaning as the encoder's Link row. Only
+    // meaningful once link_known is true (a request has been observed).
+    int         link_health = 0;
+    bool        link_known = false;
     unsigned long long head = 0, live_edge = 0, first_available = 0;
     double      behind_live_s = 0.0, buffered_ahead_s = 0.0;
     bool        paused = false;

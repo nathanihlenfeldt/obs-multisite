@@ -6,6 +6,7 @@
 // abandoned while the event is live; a segment is confirmed (and its spool file
 // removed) only after the store returns success.
 //
+#include "link_health.h"
 #include "spool_queue.h"
 #include "transport.h"
 #include <functional>
@@ -15,8 +16,6 @@
 #include <cstdint>
 
 namespace multisite {
-
-enum class LinkHealth { Healthy, Degraded, Offline };
 
 struct UploaderConfig {
     int    base_backoff_ms = 250;     // first retry delay

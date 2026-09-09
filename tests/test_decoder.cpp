@@ -904,6 +904,52 @@ int main() {
               "resumes as soon as new segments appear");
     }
 
+    std::printf("== 21. Link health follows the connection, not the room ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTJJJJJJJJJJJJJJJJJJJ");
+        enc.publish_start();
+        for (int i = 0; i < 4; ++i) enc.publish_segment();
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d20").string();
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        CHECK(dec.link_health() == LinkHealth::Healthy,
+              "healthy after the first successful poll");
+
+        // A room with nothing live yet answers live.json with a clean 404.
+        // That proves the store is reachable, so the link stays healthy even
+        // though the room is offline — the two must never be conflated.
+        {
+            FakeStore empty;
+            DecoderConfig c2;
+            c2.room_id = "nothing"; c2.cache_dir = (base / "d21").string();
+            DecoderSession d2(c2, empty);
+            RoomState st = d2.poll(1000000);
+            CHECK(st == RoomState::Offline, "empty room reports offline");
+            CHECK(d2.link_health() == LinkHealth::Healthy,
+                  "a 404 is the store answering, not an outage");
+        }
+
+        // Kill the link: live.json stops completing. The session goes offline,
+        // but that is now distinguishable from the empty-room case above.
+        store.fail_next_gets = 1;
+        dec.poll(enc.clock_ms);
+        CHECK(dec.link_health() == LinkHealth::Degraded,
+              "one failed request degrades, not yet offline");
+
+        store.fail_next_gets = 2;
+        dec.poll(enc.clock_ms);
+        CHECK(dec.link_health() == LinkHealth::Offline,
+              "two consecutive failures are offline");
+
+        store.fail_next_gets = 0;
+        dec.poll(enc.clock_ms);
+        CHECK(dec.link_health() == LinkHealth::Healthy,
+              "recovery happens as soon as the store answers again");
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_fail == 0 ? "ALL DECODER TESTS PASSED"
                                       : "SOME DECODER TESTS FAILED");

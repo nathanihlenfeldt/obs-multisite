@@ -15,6 +15,7 @@
 #include "model.h"
 #include "segment_cache.h"
 #include "transport.h"
+#include "link_health.h"
 
 #include <atomic>
 #include <cstdint>
@@ -222,6 +223,18 @@ public:
     };
     const Stats& stats() const { return m_stats; }
 
+    // ── Connection health ────────────────────────────────────────────────────
+    // Whether the store has been answering, as measured from this session's own
+    // poll and download traffic. Distinct from room_state(): an empty room with
+    // a good connection reads Healthy + Offline, while a dead link reads
+    // Offline + Offline. This is the figure an operator acts on mid-service.
+    LinkHealth link_health() const { return m_link.health(); }
+    // True once the session has observed at least one request, so a UI can
+    // tell "measured healthy" from "nothing to report yet".
+    bool       link_known() const { return m_link.known(); }
+    // Wall-clock ms of the last link-state change (0 if never changed).
+    int64_t    link_changed_ms() const { return m_link.last_change_ms(); }
+
 private:
     DecoderConfig m_cfg;
     Transport&    m_tx;
@@ -262,6 +275,7 @@ private:
     int64_t  m_pending_skip_ms = 0;   // applied to the next served segment
 
     Stats m_stats;
+    LinkTracker m_link;
     mutable std::mutex m_mtx;
 
     std::string event_prefix() const;

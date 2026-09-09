@@ -1344,6 +1344,8 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     out.buffered_ahead_s = sess->buffered_ahead_s();
     out.cached           = sess->cache().count();
     out.last_error       = sess->last_error();
+    out.link_health      = (int)sess->link_health();
+    out.link_known       = sess->link_known();
     {
         auto layout = sess->audio_layout();
         if (!layout.empty()) {

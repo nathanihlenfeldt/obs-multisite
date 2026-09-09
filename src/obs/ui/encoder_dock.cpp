@@ -431,12 +431,40 @@ void EncoderDock::refresh() {
     auto st = BroadcastController::instance().status();
     setLiveState(st.live);
 
+    // The internet reading, shown whether or not a broadcast is running. While
+    // live the words carry the store-and-forward reassurance; while idle they
+    // are plainer, because nothing is being saved to this computer yet.
+    auto showLink = [&](bool live) {
+        if (!st.link_known) {
+            m_link->setText(QString("—"));
+            m_link->setStyleSheet(QString());
+            return;
+        }
+        switch (st.link_health) {
+            case 0:
+                m_link->setText(tr_("Dock.LinkHealthy"));
+                m_link->setStyleSheet("color: #35c489;");
+                break;
+            case 1:
+                m_link->setText(live ? tr_("Dock.LinkDegradedLive")
+                                     : tr_("Dock.LinkDegraded"));
+                m_link->setStyleSheet("color: #e0a020;");
+                break;
+            default:
+                m_link->setText(live ? tr_("Dock.LinkOfflineLive")
+                                     : tr_("Dock.LinkOffline"));
+                m_link->setStyleSheet("color: #e5484d;");
+                break;
+        }
+    };
+
     if (!st.live) {
         m_state->setText(tr_("Dock.Idle"));
         m_state->setStyleSheet("font-weight: bold; color: palette(mid);");
         m_uptime->setText("—");
-        // Not live, but the figures from the last broadcast are still the
-        // truth about this machine's link, so they stay rather than blanking.
+        showLink(false);
+        // The idle probe's colo and host, so the operator can see where the
+        // bucket answers from before they go live.
         if (m_storage)
             m_storage->setText(link_summary(
                 QString::fromStdString(st.colo),
@@ -469,21 +497,7 @@ void EncoderDock::refresh() {
                                        : QString::number(st.retries));
     m_data->setText(QString::number(st.bytes / (1024.0 * 1024.0), 'f', 0) + " MB");
 
-    // The reliability signal an operator actually needs mid-service.
-    switch (st.link_health) {
-        case 0:
-            m_link->setText(tr_("Dock.LinkHealthy"));
-            m_link->setStyleSheet("color: #35c489;");
-            break;
-        case 1:
-            m_link->setText(tr_("Dock.LinkDegraded"));
-            m_link->setStyleSheet("color: #e0a020;");
-            break;
-        default:
-            m_link->setText(tr_("Dock.LinkOffline"));
-            m_link->setStyleSheet("color: #e5484d;");
-            break;
-    }
+    showLink(true);
 
     if (!st.last_error.empty()) {
         m_error->setText(QString::fromStdString(st.last_error));

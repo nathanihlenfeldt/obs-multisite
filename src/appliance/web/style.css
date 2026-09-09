@@ -78,6 +78,21 @@ html, body {
 }
 #banner .lock.on { background: var(--hold); color: #201400; border-color: var(--hold); }
 
+/* The always-on internet reading, beside the state chip. Hidden until a
+   request has actually been observed, so it never claims a reading it does
+   not have. */
+#banner .net {
+  font-size: 0.9rem;
+  padding: 4px 10px;
+  border-radius: 999px;
+  background: var(--panel-2);
+  color: var(--text);
+  white-space: nowrap;
+}
+#banner .net.good     { background: var(--go);     color: #fff; }
+#banner .net.degraded { background: var(--hold);   color: #201400; }
+#banner .net.off      { background: var(--danger); color: #fff; }
+
 /* ── Tabs ───────────────────────────────────────────────────────────────── */
 #tabs {
   display: flex;

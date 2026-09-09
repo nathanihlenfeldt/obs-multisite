@@ -439,14 +439,15 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
         grid->addWidget(cap, r, c * 2);
         grid->addWidget(out, r, c * 2 + 1);
     };
-    addStat(0, 0, "Dock.Buffered", m_buffered);
-    addStat(0, 1, "Dock.CanRewind", m_cached);
-    addStat(1, 0, "Dock.Marker",   m_marker);
-    addStat(1, 1, "Dock.Audio",    m_audio);
+    addStat(0, 0, "Dock.Net",      m_net);
+    addStat(0, 1, "Dock.Buffered", m_buffered);
+    addStat(1, 0, "Dock.CanRewind", m_cached);
+    addStat(1, 1, "Dock.Marker",   m_marker);
+    addStat(2, 0, "Dock.Audio",    m_audio);
     // Where the bucket answers from and what the download is managing. A
     // campus that cannot hold a buffer has no other way to tell a slow link
     // from a distant bucket.
-    addStat(2, 0, "Dock.Bucket",   m_storage);
+    addStat(2, 1, "Dock.Bucket",   m_storage);
     m_error = new QLabel(QString(), box);
     m_error->setWordWrap(true);
     m_error->setStyleSheet("color: #e5484d;");
@@ -750,6 +751,8 @@ void DecoderDock::refresh() {
         m_room->setText(tr_("Dock.NoSource"));
         m_state->setText(QString());
         m_behind->setText("—");
+        m_net->setText("—");
+        m_net->setStyleSheet(QString());
         m_error->hide();
         m_pause->setEnabled(false);
         m_resume->setEnabled(false);
@@ -798,6 +801,12 @@ void DecoderDock::refresh() {
     } else if (s.buffering || s.seek_target_ms > 0) {
         m_state->setText(tr_("Dock.Buffering"));
         m_state->setStyleSheet("color: #3b82c4; font-weight: bold;");
+    } else if (s.link_known && s.link_health == 2) {
+        // The venue's connection to the bucket is gone — which is NOT the same
+        // as the main site going off air. Say so specifically, because the box
+        // may still be playing the buffer while this is shown.
+        m_state->setText(tr_("Dock.NetLost"));
+        m_state->setStyleSheet("color: #e5484d; font-weight: bold;");
     } else
     switch (s.ended ? 3 : s.room_state) {
         case 2:  // Live
@@ -927,6 +936,31 @@ void DecoderDock::refresh() {
     // The reliability figure: how long this campus could keep broadcasting if
     // the connection died right now.
     m_buffered->setText(friendly_duration(s.buffered_ahead_s));
+    // When the link is down, the buffered figure is the number that matters —
+    // colour it so it cannot be read as an ordinary figure.
+    m_buffered->setStyleSheet(
+        s.link_known && s.link_health == 2 ? "color: #e5484d;" : QString());
+
+    // The internet reading, distinct from the room state: a room that is
+    // offline with a good connection is "nothing on air", not an outage.
+    if (!s.link_known) {
+        m_net->setText("—");
+        m_net->setStyleSheet(QString());
+    } else switch (s.link_health) {
+        case 0:
+            m_net->setText(tr_("Dock.NetHealthy"));
+            m_net->setStyleSheet("color: #35c489;");
+            break;
+        case 1:
+            m_net->setText(tr_("Dock.NetDegraded"));
+            m_net->setStyleSheet("color: #e0a020;");
+            break;
+        default:
+            m_net->setText(tr_("Dock.NetOffline"));
+            m_net->setStyleSheet("color: #e5484d;");
+            break;
+    }
+
     if (m_storage)
         m_storage->setText(link_summary(
             QString::fromStdString(s.colo),

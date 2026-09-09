@@ -3,12 +3,37 @@
 #include "plugin_log.h"
 #include "multisite_ui.h"
 
+#include "../core/link_health.h"
+#include "../core/model.h"
+#include "../core/s3_transport.h"
+
 #include <util/platform.h>
 
 #include <algorithm>
+#include <atomic>
+#include <chrono>
+#include <memory>
+#include <mutex>
+#include <thread>
 #include <vector>
 
 namespace multisite_obs {
+
+// The idle connection monitor. Deliberately opaque in the header: it owns a
+// libcurl-backed transport and a thread, neither of which belongs in the Qt-free
+// controller interface.
+struct IdleMonitor {
+    multisite::S3Config cfg;
+    std::unique_ptr<multisite::S3Transport> tx;
+    std::atomic<bool> running{false};
+    std::thread thread;
+
+    multisite::LinkTracker link;
+    std::mutex mtx;
+    std::string colo;
+    std::string host;
+    std::string error;
+};
 
 // ── Encoder discovery ────────────────────────────────────────────────────────
 // Asks OBS what it has rather than assuming: the same plugin runs on machines
@@ -196,6 +221,9 @@ void BroadcastSettings::save() const {
 void BroadcastController::set_settings(const BroadcastSettings& s) {
     m_cfg = s;
     m_cfg.save();
+    // Idle monitor follows the settings: any change to credentials or room
+    // rebuilds the transport and re-probes.
+    start_idle_monitor();
 }
 
 bool BroadcastController::is_live() const { return m_output != nullptr; }
@@ -217,6 +245,8 @@ bool BroadcastController::go_live(std::string& error) {
         return false;
     }
 
+    // The uploader's own traffic becomes the health signal once the output is
+    // actually running (the monitor is stopped just after obs_output_start).
     obs_data_t* s = obs_data_create();
     obs_data_set_string(s, "endpoint_host", m_cfg.endpoint_host.c_str());
     obs_data_set_string(s, "r2_account_id", m_cfg.r2_account_id.c_str());
@@ -324,6 +354,10 @@ bool BroadcastController::go_live(std::string& error) {
         return false;
     }
 
+    // Live now: the uploader's own traffic is the health signal, so retire the
+    // idle probe.
+    stop_idle_monitor();
+
     m_started_ns = os_gettime_ns();
     mlog_info("broadcast started: room=%s, %d audio track(s), %.1fs segments",
               m_cfg.room_id.c_str(), tracks, m_cfg.segment_duration_s);
@@ -335,6 +369,9 @@ void BroadcastController::end_broadcast() {
     mlog_info("ending broadcast (draining the upload queue)");
     obs_output_stop(m_output);
     release_all();
+    // Back to idle: resume the background probe so the operator still sees a
+    // live reading before the next Go Live.
+    start_idle_monitor();
 }
 
 void BroadcastController::release_all() {
@@ -348,27 +385,102 @@ void BroadcastController::release_all() {
 BroadcastStatus BroadcastController::status() const {
     BroadcastStatus st;
     st.live = m_output != nullptr;
-    if (!st.live) return st;
-    st.bytes = obs_output_get_total_bytes(m_output);
-    st.uptime_s = m_started_ns
-        ? (double)(os_gettime_ns() - m_started_ns) / 1e9 : 0.0;
-    // The richer figures (queue depth, retries, link health) live in the
-    // output's session; it publishes them through the controls registry.
-    EncoderStats es;
-    if (encoder_stats(es)) {
-        st.event_id    = es.event_id;
-        st.confirmed   = es.confirmed;
-        st.pending     = (size_t)es.pending;
-        st.retries     = es.retries;
-        st.link_health = es.link_health;
-        st.last_error  = es.last_error;
-        if (es.bytes) st.bytes = es.bytes;
-        st.colo               = es.colo;
-        st.storage_host       = es.storage_host;
-        st.upload_bytes_per_s = es.upload_bytes_per_s;
-        st.upload_samples     = es.upload_samples;
+    if (st.live) {
+        st.bytes = obs_output_get_total_bytes(m_output);
+        st.uptime_s = m_started_ns
+            ? (double)(os_gettime_ns() - m_started_ns) / 1e9 : 0.0;
+        // The richer figures (queue depth, retries, link health) live in the
+        // output's session; it publishes them through the controls registry.
+        EncoderStats es;
+        if (encoder_stats(es)) {
+            st.event_id    = es.event_id;
+            st.confirmed   = es.confirmed;
+            st.pending     = (size_t)es.pending;
+            st.retries     = es.retries;
+            st.link_health = es.link_health;
+            st.last_error  = es.last_error;
+            if (es.bytes) st.bytes = es.bytes;
+            st.colo               = es.colo;
+            st.storage_host       = es.storage_host;
+            st.upload_bytes_per_s = es.upload_bytes_per_s;
+            st.upload_samples     = es.upload_samples;
+        }
+        st.link_known = true;   // the uploader always reports once live
+        return st;
+    }
+
+    // Idle: the background probe is the only traffic, so it owns the reading.
+    if (m_idle) {
+        st.link_health = (int)m_idle->link.health();
+        st.link_known  = m_idle->link.known();
+        std::lock_guard<std::mutex> lk(m_idle->mtx);
+        st.colo         = m_idle->colo;
+        st.storage_host = m_idle->host;
+        st.last_error   = m_idle->error;
     }
     return st;
+}
+
+// ── Idle connection monitor ──────────────────────────────────────────────────
+// One tiny signed GET of the room's live.json every ten seconds, so the dock
+// can show a live internet reading even when nothing is being sent. The probe
+// is read-only and the object exists the moment the room has ever been used;
+// a 404 still means the endpoint answered, which is all this measures.
+
+BroadcastController::~BroadcastController() {
+    stop_idle_monitor();
+}
+
+void BroadcastController::stop_idle_monitor() {
+    if (!m_idle) return;
+    m_idle->running = false;
+    // A probe in flight may be blocking inside libcurl for up to the request
+    // timeout; cancel it rather than making Go Live wait on it.
+    if (m_idle->tx) m_idle->tx->cancel_pending();
+    if (m_idle->thread.joinable()) m_idle->thread.join();
+    m_idle.reset();
+}
+
+void BroadcastController::start_idle_monitor() {
+    stop_idle_monitor();
+    if (is_live()) return;
+    if (m_cfg.bucket.empty() ||
+        (m_cfg.endpoint_host.empty() && m_cfg.r2_account_id.empty()) ||
+        m_cfg.access_key_id.empty() || m_cfg.secret_access_key.empty())
+        return;
+
+    auto m = std::make_unique<IdleMonitor>();
+    m->cfg.endpoint_host     = m_cfg.endpoint_host;
+    m->cfg.r2_account_id     = m_cfg.r2_account_id;
+    m->cfg.bucket            = m_cfg.bucket;
+    m->cfg.access_key_id     = m_cfg.access_key_id;
+    m->cfg.secret_access_key = m_cfg.secret_access_key;
+    m->cfg.region            = m_cfg.region;
+    m->tx = std::make_unique<multisite::S3Transport>(m->cfg);
+    m->host = m->tx->host();
+    // The thread reads m_idle, so publish it before the thread can run.
+    m_idle = std::move(m);
+    m_idle->running = true;
+    m_idle->thread = std::thread([this] { idle_probe_loop(); });
+}
+
+void BroadcastController::idle_probe_loop() {
+    if (!m_idle) return;
+    const std::string key = multisite::live_pointer_key(m_cfg.room_id);
+    auto next = std::chrono::steady_clock::now();   // first probe immediately
+    while (m_idle->running.load()) {
+        std::this_thread::sleep_for(std::chrono::milliseconds(250));
+        if (!m_idle->running.load()) break;
+        if (std::chrono::steady_clock::now() < next) continue;
+        next = std::chrono::steady_clock::now() + std::chrono::seconds(10);
+        if (is_live()) break;   // the uploader is the signal once broadcasting
+
+        const multisite::StorageProbe p = m_idle->tx->probe(key);
+        m_idle->link.observe(p.reachable);
+        std::lock_guard<std::mutex> lk(m_idle->mtx);
+        m_idle->colo  = p.colo;
+        m_idle->error = p.reachable ? std::string() : p.error;
+    }
 }
 
 void BroadcastController::drop_marker(const std::string& label) {

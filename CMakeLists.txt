@@ -39,6 +39,7 @@ add_library(multisite_core STATIC
     src/core/aws_sigv4.cpp
     src/core/s3_list_xml.cpp
     src/core/storage_health.cpp
+    src/core/link_health.cpp
     src/core/event_catalog.cpp)
 target_include_directories(multisite_core PUBLIC src src/core)
 # Must be position-independent: this static lib gets linked into the shared
@@ -101,6 +102,12 @@ add_test(NAME crypto COMMAND test_crypto)
 add_executable(test_storage_health tests/test_storage_health.cpp)
 target_link_libraries(test_storage_health PRIVATE multisite_core)
 add_test(NAME storage_health COMMAND test_storage_health)
+
+# The three-state link readout every operator surface shows. The arithmetic is
+# kept in the core so it can be tested with no network and no libcurl.
+add_executable(test_link_health tests/test_link_health.cpp)
+target_link_libraries(test_link_health PRIVATE multisite_core)
+add_test(NAME link_health COMMAND test_link_health)
 
 add_executable(test_session tests/test_session.cpp)
 target_link_libraries(test_session PRIVATE multisite_core)

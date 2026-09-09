@@ -102,6 +102,10 @@ struct Status {
     unsigned long long downloaded = 0, download_failures = 0;
     unsigned long long checksum_failures = 0, gaps_waited = 0;
     unsigned long long frames_out = 0, frames_dropped = 0;
+    // Connection health, 0 healthy / 1 degraded / 2 offline, and whether a
+    // request has been observed yet. Mirrors the OBS dock's meaning.
+    int         link_health = 0;
+    bool        link_known = false;
     std::string last_error;
 
     // ── The feed's own description of itself ─────────────────────────────────

@@ -608,27 +608,38 @@ SplashInfo Player::splash_info() const {
         // it as a state line would just be the same sentence twice.
         info.state.clear();
     } else if (auto sess = session_ref()) {
-        switch (sess->room_state()) {
-        case RoomState::Live:
-            info.state = m_playing.load() ? "STARTING" : "READY - NOT ON AIR";
-            break;
-        case RoomState::Ended:
-            info.state = "RECORDING READY";
-            break;
-        case RoomState::Interrupted:
-            info.state = "LAST SERVICE WAS CUT SHORT";
-            break;
-        case RoomState::Offline:
-            info.state = "WAITING FOR THE MAIN SITE";
-            break;
-        default:
-            info.state = "LOOKING FOR THE MAIN SITE";
-            break;
-        }
         const double ahead = sess->buffered_ahead_s();
-        if (ahead > 1) {
+        // A dead link while content is still buffered is the one moment the
+        // screen must say something specific: the venue's internet is gone but
+        // the service can keep playing for a while. Saying "waiting for the
+        // main site" here would read as a fault at the main site, which it is
+        // not.
+        if (sess->link_health() == LinkHealth::Offline && ahead > 1.0) {
+            info.state = "NO CONNECTION - PLAYING BUFFER";
             info.detail = std::to_string((int)(ahead / 60)) +
-                          " MINUTES READY TO PLAY";
+                          " MINUTES LEFT";
+        } else {
+            switch (sess->room_state()) {
+            case RoomState::Live:
+                info.state = m_playing.load() ? "STARTING" : "READY - NOT ON AIR";
+                break;
+            case RoomState::Ended:
+                info.state = "RECORDING READY";
+                break;
+            case RoomState::Interrupted:
+                info.state = "LAST SERVICE WAS CUT SHORT";
+                break;
+            case RoomState::Offline:
+                info.state = "WAITING FOR THE MAIN SITE";
+                break;
+            default:
+                info.state = "LOOKING FOR THE MAIN SITE";
+                break;
+            }
+            if (ahead > 1) {
+                info.detail = std::to_string((int)(ahead / 60)) +
+                              " MINUTES READY TO PLAY";
+            }
         }
     } else {
         info.state = "WAITING FOR THE MAIN SITE";
@@ -1200,6 +1211,9 @@ void Player::status(Status& out) const {
     out.cached_segments  = sess->cache().count();
     out.buffering        = m_playing.load() && !m_paused.load() &&
                            m_frames_out.load() == 0;
+
+    out.link_health      = (int)sess->link_health();
+    out.link_known       = sess->link_known();
 
     const auto& st = sess->stats();
     out.downloaded        = st.downloaded;

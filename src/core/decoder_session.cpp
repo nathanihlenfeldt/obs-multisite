@@ -87,6 +87,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
     LivePointer live;
     std::string live_error;
     auto lp = m_tx.get(live_pointer_key(m_cfg.room_id));
+    m_link.observe(link_reachable_result(lp.success, lp.http_status), now);
     if (!lp.success) {
         live_error = "live.json: HTTP " + std::to_string(lp.http_status) +
                      " " + lp.error;
@@ -150,6 +151,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
 
     // 3. Manifest, fetched without the lock.
     auto mf = m_tx.get(prefix + "manifest.json");
+    m_link.observe(link_reachable_result(mf.success, mf.http_status), now);
     if (!mf.success) {
         std::lock_guard<std::mutex> lk(m_mtx);
         { std::lock_guard<std::mutex> elk(m_err_mtx); m_last_error = "manifest.json: HTTP " + std::to_string(mf.http_status) +
@@ -173,6 +175,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
     bool have_markers = false;
     if (need_markers) {
         auto mk = m_tx.get(prefix + "markers.json");
+        m_link.observe(link_reachable_result(mk.success, mk.http_status), now);
         if (mk.success) {
             try {
                 markers = MarkerList::from_json(
@@ -191,6 +194,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
     double  seg_hint = 0.0;
     if (started_at <= 0) {
         auto ev = m_tx.get(prefix + "event.json");
+        m_link.observe(link_reachable_result(ev.success, ev.http_status), now);
         if (ev.success) {
             try {
                 EventInfo info = EventInfo::from_json(
@@ -300,6 +304,7 @@ int DecoderSession::pump_downloads(int max) {
     // ── unlocked from here ───────────────────────────────────────────────────
     if (need_init) {
         auto r = m_tx.get(prefix + "init.mp4");
+        m_link.observe(link_reachable_result(r.success, r.http_status));
         if (!r.success) {
             std::lock_guard<std::mutex> lk(m_mtx);
             { std::lock_guard<std::mutex> elk(m_err_mtx); m_last_error = "init.mp4: HTTP " + std::to_string(r.http_status) +
@@ -317,6 +322,7 @@ int DecoderSession::pump_downloads(int max) {
         std::snprintf(name, sizeof(name), "%08llu",
                       (unsigned long long)w.first);
         auto r = m_tx.get(prefix + "segments/" + name + ".m4s");
+        m_link.observe(link_reachable_result(r.success, r.http_status));
         if (!r.success) {
             // A 404 usually just means "not published yet" — expected at the
             // live edge, so it is not counted as a failure.

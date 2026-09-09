@@ -105,6 +105,7 @@ private:
     QLabel* m_cached = nullptr;
     QLabel* m_marker = nullptr;
     QLabel* m_audio = nullptr;
+    QLabel* m_net = nullptr;         // internet/connection health, coloured
     QLabel* m_error = nullptr;
     QLabel* m_storage = nullptr;   // colo + observed download rate
     QLabel* m_version = nullptr;

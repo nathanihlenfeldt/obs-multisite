@@ -63,6 +63,8 @@ json status_json(const Player& player) {
     j["gaps_waited"]       = s.gaps_waited;
     j["frames_out"]        = s.frames_out;
     j["frames_dropped"]    = s.frames_dropped;
+    j["link_health"]       = s.link_health;   // 0 healthy, 1 degraded, 2 offline
+    j["link_known"]        = s.link_known;
     j["last_error"]        = s.last_error;
 
     j["video_width"]    = s.video_width;

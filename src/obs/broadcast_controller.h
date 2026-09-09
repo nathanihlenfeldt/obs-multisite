@@ -12,10 +12,15 @@
 //
 #include <obs.h>
 
+#include <memory>
 #include <string>
 #include <vector>
 
 namespace multisite_obs {
+
+// Opaque idle-connection monitor. Owns its own transport and thread so the
+// encoder can show a live internet reading even when nothing is being sent.
+struct IdleMonitor;
 
 struct BroadcastSettings {
     // storage
@@ -57,6 +62,10 @@ struct BroadcastStatus {
     uint64_t    retries = 0;
     uint64_t    bytes = 0;
     int         link_health = 0;      // 0 healthy, 1 degraded, 2 offline
+    // True once the health above is a real measurement rather than a default.
+    // While live it is always true (the uploader reports); while idle it
+    // becomes true only after the first idle probe has completed.
+    bool        link_known = false;
     std::string last_error;
     double      uptime_s = 0.0;
     // The link, as measured from this broadcast's own uploads.
@@ -100,13 +109,23 @@ public:
 
 private:
     BroadcastController() = default;
+    ~BroadcastController();   // stops the idle monitor; defined where IdleMonitor is complete
     void release_all();
+
+    // The idle connection monitor, run only when not broadcasting. Started when
+    // settings exist and stopped the moment Go Live is pressed (the uploader's
+    // own traffic is the health signal while live).
+    void start_idle_monitor();
+    void stop_idle_monitor();
+    void idle_probe_loop();
 
     BroadcastSettings m_cfg;
     obs_output_t*  m_output = nullptr;
     obs_encoder_t* m_venc = nullptr;
     std::vector<obs_encoder_t*> m_aencs;
     uint64_t m_started_ns = 0;
+
+    std::unique_ptr<IdleMonitor> m_idle;
 };
 
 } // namespace multisite_obs

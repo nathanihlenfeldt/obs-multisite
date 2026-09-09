@@ -106,7 +106,17 @@ async function refreshStatus() {
     $('#state').textContent = 'No answer';
     $('#state').className = 'state offline';
     $('#room').textContent = 'Cannot reach the player — is it still powered?';
+    $('#net').hidden = true;
   }
+}
+
+// The internet pill. `null` until a request has actually been observed, so the
+// pill never claims a reading it does not have.
+function netFor(s) {
+  if (!s.configured || !s.link_known) return null;
+  if (s.link_health === 0) return { text: 'Internet good', cls: 'good' };
+  if (s.link_health === 1) return { text: 'Internet unstable', cls: 'degraded' };
+  return { text: 'No internet', cls: 'off' };
 }
 
 // What the banner says. A live service, a recording of a past one, and a
@@ -114,6 +124,9 @@ async function refreshStatus() {
 // must not read the same.
 function bannerFor(s) {
   if (!s.configured) return { text: 'Not set up', cls: 'offline' };
+  // The venue's connection to the bucket is gone. This is not the main site
+  // going off air, so it must not read "Nothing on air".
+  if (s.link_known && s.link_health === 2) return { text: 'No connection', cls: 'offline' };
   switch (s.room_state) {
     case ROOM.LIVE: return { text: 'Live', cls: 'live' };
     case ROOM.ENDED:
@@ -132,6 +145,18 @@ function drawStatus() {
   const banner = bannerFor(s);
   $('#state').textContent = banner.text;
   $('#state').className = 'state ' + banner.cls;
+
+  // The always-on internet pill.
+  const net = netFor(s);
+  const netEl = $('#net');
+  if (net) {
+    netEl.hidden = false;
+    netEl.textContent = net.text;
+    netEl.className = 'net ' + net.cls;
+  } else {
+    netEl.hidden = true;
+    netEl.className = 'net';
+  }
 
   let room = s.room_id || '';
   if (s.pinned_event_id) room += ' · playing a past service';
@@ -165,6 +190,10 @@ function drawStatus() {
     const into = s.started_ms ? s.playhead_ms - s.started_ms : 0;
     sub = `${elapsed(into)} of ${elapsed(s.total_ms)}` +
           (s.at_end ? ' · at the end' : '');
+  } else if (s.link_known && s.link_health === 2 && s.buffered_ahead_s > 1) {
+    // The internet is gone but the buffer still has content: the one thing an
+    // operator needs to hear is that there is time to act.
+    sub = 'No internet — still playing, about ' + spoken(s.buffered_ahead_s) + ' left';
   } else if (s.behind_live_s < 3) {
     sub = 'Right up to date';
   } else {
@@ -178,7 +207,17 @@ function drawStatus() {
   drawCues(s);
   drawReadout(s);
 
-  notify(s.last_error || '', true);
+  // An internet outage takes priority over the raw error text while it lasts:
+  // "no internet, but you have N minutes of buffer" is the sentence an operator
+  // can act on, and "HTTP 0" is not.
+  if (net && net.cls === 'off') {
+    const left = s.buffered_ahead_s > 1
+      ? ' The picture keeps playing for about ' + spoken(s.buffered_ahead_s) + ' more.'
+      : '';
+    notify('No internet — the player cannot reach the broadcast storage.' + left, true);
+  } else {
+    notify(s.last_error || '', true);
+  }
 }
 
 function drawTransport(s) {
@@ -252,10 +291,14 @@ function drawReadout(s) {
     cells.push(`<div class="cell${warn ? ' warn' : ''}"><div class="k">${k}</div>
                 <div class="v">${v}</div></div>`);
 
+  const net = netFor(s);
+  const offline = !!(net && net.cls === 'off');
+
+  push('Internet', net ? net.text : '—', offline);
   // The reliability figure that actually matters mid-service: how long this
   // campus could keep broadcasting if its connection died right now.
   push('Could keep going for', spoken(s.buffered_ahead_s),
-       s.playing && !s.paused && s.buffered_ahead_s < 30);
+       offline || (s.playing && !s.paused && s.buffered_ahead_s < 30));
   push('Ready on disk', s.cached_segments ? spoken(s.cached_segments * 6) : '—');
   if (!s.ended) push('Behind the main site', spoken(s.behind_live_s));
   push('Picture', s.video_width ? `${s.video_width}×${s.video_height}` : '—');

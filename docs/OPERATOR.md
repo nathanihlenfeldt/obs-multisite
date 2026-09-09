@@ -99,7 +99,9 @@ that away.
 2. **Settings…** — enter your bucket details, choose a video encoder, name your
    markers. Settings are saved as you type.
 3. **Go live.** Watch the status readout: how much of the service has been sent,
-   how much is waiting, and link health.
+   how much is waiting, and the **Internet** line (green/amber/red). That line
+   is live even before you go on air — the dock checks the bucket every few
+   seconds — so a broken connection is visible before it costs you a service.
 
 **Production audio** is set up in OBS itself, not in the dock. In Settings →
 Output → Recording, enable the audio tracks you intend to send; in Advanced
@@ -118,6 +120,12 @@ Sending stereo only? Do nothing: track 1 is the default at both ends.
 2. Add a **Multisite Source (Decoder)** to a scene.
 3. **Load event**, let the buffer fill, then **Play** when you are ready. Use
    **Lock** during the service so nothing can be clicked by accident.
+
+The **Internet** line in the Status box tells you whether the box can reach the
+bucket, separately from whether anything is on air. If it flips to red
+("no connection") mid-service, the **Could broadcast for** figure is how long
+the picture will keep going from what is already downloaded — enough notice to
+act, rather than a surprise when the picture freezes.
 
 To play something other than the live service, use the **Recordings** list:
 pick a past service and press **Load recording**. Playback then stays on it —
