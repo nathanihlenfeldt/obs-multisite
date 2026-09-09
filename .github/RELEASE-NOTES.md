@@ -30,6 +30,26 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## Fixed since v0.1.6-alpha
+
+**The campus player leaked memory on every idle-screen redraw.** The new
+identity screen's FreeType text renderer opened and parsed a font file on
+every redraw and never released it — one `FT_Library` and one font face,
+abandoned each time. Not a single leak and not bounded by anything an
+operator does: the idle screen redraws whenever its content changes, which
+includes the box's own IP address, so even a DHCP renewal on an otherwise
+quiet box would trigger it. A box left running for days between services
+would have accumulated this the whole time.
+
+Confirmed both ways before calling it fixed: a standalone harness built
+against the released v0.1.6-alpha source called the renderer 3,000 times and
+watched memory climb continuously, still rising when the run ended; the same
+harness against this fix plateaus within two calls and stays flat for the
+rest. If you have installed v0.1.6-alpha's campus player on a box you intend
+to leave running, update it.
+
+Nothing else changes in this release. v0.1.6-alpha's own notes are below.
+
 ## What's new since v0.1.5-alpha
 
 ### The campus player got a proper identity screen
@@ -174,10 +194,10 @@ kept.
 
 ## A note on how this release was made
 
-This is the first alpha release produced under the new authoring workflow:
-**VS Code with Deepseek V4-Flash/Pro**, rather than Claude Code. The change is
-in how the work was drafted and reviewed; the code, tests and documentation
-remain human-checked as always.
+v0.1.6-alpha was produced under a different authoring workflow — VS Code with
+Deepseek V4-Flash/Pro — and its memory leak is what this release exists to
+fix, reviewed and confirmed back under Claude Code. Whichever tool drafts a
+given release, the code, tests and documentation remain human-checked.
 
 A good bug report is a real contribution — much of what works well here was
 fixed because someone took the time to paste a log.
