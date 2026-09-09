@@ -98,7 +98,7 @@ segment.
 - **Run a campus without a PC** — a Raspberry Pi 5 appliance with HDMI output
   and a browser control panel:
   ```sh
-  sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends git ca-certificates >/dev/null && sudo mkdir -p /opt/multisite-player && sudo rm -rf /opt/multisite-player/src && sudo git clone --depth 1 https://github.com/stageaudioworks/obs-multisite.git /opt/multisite-player/src && sudo SKIP_GIT_UPDATE=1 bash /opt/multisite-player/src/scripts/player/install.sh
+  curl -fsSL --retry 5 https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/install.sh | sudo bash
   ```
 
 ## If something is wrong

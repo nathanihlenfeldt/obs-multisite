@@ -2,17 +2,14 @@
 #
 # install.sh — turn a stock Raspberry Pi OS install into a campus player.
 #
-# One line, cloning the repo rather than trusting the raw-CDN download (which
-# has been known to return 503s):
-#
-#   sudo apt-get update -qq && sudo apt-get install -y --no-install-recommends \
-#     git ca-certificates >/dev/null && sudo mkdir -p /opt/multisite-player && \
-#     sudo rm -rf /opt/multisite-player/src && \
-#     sudo git clone --depth 1 https://github.com/stageaudioworks/obs-multisite.git \
-#     /opt/multisite-player/src && \
-#     sudo SKIP_GIT_UPDATE=1 bash /opt/multisite-player/src/scripts/player/install.sh
+#   curl -fsSL --retry 5 https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/install.sh | sudo bash
 #
 # (From a checkout it is simply: sudo bash scripts/player/install.sh)
+#
+# --retry matters: GitHub's raw CDN occasionally answers 503 for a few minutes,
+# and curl rides over that instead of handing over a half-install. The script
+# itself also retries its own source fetch below rather than stopping silently
+# when GitHub hiccups mid-run.
 #
 # It installs the build dependencies, builds the player, installs it as a
 # service that starts on power-up, and leaves the box showing a screen with its
