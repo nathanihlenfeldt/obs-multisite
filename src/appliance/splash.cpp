@@ -315,6 +315,14 @@ private:
     FT_Library m_lib = nullptr;
     FT_Face    m_face = nullptr;
     bool       m_ok = false;
+
+public:
+    ~Font() {
+        if (m_face) FT_Done_Face(m_face);
+        if (m_lib)  FT_Done_FreeType(m_lib);
+    }
+    Font(const Font&) = delete;
+    Font& operator=(const Font&) = delete;
 };
 #endif
 
@@ -366,7 +374,11 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
     const int big   = unit * 2;
     const int mid   = unit;
     const int small = std::max(1, unit * 2 / 3);
-    Text tx;
+    // Built once, not once per redraw. render_splash is only ever called from
+    // Player::update_screen() on the poll thread, so this is safe; a fresh Text
+    // here re-ran FT_Init_FreeType and FT_New_Face — opening and parsing a font
+    // file off disk — on every idle-screen redraw for as long as the box runs.
+    static Text tx;
 
     // Header: what the box is, up top, with a hairline under it. Everything a
     // person standing in the room needs is below that, in one glance.
