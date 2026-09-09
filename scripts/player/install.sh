@@ -64,7 +64,12 @@ note "done"
 # ── Source ───────────────────────────────────────────────────────────────────
 if [ -d "$SRC_DIR/.git" ]; then
   say "Updating the source"
-  git -C "$SRC_DIR" fetch --quiet origin "$BRANCH"
+  # Fetch into the branch's own remote-tracking ref. A plain `git fetch origin
+  # $BRANCH` writes only FETCH_HEAD, so the reset below would fail the first
+  # time a box is moved from one branch to another (the tracking ref does not
+  # exist yet) — which is exactly how an update to an older version is run.
+  git -C "$SRC_DIR" fetch --quiet --depth 1 \
+      origin "$BRANCH:refs/remotes/origin/$BRANCH"
   git -C "$SRC_DIR" reset --quiet --hard "origin/$BRANCH"
 else
   say "Fetching the source"
