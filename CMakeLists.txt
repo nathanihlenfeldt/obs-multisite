@@ -69,6 +69,10 @@ target_link_libraries(multisite_core PUBLIC Threads::Threads)
 enable_testing()
 add_executable(test_reliability tests/test_reliability.cpp)
 target_link_libraries(test_reliability PRIVATE multisite_core)
+
+add_executable(test_timebase tests/test_timebase.cpp)
+target_link_libraries(test_timebase PRIVATE multisite_core)
+add_test(NAME timebase COMMAND test_timebase)
 add_test(NAME reliability COMMAND test_reliability)
 
 # The core is shared with the planned headless appliance, which links neither

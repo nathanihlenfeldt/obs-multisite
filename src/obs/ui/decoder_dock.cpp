@@ -175,7 +175,14 @@ void TimelineBar::paintEvent(QPaintEvent*) {
         p.drawLine(x, y - 4, x, y - 1);
         const QString label =
             QDateTime::fromMSecsSinceEpoch((qint64)t).toString("HH:mm");
-        QRect r(x - 22, 0, 44, 12);
+        // Keep the end labels inside the widget. Centred on x, the first
+        // rect started at -22 and the last ended at w+22, so both were
+        // clipped by the widget edge and the scale read "5 … 1" instead of
+        // "13:45 … 14:10" — a timeline whose two outermost times were single
+        // digits, which is its own kind of confusing.
+        QRect r = (i == 0)         ? QRect(0, 0, 44, 12)
+                : (i == ticks)     ? QRect(w - 44, 0, 44, 12)
+                                   : QRect(x - 22, 0, 44, 12);
         p.drawText(r, (i == 0 ? Qt::AlignLeft : (i == ticks ? Qt::AlignRight
                                                             : Qt::AlignHCenter))
                       | Qt::AlignVCenter, label);

@@ -2,6 +2,9 @@
 #include "model.h"
 #include "../vendor/nlohmann/json.hpp"
 
+#include <algorithm>
+#include <vector>
+
 using json = nlohmann::json;
 
 namespace multisite {
@@ -158,13 +161,35 @@ void Manifest::push(const ManifestSegment& s, size_t window) {
 }
 
 double Manifest::stream_duration_hint() const {
-    // Median-ish: just take the last listed segment's duration, falling back to
-    // the first. Segment durations vary slightly with keyframe placement.
-    if (!segments.empty()) {
-        if (segments.back().duration_s > 0.1) return segments.back().duration_s;
-        if (segments.front().duration_s > 0.1) return segments.front().duration_s;
-    }
-    return 0.0;
+    // The median, and emphatically NOT the last listed segment's duration.
+    //
+    // The last segment of a finished recording is the partial fragment the
+    // broadcast ended on — the one sample in the list guaranteed not to be
+    // typical. Taking it set the whole time base to that fragment's length:
+    // in one recording, 4.1 s against a real 6.0 s.
+    //
+    // That is not a cosmetic error, because this value maps sequence numbers
+    // onto clock times for every segment outside the manifest's rolling
+    // window. A third off the grid meant the timeline axis, "behind live",
+    // the buffered and rewindable figures and the recording's total length
+    // were all short by the same third — while the playing clock, which comes
+    // from real frame timestamps, was not. Position could therefore read past
+    // the total length of the very recording it was playing.
+    //
+    // A live event hid it: its last listed segment is an ordinary one, so the
+    // fault only appeared once somebody loaded a finished recording.
+    //
+    // A median cannot be shifted by one atypical sample, which is what the
+    // comment here always claimed and the code never did.
+    std::vector<double> d;
+    d.reserve(segments.size());
+    for (const auto& s : segments)
+        if (s.duration_s > 0.1) d.push_back(s.duration_s);
+    if (d.empty()) return 0.0;
+    std::sort(d.begin(), d.end());
+    // Upper median on an even count: with exactly one full segment and one
+    // short final one, the full one is the better estimate of the grid.
+    return d[d.size() / 2];
 }
 
 std::string Manifest::to_json() const {

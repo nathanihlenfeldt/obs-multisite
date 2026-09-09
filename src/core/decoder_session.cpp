@@ -124,6 +124,14 @@ RoomState DecoderSession::poll(int64_t now_override) {
         if (target != m_event_id) {
             m_event_id = target;
             m_cache->set_event(m_event_id);
+            // Clear the head itself, not only the "is it seated" flag. A
+            // sequence number means nothing outside the event it came from,
+            // and head() has no m_head_set guard — so switching events left
+            // it reporting the old event's position against the new event's
+            // manifest (head=1711 against a live edge of 865 in one log).
+            // behind_live_s() answers 0 when the head is past the live edge,
+            // so a stale head read as "caught up" rather than as wrong.
+            m_head = 0;
             m_head_set = false;
             m_init_sent = false;
             m_play = PlayState::Stopped;

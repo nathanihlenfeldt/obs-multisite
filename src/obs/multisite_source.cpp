@@ -1308,6 +1308,17 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     // Prefer the frame-accurate playing clock; fall back to the segment.
     const long long tick = playing_at_ms.load();
     out.playhead_ms = tick > 0 ? tick : (long long)sess->playhead_wall_ms();
+    // Whichever clock was used, the position has to lie inside the event that
+    // is loaded. playhead_wall_ms() clamps to the end already and says why;
+    // the frame clock bypassed that, which is how the dock came to show a
+    // position past the recording's own total length. It can also still hold
+    // a value from the previous event for the moment between a switch and the
+    // first frame out of the new decoder.
+    if (out.end_ms > 0 && out.playhead_ms > out.end_ms)
+        out.playhead_ms = out.end_ms;
+    if (out.started_ms > 0 && out.playhead_ms > 0 &&
+        out.playhead_ms < out.started_ms)
+        out.playhead_ms = out.started_ms;
     {
         // Downloaded ranges as clock times, for the timeline.
         for (const auto& r : sess->cached_ranges()) {
