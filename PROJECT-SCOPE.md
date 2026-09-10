@@ -915,11 +915,19 @@ is the better answer for a given church, section 12 says so plainly.
 | Control from a Stream Deck via OBS hotkey triggers | available now, no parameters or feedback |
 | Web / mobile simulcast from the same files | planned; CMAF makes it feasible |
 | Scheduling / auto-go-live | planned — for the relay as well as the encoder |
+| Redundant storage: two independent S3 targets, active/active or active/passive | planned (§10 Phase 9) |
+| Tile layout: a 2x1 or 2x2 feed split into discrete sources, owned by the decoder | planned (§10 Phase 10) |
+| Fullscreen / SDI output assignment driven by the decoder plugin | planned (§10 Phase 10) |
+| Appliance hardware tiers: x86_64, DeckLink SDI, two displays, hardware decode, one installer | planned (§10 Phase 11) |
+| Headless encoder appliance (DeckLink SDI or HDMI input; x86_64 or RK3588) | planned (§10 Phase 12) |
+| ABR transcoder ("relay plus"): a ladder written to a bucket that is its own HLS/DASH origin | planned (§10 Phase 13) |
+| End-to-end low latency (`obs-multisite-ll`) over ZeroTier, with WebRTC or SRT | early concept (§10 Phase 14) |
 
 Further directions to explore: web/mobile simulcast served directly from the
 bucket (which needs no relay at all — the CMAF objects are already the right
-shape for it), multi-bucket mirroring for redundancy, and local insertion
-windows for campus announcements.
+shape for it), and local insertion windows for campus announcements.
+Multi-bucket mirroring has graduated from a direction to explore into Phase 9
+(§10).
 
 ---
 
@@ -970,6 +978,97 @@ carried an event; phase 8 has not been started.
   name for name (§8.3), then a Bitfocus Companion module for buttons with
   feedbacks and variables. Hotkey-based control from Companion already works
   and needs nothing.
+
+- **Phase 9 — Redundant storage.** ⬜ Upload to two independent S3 targets, so a
+  provider outage, a regional failure, an account lockout or an accident in one
+  console stops being a single point of failure for every campus at once. Two
+  modes, chosen per room: **active/active**, where all media goes to both, and
+  **active/passive**, where the manifests and `live.json` go to both but the
+  media only to the primary until a failover.
+  The question that needs answering before any code is what *confirmed* means
+  with two targets. The whole reliability claim rests on a segment appearing in
+  the manifest only after storage has acknowledged it (§4.7); requiring both
+  acknowledgements doubles the exposure to the slower link and lets one bad
+  provider stall the feed. The proposal is to keep the invariant per target —
+  manifest on primary confirmation, secondary mirrored best-effort, each
+  target's state carried in the manifest — and to add a failover state machine
+  over the top of the link health that already exists. The decoder side follows
+  from `live.json` naming both targets, and the checksums already in the
+  protocol are the proof that a mirror is a true copy rather than a hopeful one.
+  Costs to state plainly: double storage and double origin writes, lifecycle
+  rules needed on **both** buckets, and *Manage storage…* extended to say which
+  target an event is in and to delete from both.
+- **Phase 10 — Tile layout and assigned outputs.** ⬜ A room that needs two or
+  four discrete pictures composites them at the main site today and pulls them
+  apart at the satellite with OBS filters by hand ([Choosing a
+  satellite](docs/SATELLITE.md)). This makes the split a property of the
+  decoder instead: the encoder declares a layout (`1x1`, `2x1`, `2x2`) in
+  `event.json`, and each region becomes its own video source, already cropped,
+  assignable to a fullscreen output, a DeckLink or AJA output, or a video wall.
+  The shape is deliberately the one audio already uses — one decoder, many
+  sources, no extra download and no extra decode. Assignment is the part to
+  design: OBS can be asked for a fullscreen projector on a chosen monitor, so
+  tile-to-output mapping is the plugin driving OBS's own outputs rather than a
+  new output of its own. Questions recorded here rather than answered: what a
+  satellite does when it has fewer outputs than tiles, whether the mapping
+  survives a layout change mid-event, and whether audio follows the tile.
+- **Phase 11 — Appliance hardware tiers.** ⬜ The receive appliance beyond the
+  Raspberry Pi: an x86_64 build, DeckLink SDI output, two displays from one box,
+  hardware decode, and one installer that copes with all of it. Two displays is
+  Phase 10 applied to hardware — a 3840×1080 feed is a `2x1` layout with tile 0
+  on the first output and tile 1 on the second. Hardware decode is VAAPI or QSV
+  with a software fallback, which the core's FFmpeg path already allows for.
+  Audio stays HDMI-embedded as it is, or goes to a chosen ALSA device. The
+  awkward parts are not the code: the DeckLink driver is normally a manual
+  install, which fights the one-script promise, and its SDK carries
+  redistribution terms that make it a build-time option at best; and driving two
+  connectors as one logical wide framebuffer depends on the driver, so two
+  outputs is the safer model to promise than one 3840-wide mode.
+- **Phase 12 — Headless encoder appliance.** ⬜ The other end without OBS: an
+  encoder that takes an input and publishes to the bucket with no desktop
+  attached. Two plausible shapes — x86_64 with a DeckLink input, or an ARM64 SBC
+  with HDMI input (RK3588 boards such as the NanoPi or RockPi, whose MPP
+  encoder does H.264 and HEVC in hardware). It reuses what exists: the CMAF
+  muxer, the durable queue, the retry and checksum path. What does not exist and
+  would have to be written: an input abstraction, an encode stage in front of
+  the muxer, and honest answers on clocking, genlock and where the audio comes
+  from. The largest new surface of any phase here. An early concept.
+- **Phase 13 — ABR transcoder, "relay plus".** ⬜ The relay copies; this
+  re-encodes. Decode the incoming feed once, produce a ladder of renditions
+  (1080p, 720p, 480p), package it as CMAF for **both HLS and DASH**, and write
+  it to a bucket that is then the origin — so a browser or a phone plays ABR
+  straight from object storage with no origin server running anywhere. Encoders:
+  NVENC, VAAPI and x264, behind a capability probe, the way the relay already
+  probes ffmpeg for SRT. Input stays the bucket as now, but SRT and RTMP input
+  as well, which is what makes the container useful outside this project.
+  The hard part is not the encode. It is ladder *alignment* — closed GOPs, one
+  IDR per segment, identical boundaries across renditions — or ABR switching
+  glitches at every switch. That should be proven before anything else is built.
+  Note that the target hardware changes with the job: a $5 VPS has no encoder,
+  so this wants a small box with a usable iGPU, and the documentation should say
+  so rather than inherit the relay's VPS story. Built as a library first, the way
+  `relay_logic` is, so the same engine can later become an in-OBS multi-bitrate
+  encoder uploading resiliently from the machine that already has the picture.
+- **Phase 14 — End-to-end low latency (`obs-multisite-ll`).** ⬜ An early concept
+  for a second delivery path with latency in fractions of a second rather than
+  tens of seconds, running on the same plugins and the same appliances. ZeroTier
+  would carry it, so there is nothing to port-forward and no static address to
+  arrange — the promise this project already makes about a venue's network, and
+  the appliance already ships ZeroTier for remote access, so the ground is
+  partly prepared. Above that, WebRTC for the lowest latency or SRT for a
+  slightly higher one with far less machinery; past three or four sites WebRTC
+  needs a forwarding server rather than a mesh. A master instance would act as
+  the ZeroTier controller, so a church runs one node with a public address and
+  nothing else.
+  Two things must be settled before any of it is built. First, §1 ranks latency
+  **last**: this is therefore a parallel path, with the bucket pipeline staying
+  the durable record and the DVR, not a replacement for it. Second, timeslipping
+  — hold, resume, scrub — is what makes this worth using, and it does not survive
+  a sub-second path intact, so what the low-latency path does about a campus
+  that wants to hold the picture is a design question and not a footnote.
+  Licensing needs checking rather than assuming, as it was for the codecs and for
+  atkAudio. It would sit as a sub-project depending on the core and never
+  depended on by it, exactly as `relay/` does.
 
 ---
 

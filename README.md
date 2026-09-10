@@ -337,41 +337,36 @@ out of scope, and the relay cannot re-encode.</summary>
 ## Roadmap
 
 <details>
-<summary>What is planned next: finishing the appliance (Phase 6), the relay's
-remaining extensions (Phase 7), and an external control API (Phase 8).</summary>
+<summary>What is planned next: phases 6 to 14, from finishing the appliance to
+storage redundancy, satellite output routing, headless appliances, an ABR
+transcoder and a low-latency mode.</summary>
 
-- **Phase 6 — Satellite appliance.** Built and installable for the ARM64 /
-  Raspberry Pi HDMI tier (see above), and now proven on a Pi 5 — though not
-  yet through an event. Still to come: DeckLink SDI output for the production
-  tier, and hardware-decoder selection on Pi 4. The packed-channel
-  de-interleaver has been dropped rather than deferred; see
-  [Known gaps](#known-gaps).
-- **Phase 7 — Extensions.** The public simulcast relay is built (see
-  [Streaming to the public](docs/STREAMING.md)) and has not yet carried a
-  event. SRT output, caller and listener, is in and carrying a real client.
-  Still to come there: re-encoding, so an HEVC feed can reach a streaming site
-  too; splitting packed multi-channel audio; signing in to YouTube instead of
-  pasting a stream key; and starting automatically when the encoder goes live.
-  Not started at all: a hosted streaming provider (Mux or Cloudflare Stream)
-  for a persistent web player embed, web and mobile simulcast served straight
-  from the bucket, redundancy, and local insertion.
+- **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
+  tier and proven on a Pi 5, though not yet through an event. Still to come:
+  DeckLink SDI output, and hardware-decoder selection on Pi 4.
+- **Phase 7 — Extensions.** The public simulcast relay is built and has pushed
+  live streams to YouTube; SRT in and out is in. Still to come: re-encoding,
+  signing in to YouTube instead of pasting a stream key, and starting by itself.
+- **Phase 8 — External control API.** Both plugins' commands as obs-websocket
+  vendor requests, then a Bitfocus Companion module for buttons with feedback.
+  The thirteen hotkeys the plugins already register can be triggered from a
+  Stream Deck today — without parameters or feedback, but worth wiring up now.
+- **Phase 9 — Redundant storage.** Two independent S3 targets: mirrored
+  throughout, or holding the manifests only until a failover.
+- **Phase 10 — Tile layout and assigned outputs.** A 2×1 or 2×2 feed exposed as
+  discrete sources and assigned to fullscreen or SDI outputs by the decoder.
+- **Phase 11 — Appliance hardware tiers.** x86_64, DeckLink SDI, two displays
+  from one box, hardware decode, and one installer for all of it.
+- **Phase 12 — Headless encoder appliance.** The main site without OBS: DeckLink
+  or HDMI input, on x86_64 or an RK3588 board.
+- **Phase 13 — ABR transcoder.** "Relay plus": an HLS/DASH ladder written to a
+  bucket that becomes its own origin.
+- **Phase 14 — End-to-end low latency.** An early concept, over ZeroTier with
+  WebRTC or SRT.
 
-- **Phase 8 — External control API.** So an event can be run from a physical
-  button rather than a dock. The plan: both plugins expose their commands as
-  **obs-websocket vendor requests**, using the same names and payloads as the
-  appliance's existing HTTP routes — one API, two transports, and a control
-  surface written against either works against both. obs-websocket ships with
-  OBS 28 and later, so there is nothing extra to install, and the plugin gains
-  no dependency: if it is absent, control simply is not there. Then a
-  **Bitfocus Companion** module for buttons that light up and displays that
-  show how far behind live a campus is — that needs a real module, because
-  Companion's generic vendor-request action can send commands but cannot read
-  state back.
-
-  **Already possible, today:** the plugins register ten named hotkeys, and
-  Companion's OBS module can trigger hotkeys by id — so play, stop, hold,
-  resume, catch-up, jog and drop-marker work from a Stream Deck now, without
-  parameters or feedback. Worth wiring up before any of the above is built.
+Each phase is described in full in
+[PROJECT-SCOPE.md §10](PROJECT-SCOPE.md#10-delivery-phases), which is also where
+the design questions each one leaves open are written down.
 
 </details>
 
