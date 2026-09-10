@@ -163,6 +163,7 @@ void StorageDialog::onRefresh() {
     beginOperation();
     m_list->clear();
     m_tallied.store(0);
+    m_measured_bytes = 0;
     m_listing = true;
     setBusy(true);
     m_summary->setText(tr_("Storage.Busy"));
@@ -275,6 +276,13 @@ void StorageDialog::startTallies() {
 }
 
 void StorageDialog::onOneTallyDone(int index) {
+    // This runs on the UI thread, and only after the worker that measured this
+    // event has posted — so reading the event here is safe, and other workers
+    // writing other events cannot be seen by it.
+    if (index >= 0 && index < (int)m_events->size() &&
+        (*m_events)[index].size_known)
+        m_measured_bytes += (*m_events)[index].bytes;
+
     m_tallied.fetch_add(1);
     updateRow(index);
     showSummary();
@@ -338,11 +346,9 @@ void StorageDialog::updateRow(int index) {
 
 void StorageDialog::showSummary() {
     const int total = (int)m_events->size();
-    uint64_t bytes = 0;
-    int measured = 0;
-    for (const auto& e : *m_events) {
-        if (e.size_known) { bytes += e.bytes; ++measured; }
-    }
+    // Counted on the UI thread, never by walking the vector: the tally workers
+    // are writing into it while this runs.
+    const int measured = m_tallied.load();
 
     if (m_listing && measured < total) {
         m_summary->setText(tr_("Storage.Measuring").arg(measured).arg(total));
@@ -352,13 +358,13 @@ void StorageDialog::showSummary() {
     if (failed > 0) {
         m_summary->setText(tr_("Storage.SizesUnavailable")
                                .arg(total)
-                               .arg(friendlyBytes(bytes))
+                               .arg(friendlyBytes(m_measured_bytes))
                                .arg(failed));
         return;
     }
     m_summary->setText(tr_("Storage.Summary")
                            .arg(total)
-                           .arg(friendlyBytes(bytes)));
+                           .arg(friendlyBytes(m_measured_bytes)));
 }
 
 void StorageDialog::onDeleteSelected() {

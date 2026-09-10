@@ -11,6 +11,7 @@
 #include "../../core/storage_manager.h"  // the events and stats are held whole, not by pointer
 
 #include <atomic>
+#include <cstdint>
 #include <functional>
 #include <memory>
 #include <string>
@@ -79,6 +80,10 @@ private:
     std::shared_ptr<multisite::ListStats>         m_stats;
 
     std::atomic<int>  m_tallied{0};      // events measured so far this listing
+    // Bytes of the measured events, accumulated on the UI thread as each
+    // worker reports one. The summary must not walk the whole vector: other
+    // workers are still writing into it.
+    uint64_t          m_measured_bytes = 0;
     int64_t           m_tally_started_ms = 0;
     bool              m_listing = false; // between "Looking…" and the last worker
 
