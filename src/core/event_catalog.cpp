@@ -6,6 +6,16 @@
 
 namespace multisite {
 
+namespace {
+
+// A store that repeats a continuation token would otherwise page for ever, and
+// this runs on the OBS UI's behalf while an operator waits. 400 pages is
+// 400,000 keys: far past any real room, and the point at which continuing is a
+// fault rather than work.
+constexpr int kMaxPages = 400;
+
+} // namespace
+
 int64_t now_ms();   // session.cpp
 
 const char* to_string(EventState s) {
@@ -45,7 +55,13 @@ bool EventCatalog::collect_event_ids(std::vector<std::string>& out,
     // ── The room index: one request per page, already room-scoped ────────────
     std::set<std::string> indexed;
     std::string token;
+    int pages = 0;
     do {
+        if (++pages > kMaxPages) {
+            error = "the room index did not finish listing after " +
+                    std::to_string(kMaxPages) + " pages";
+            return false;
+        }
         ListResult r = m_tx.list(room_events_prefix(m_cfg.room_id), "", token, 1000);
         if (!r.success) {
             error = r.error;
@@ -72,7 +88,12 @@ bool EventCatalog::collect_event_ids(std::vector<std::string>& out,
     // to, so each of those needs its descriptor read.
     token.clear();
     std::vector<std::string> candidates;
+    int scan_pages = 0;
     do {
+        // A scan that will not finish is not a reason to report nothing: the
+        // index has already given us a list, and a partial one is more useful
+        // than an error.
+        if (++scan_pages > kMaxPages) break;
         ListResult r = m_tx.list("events/", "/", token, 1000);
         if (!r.success) {
             // The index has already given us a list. A failed scan means it

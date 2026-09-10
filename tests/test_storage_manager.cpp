@@ -5,11 +5,18 @@
 // deleting one removes every object under events/{id}/ plus its room-index
 // entry while leaving live.json alone, that the live event is refused, and
 // that "older than N days" only touches the events it should.
+//
+// It also pins the two halves apart, because that is what the window depends
+// on: the events must list without any size work (an operator should not wait
+// minutes for a window to fill), a size that could not be measured must be
+// reported as unknown rather than as zero, and both a cancelled listing and a
+// prefix that will not finish paging must end rather than run for ever.
 #include "../src/core/storage_manager.h"
 #include "../src/core/model.h"
 
 #include <cstdio>
 #include <cstdint>
+#include <atomic>
 #include <map>
 #include <string>
 #include <vector>
@@ -24,6 +31,11 @@ static int g_fail = 0;
 class MemStore : public Transport {
 public:
     std::map<std::string, std::string> objects;
+
+    // Faults the tests ask for: a store that refuses every listing, and one
+    // that will never finish paging a particular prefix.
+    bool        list_fails = false;
+    std::string endless_prefix;
 
     PutResult put(const std::string& key, const std::vector<uint8_t>& body,
                   const std::string&, const std::map<std::string,std::string>&) override {
@@ -41,6 +53,19 @@ public:
     ListResult list(const std::string& prefix, const std::string& delimiter,
                     const std::string& token, int) override {
         ListResult r;
+        if (list_fails) {
+            r.http_status = 403;
+            r.error = "HTTP 403";
+            r.retryable = false;
+            return r;
+        }
+        if (!endless_prefix.empty() &&
+            prefix.compare(0, endless_prefix.size(), endless_prefix) == 0) {
+            r.success = true; r.http_status = 200;
+            r.truncated = true;                      // and never advances
+            r.next_continuation_token = "same-token";
+            return r;
+        }
         size_t start = token.empty() ? 0 : (size_t)std::stoul(token);
         size_t seen = 0;
         for (const auto& [key, val] : objects) {
@@ -187,6 +212,112 @@ int main() {
               "a recent event inside the window is kept");
         CHECK(s.objects.find("events/01LIVE/init.mp4") != s.objects.end(),
               "the live event is kept");
+    }
+
+    std::printf("== 5. The events list without any size work ==\n");
+    {
+        MemStore s;
+        make_event(s, room, "01AAA", NOW - 2 * DAY, "ended", 3, "Alpha");
+        make_event(s, room, "01CCC", NOW, "live", 1, "Gamma");
+        set_live(s, room, "01CCC");
+
+        StorageManager mgr(room, s);
+        std::vector<ManagedEvent> evs;
+        std::string err;
+        ListStats st;
+        CHECK(mgr.list_events(evs, err, &st), "list_events succeeds");
+        CHECK(evs.size() == 2, "both events listed");
+        CHECK(st.events == 2, "and the stats say so");
+        if (evs.size() == 2) {
+            CHECK(evs[0].event_id == "01CCC" && evs[0].is_live,
+                  "the live event is first");
+            CHECK(evs[0].name == "Gamma",
+                  "names arrive without touching a single segment");
+            CHECK(!evs[0].size_known,
+                  "and nothing claims to have been measured yet");
+        }
+
+        // The expensive half, on demand — and it says so when it is done.
+        CHECK(mgr.tally_size(evs[0], err, &st), "tally_size then succeeds");
+        CHECK(evs[0].size_known, "and the event is marked as measured");
+        CHECK(evs[0].objects > 0 && evs[0].bytes > 0, "with real figures");
+        CHECK(st.requests > 0, "the requests it cost are counted for the log");
+    }
+
+    std::printf("== 6. A size that could not be measured is not shown as zero ==\n");
+    {
+        MemStore s;
+        make_event(s, room, "01AAA", NOW - 2 * DAY, "ended", 3, "Alpha");
+
+        StorageManager mgr(room, s);
+        std::vector<ManagedEvent> evs;
+        std::string err;
+        CHECK(mgr.list_events(evs, err), "the event still lists");
+        CHECK(evs.size() == 1, "one event");
+
+        s.list_fails = true;                     // the store refuses the paging
+        ListStats st;
+        CHECK(!mgr.tally_size(evs[0], err, &st), "the tally fails");
+        CHECK(!evs[0].size_known,
+              "and it does NOT claim a size — this is what stops the window "
+              "telling an operator a full event is empty");
+        CHECK(!evs[0].size_error.empty(), "the reason is kept for the window");
+        CHECK(st.tallies_failed == 1, "and counted as a failure, not a success");
+        CHECK(err.find("403") != std::string::npos, "the store's own words survive");
+    }
+
+    std::printf("== 7. A cancelled listing stops ==\n");
+    {
+        MemStore s;
+        make_event(s, room, "01AAA", NOW, "ended", 1, "A");
+
+        StorageManager mgr(room, s);
+        std::vector<ManagedEvent> evs;
+        std::string err;
+        ListStats st;
+        std::atomic<bool> cancel{false};
+        CHECK(mgr.list_events(evs, err, &st, &cancel), "an open gate lists normally");
+
+        cancel = true;                            // the window was closed
+        CHECK(!mgr.tally_size(evs[0], err, &st, &cancel),
+              "a cancelled tally returns at once");
+        CHECK(err == "cancelled", "saying so rather than blaming the store");
+        CHECK(st.tallies_failed == 0,
+              "and without counting it as a store failure");
+
+        MemStore s2;
+        make_event(s2, room, "01BBB", NOW, "ended", 1, "B");
+        StorageManager mgr2(room, s2);
+        std::atomic<bool> closed{true};
+        ListStats st2;
+        CHECK(!mgr2.list(evs, err, &st2, &closed), "a closed gate lists nothing");
+        CHECK(st2.cancelled, "and the caller is told it was cancelled");
+    }
+
+    std::printf("== 8. A prefix that will not finish paging gives up ==\n");
+    {
+        MemStore s;
+        make_event(s, room, "01AAA", NOW, "ended", 2, "A");
+        s.endless_prefix = event_prefix_for("01AAA");
+
+        StorageManager mgr(room, s);
+        std::vector<ManagedEvent> evs;
+        std::string err;
+        CHECK(mgr.list_events(evs, err), "the event lists (the scan is cheap)");
+
+        ListStats st;
+        CHECK(!mgr.tally_size(evs[0], err, &st), "the tally gives up");
+        CHECK(err.find("did not finish") != std::string::npos, "and says why");
+        CHECK(!evs[0].size_known, "so the size reads as unknown, not as zero");
+
+        // The same guard covers the catalog's own two loops: a store that
+        // repeats a token for the room index must not hold the listing for ever.
+        MemStore s2;
+        make_event(s2, room, "01BBB", NOW, "ended", 1, "B");
+        s2.endless_prefix = "rooms/";
+        StorageManager mgr2(room, s2);
+        CHECK(!mgr2.list_events(evs, err), "an endless room index fails");
+        CHECK(err.find("did not finish") != std::string::npos, "and says why");
     }
 
     std::printf("\n%s\n", g_fail == 0 ? "ALL STORAGE MANAGER TESTS PASSED"

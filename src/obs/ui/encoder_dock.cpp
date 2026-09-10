@@ -459,9 +459,11 @@ void EncoderDock::onManageStorage() {
     s3.access_key_id    = cfg.access_key_id;
     s3.secret_access_key = cfg.secret_access_key;
     s3.region           = cfg.region;
-    auto tx = std::make_shared<multisite::S3Transport>(s3);
 
-    StorageDialog dlg(this, cfg.room_id, tx);
+    // The settings, not a ready-made transport: the window builds one per
+    // operation, so closing it stops the work in flight without leaving a
+    // cancelled transport behind for the next delete to trip over.
+    StorageDialog dlg(this, cfg.room_id, s3);
     dlg.exec();
 }
 
