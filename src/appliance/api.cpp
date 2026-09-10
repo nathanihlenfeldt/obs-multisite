@@ -138,7 +138,40 @@ json config_json(const Config& c) {
     j["auto_play"]         = c.auto_play;
     j["delay_from_live_s"] = c.delay_from_live_s;
     j["locked"]            = c.locked;
+
+    j["zerotier_network_id"] = c.zerotier_network_id;
+    // The tunnel token is a credential: shown as dots and sent back unchanged
+    // unless somebody types a new one, exactly like the bucket secret.
+    j["cloudflared_token"] = c.cloudflared_token.empty()
+                                 ? std::string()
+                                 : std::string(kSecretPlaceholder);
+    j["cloudflared_set"]   = !c.cloudflared_token.empty();
     return j;
+}
+
+// What the remote-access panel reports: the settings the operator has entered,
+// and what the box has actually managed to do with them. Both halves are
+// needed — "set up but not running" is the state that sends somebody looking.
+json remote_json(const Config& cfg) {
+    const RemoteAccess r = remote_access();
+    return json{
+        {"zerotier", json{
+            {"installed",  r.zerotier_installed},
+            {"running",    r.zerotier_running},
+            {"network_id", cfg.zerotier_network_id},
+            {"joined",     !r.zerotier_ip.empty()},
+            {"ip",         r.zerotier_ip},
+        }},
+        {"cloudflared", json{
+            {"installed",  r.cloudflared_installed},
+            {"running",    r.cloudflared_running},
+            {"configured", !cfg.cloudflared_token.empty()},
+            {"hostname",   r.cloudflared_hostname},
+        }},
+        // The one value the splash prints, at the top level so the interface
+        // does not have to know how it was obtained.
+        {"remote_ip", r.zerotier_ip},
+    };
 }
 
 template <typename T>
@@ -201,6 +234,18 @@ Config apply_edit(Config c, const json& j) {
     take(j, "auto_play",         c.auto_play);
     take(j, "delay_from_live_s", c.delay_from_live_s);
     take(j, "locked",            c.locked);
+
+    take(j, "zerotier_network_id", c.zerotier_network_id);
+    {
+        std::string token;
+        take(j, "cloudflared_token", token);
+        // Same rule as the bucket secret: dots mean "unchanged", an empty
+        // string means the operator cleared it on purpose.
+        if (token != kSecretPlaceholder) {
+            auto it = j.find("cloudflared_token");
+            if (it != j.end() && !it->is_null()) c.cloudflared_token = token;
+        }
+    }
 
     // Guard rails, so a mistyped figure cannot make the box unusable from the
     // very interface being used to fix it.
@@ -498,6 +543,61 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
                                                     HttpResponse& res) {
         shutdown_box();
         res.json(json{{"ok", true}, {"message", "shutting down"}}.dump());
+    });
+
+    // ── Remote access ────────────────────────────────────────────────────────
+    // The whole reason these exist is that nobody drives to the campus to
+    // touch the box, so they are deliberately not behind the lock: a lock you
+    // cannot reach past when the box is off site is a fault, not a safeguard.
+    server.route("GET", "/api/remote", [&player](const HttpRequest&,
+                                                 HttpResponse& res) {
+        res.json(remote_json(player.config()).dump());
+    });
+
+    server.route("POST", "/api/remote", [&player, config_path](
+                                            const HttpRequest& req,
+                                            HttpResponse& res) {
+        json body;
+        try {
+            body = json::parse(req.body);
+        } catch (const std::exception& e) {
+            res.status = 400;
+            res.json(json{{"error", std::string("bad request: ") + e.what()}}
+                         .dump());
+            return;
+        }
+
+        Config updated = player.config();
+        take(body, "zerotier_network_id", updated.zerotier_network_id);
+        {
+            std::string token;
+            take(body, "cloudflared_token", token);
+            if (token != kSecretPlaceholder) {
+                auto it = body.find("cloudflared_token");
+                if (it != body.end() && !it->is_null())
+                    updated.cloudflared_token = token;
+            }
+        }
+
+        std::string err;
+        if (!updated.save(config_path, err)) {
+            res.status = 500;
+            res.json(json{{"error", "could not save settings: " + err}}.dump());
+            return;
+        }
+
+        // Bring the settings into force. A failure here is reported alongside
+        // the state, not thrown away: the likely cause is a package that the
+        // installer will add on its next run, and the setting must survive to
+        // be picked up then.
+        const std::string zt_err = apply_zerotier(updated.zerotier_network_id);
+        const std::string cf_err = apply_cloudflared(updated.cloudflared_token);
+
+        player.reconfigure(updated);
+        json out = remote_json(updated);
+        if (!zt_err.empty()) out["zerotier_error"] = zt_err;
+        if (!cf_err.empty()) out["cloudflared_error"] = cf_err;
+        res.json(out.dump());
     });
 
     // ── Preview ──────────────────────────────────────────────────────────────

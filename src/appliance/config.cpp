@@ -113,6 +113,9 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "auto_play",            auto_play);
     take(j, "delay_from_live_s",    delay_from_live_s);
     take(j, "locked",               locked);
+
+    take(j, "zerotier_network_id",  zerotier_network_id);
+    take(j, "cloudflared_token",    cloudflared_token);
     return true;
 }
 
@@ -158,6 +161,9 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["auto_play"]            = auto_play;
     j["delay_from_live_s"]    = delay_from_live_s;
     j["locked"]               = locked;
+
+    j["zerotier_network_id"]  = zerotier_network_id;
+    j["cloudflared_token"]    = cloudflared_token;
 
     const std::string tmp = path + ".tmp";
     {

@@ -238,6 +238,36 @@
       </p>
     </div>
 
+    <h2>Remote access</h2>
+    <p class="hint">
+      How this box can be reached from outside the building, so a setting can
+      be fixed without driving to the campus. Both are optional and neither is
+      needed for the box to play.
+    </p>
+    <div class="field">
+      <label for="c-zerotier">ZeroTier network key</label>
+      <input id="c-zerotier" name="zerotier_network_id" autocomplete="off"
+             placeholder="16 hex digits, from ZeroTier Central">
+      <p class="hint">
+        The box joins this network and takes an address on it. That address is
+        shown on the screen in the room as the remote access address, and it
+        only answers once the box has been authorised in ZeroTier Central.
+      </p>
+    </div>
+    <div class="field">
+      <label for="c-cloudflared">Cloudflare tunnel token</label>
+      <input id="c-cloudflared" name="cloudflared_token" autocomplete="off"
+             placeholder="token from the Cloudflare dashboard">
+      <p class="hint">
+        Publishes this control page on a public hostname, with no port-forward
+        and no static address.
+      </p>
+    </div>
+    <div class="row">
+      <button type="button" id="btn-remote">Apply remote access</button>
+      <span class="muted" id="remote-note"></span>
+    </div>
+
     <h2>On power-up</h2>
     <div class="field">
       <label for="c-autoplay">Start playing by itself</label>
@@ -285,6 +315,13 @@
     <button id="btn-settime">Set the clock from this device</button>
     <span class="hint">Only works with network time off.</span>
   </div>
+
+  <h2>Remote access</h2>
+  <dl class="facts" id="remote-facts"></dl>
+  <p class="hint">
+    Set these up under Settings. The address here is the one printed on the
+    screen as the remote access address.
+  </p>
 
   <h2>Power</h2>
   <div class="row">

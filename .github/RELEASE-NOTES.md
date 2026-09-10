@@ -30,6 +30,30 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new since v0.1.7-alpha
+
+### The campus player can be reached without a drive to the campus
+
+What makes a wrong setting at a campus so expensive is that fixing it means
+somebody driving there. The player now ships with the two optional tools that
+remove that drive, and either can be set up from its own web page:
+
+- **ZeroTier** puts the box on a private network that follows it, so it is
+  reachable from the office wherever it is plugged in. The network key is given
+  during setup — passed as `ZT_NETWORK_ID=…` alongside the installer, or typed
+  at its prompt — and can be changed later under Settings → Remote access.
+- **cloudflared** publishes the operator page on a public hostname with no
+  port-forward and no static address. Give the installer `CF_TUNNEL_TOKEN=…`,
+  or paste the token into the same panel.
+- **The box's ZeroTier address is printed on its screen**, clearly labelled
+  **REMOTE ACCESS IP**, underneath the room's own addresses. Those are a
+  different thing — they work only inside the building and are what a phone in
+  the room types — and the label exists precisely so the two are not confused.
+
+Both are optional and neither is required to play an event. A box with neither
+installed behaves exactly as before, and its screen says nothing about remote
+access at all.
+
 ## Fixed since v0.1.6-alpha
 
 **The campus player leaked memory on every idle-screen redraw.** The new

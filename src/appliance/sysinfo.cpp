@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <array>
+#include <cctype>
 #include <chrono>
 #include <cstdio>
 #include <cstring>
@@ -330,6 +331,158 @@ SystemInfo system_info() {
     s.os_version = run("uname -sr");
 #endif
     return s;
+}
+
+// ── Remote access ────────────────────────────────────────────────────────────
+
+namespace {
+
+// Wrap a value for the shell, so a mistyped tunnel token cannot turn into a
+// second command. Everything here is passed to popen, which is a shell.
+std::string shell_quote(const std::string& s) {
+    std::string out = "'";
+    for (char c : s) {
+        if (c == '\'') out += "'\\''";
+        else           out += c;
+    }
+    out += "'";
+    return out;
+}
+
+bool service_active(const char* unit) {
+    int rc = 0;
+    run(std::string("systemctl is-active --quiet ") + unit, &rc);
+    return rc == 0;
+}
+
+// The networks the box has been told to join are recorded one file per network
+// in ZeroTier's state directory, each named for the network's sixteen hex
+// digits. Reading them directly beats asking the daemon, which wants its
+// authtoken to answer — and answering "nothing joined" would make a re-join
+// leave the old network behind. The daemon also keeps "<id>.local.conf" here,
+// which is why the name is checked rather than just the extension.
+std::vector<std::string> zerotier_joined() {
+    std::vector<std::string> out;
+#ifdef __linux__
+    DIR* d = ::opendir("/var/lib/zerotier-one/networks.d");
+    if (!d) return out;
+    while (dirent* e = ::readdir(d)) {
+        const std::string name = e->d_name;
+        if (name.size() != 16 + 5 || name.compare(16, 5, ".conf") != 0)
+            continue;
+        bool hex = true;
+        for (size_t i = 0; i < 16 && hex; ++i)
+            hex = std::isxdigit((unsigned char)name[i]) != 0;
+        if (hex) out.push_back(name.substr(0, 16));
+    }
+    ::closedir(d);
+#endif
+    return out;
+}
+
+// The hostname a locally-configured tunnel serves. A token-driven tunnel keeps
+// its name in the dashboard and this stays blank, which is reported as unknown
+// rather than guessed at.
+std::string cloudflared_hostname_from_config() {
+    std::istringstream is(read_file("/etc/cloudflared/config.yml"));
+    std::string line;
+    while (std::getline(is, line)) {
+        line = trim(line);
+        const size_t at = line.find("hostname:");
+        if (at == std::string::npos) continue;
+        const std::string v = trim(line.substr(at + 9));
+        if (!v.empty()) return v;
+    }
+    return {};
+}
+
+} // namespace
+
+// The address alone, with nothing forked to find it: ZeroTier names the
+// interface it creates after itself, and reading the interfaces is all this
+// takes. This is what the identity screen calls ten times a second.
+std::string zerotier_ip() {
+    for (const auto& n : network_interfaces())
+        if (n.name.rfind("zt", 0) == 0 && !n.ipv4.empty()) return n.ipv4;
+    return {};
+}
+
+RemoteAccess remote_access() {
+    RemoteAccess r;
+    r.zerotier_installed = have_command("zerotier-cli");
+    r.zerotier_ip        = zerotier_ip();
+#ifdef __linux__
+    // The address appearing is proof enough on its own; the unit check covers
+    // the moment before the interface has been given one.
+    r.zerotier_running = service_active("zerotier-one.service") ||
+                         !r.zerotier_ip.empty();
+#else
+    r.zerotier_running = !r.zerotier_ip.empty();
+#endif
+    r.cloudflared_installed = have_command("cloudflared");
+#ifdef __linux__
+    r.cloudflared_running = service_active("cloudflared.service");
+#endif
+    r.cloudflared_hostname = cloudflared_hostname_from_config();
+    return r;
+}
+
+std::string apply_zerotier(const std::string& network_id) {
+#ifdef __linux__
+    if (!have_command("zerotier-cli"))
+        return "ZeroTier is not installed on this box.";
+    int rc = 0;
+    // Joining is idempotent, and a box given a new network should leave the
+    // old one: two overlays carrying the same routes is a support call waiting
+    // to happen.
+    const std::vector<std::string> joined = zerotier_joined();
+
+    if (network_id.empty()) {
+        for (const auto& id : joined)
+            run("zerotier-cli leave " + shell_quote(id) + " >/dev/null 2>&1", &rc);
+        return {};
+    }
+
+    rc = 0;
+    const std::string out =
+        run("zerotier-cli join " + shell_quote(network_id), &rc);
+    if (rc != 0)
+        return "ZeroTier would not join " + network_id + ": " +
+               (out.empty() ? "no answer from the service" : out);
+
+    for (const auto& id : joined)
+        if (id != network_id)
+            run("zerotier-cli leave " + shell_quote(id) + " >/dev/null 2>&1", &rc);
+    return {};
+#else
+    (void)network_id;
+    return "Remote access is set up by the installer on the box, not here.";
+#endif
+}
+
+std::string apply_cloudflared(const std::string& token) {
+#ifdef __linux__
+    if (!have_command("cloudflared"))
+        return "cloudflared is not installed on this box.";
+    int rc = 0;
+    if (token.empty()) {
+        // Best effort: a box that never had a tunnel has nothing to remove.
+        run("cloudflared service uninstall >/dev/null 2>&1", &rc);
+        return {};
+    }
+    // `cloudflared service install <token>` writes the unit and the token and
+    // brings the tunnel up; running it again replaces the token in place.
+    const std::string out =
+        run("cloudflared service install " + shell_quote(token), &rc);
+    if (rc != 0)
+        return "cloudflared would not install the tunnel: " +
+               (out.empty() ? "no answer from the service" : out);
+    run("systemctl restart cloudflared >/dev/null 2>&1", &rc);
+    return {};
+#else
+    (void)token;
+    return "Remote access is set up by the installer on the box, not here.";
+#endif
 }
 
 std::string restart_service() {

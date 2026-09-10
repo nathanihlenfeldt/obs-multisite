@@ -77,6 +77,46 @@ struct SystemInfo {
 };
 SystemInfo system_info();
 
+// ── Remote access ────────────────────────────────────────────────────────────
+//
+// A campus box sits on a network nobody can dial into, which is what makes a
+// setting wrong at the campus so expensive: the fix is a drive, not a click.
+// Two optional tools remove that drive. ZeroTier is a private overlay network
+// the box joins and keeps an address on wherever it is plugged in; cloudflared
+// publishes the operator page on a public hostname with no port-forward.
+//
+// Neither is required. Every field below is false on a box that has neither
+// installed, and the rest of the player does not care.
+struct RemoteAccess {
+    bool        zerotier_installed = false;
+    bool        zerotier_running   = false;
+    // The address on the overlay network, blank until the box has joined one
+    // and been authorised at ZeroTier Central. This is the address the splash
+    // screen prints as the remote access address.
+    std::string zerotier_ip;
+    bool        cloudflared_installed = false;
+    bool        cloudflared_running   = false;
+    // The public hostname the tunnel serves, when its own configuration names
+    // one. A tunnel driven entirely from the dashboard keeps the name there,
+    // so this is blank in that case rather than wrong.
+    std::string cloudflared_hostname;
+};
+RemoteAccess remote_access();
+
+// The ZeroTier address alone. The identity screen is redrawn about ten times a
+// second and needs only this one string, so it must not pay for the systemctl
+// calls the full probe below makes — forking twice every tenth of a second to
+// draw a screen that has not changed is exactly the sort of cost an appliance
+// must not carry. Just reading the interfaces is free.
+std::string zerotier_ip();
+
+// Bring a remote-access setting into force. Each returns an empty string on
+// success, or a sentence saying what did not happen. A missing program is
+// reported, not treated as fatal: a development machine has neither, and the
+// rest of the player has to keep working regardless.
+std::string apply_zerotier(const std::string& network_id);
+std::string apply_cloudflared(const std::string& token);
+
 // Restart the player, reboot, or shut down. Each returns an empty
 // string once the request has been made.
 std::string restart_service();

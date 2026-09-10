@@ -66,6 +66,11 @@ struct SplashInfo {
     std::string state;                    // "WAITING FOR THE MAIN SITE"
     std::string detail;                   // a second line, when there is one
     std::string version;
+    // The address this box can be reached on from outside the building, when
+    // it has been put on a ZeroTier network. Blank when there is no remote
+    // access, in which case the splash says nothing about it at all — an
+    // empty label would only invite the question.
+    std::string remote_ip;
     bool        configured = true;
 };
 

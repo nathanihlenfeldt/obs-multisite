@@ -99,6 +99,24 @@ struct Config {
     // dock has, for a tablet left on a music stand mid-event.
     bool locked = false;
 
+    // ── Remote access ────────────────────────────────────────────────────────
+    // A box at the back of a hall cannot be reached from the office without
+    // somebody driving to the campus, and a church network rarely allows an
+    // inbound port-forward. Two optional tools fix that, and neither is
+    // required: leave both blank and the player behaves exactly as it did
+    // before, and the splash says nothing about remote access at all.
+    //
+    //   • ZeroTier puts the box on a private network that follows it. The key
+    //     is the sixteen hex digits shown in ZeroTier Central; the box joins
+    //     that network and takes an address on it, which is the address the
+    //     splash calls the remote access address.
+    //   • cloudflared publishes this control page on a public hostname with no
+    //     port-forward and no static IP. The token is the one the Cloudflare
+    //     dashboard issues for the tunnel.
+    std::string zerotier_network_id;
+    // Secret, like the bucket key: never sent back to the browser.
+    std::string cloudflared_token;
+
     bool configured() const {
         return !bucket.empty() &&
                (!endpoint_host.empty() || !r2_account_id.empty());

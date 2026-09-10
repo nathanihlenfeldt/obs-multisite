@@ -462,6 +462,16 @@ void render_splash(Canvas& canvas, const SplashInfo& info) {
         lines.back().gap_below = unit * 5;
     }
 
+    // Remote access, when the box has been put on a network it can be reached
+    // on from outside the building. It is labelled in full and kept apart from
+    // the addresses above: those are typed into a phone standing in the room,
+    // this one is not, and confusing the two is the mistake worth designing
+    // out. With no remote access there is simply nothing here.
+    if (!info.remote_ip.empty()) {
+        lines.push_back({"REMOTE ACCESS IP", small, kDim, unit * 1});
+        lines.push_back({info.remote_ip, mid, kAccent, unit * 5});
+    }
+
     if (info.configured && !info.room.empty())
         lines.push_back({"ROOM  " + info.room, small, kDim, unit * 3});
 

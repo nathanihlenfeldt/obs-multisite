@@ -458,6 +458,8 @@ async function loadSettings() {
   set('#c-audio-track', settings.audio_track);
   set('#c-audio-on', String(settings.audio_enabled));
   set('#c-autoplay', String(settings.auto_play));
+  set('#c-zerotier', settings.zerotier_network_id || '');
+  set('#c-cloudflared', settings.cloudflared_token || '');
   $('#idle-image-field').hidden = settings.idle_mode !== 'image';
   set('#c-idle-image', settings.idle_image_path);
   await loadOutputChoices();
@@ -549,6 +551,30 @@ $('#settings-form').addEventListener('submit', async (e) => {
   }
 });
 
+/* ── Remote access ───────────────────────────────────────────────────────────
+   Its own button rather than the main Save, because applying it does
+   something immediate — joins a network, starts a tunnel — and an operator
+   wants to see that answer, including when the tool is not installed yet. */
+
+$('#btn-remote').addEventListener('click', async () => {
+  const note = $('#remote-note');
+  note.textContent = 'Applying…';
+  try {
+    const r = await api('POST', '/api/remote', {
+      zerotier_network_id: $('#c-zerotier').value.trim(),
+      cloudflared_token: $('#c-cloudflared').value,
+    });
+    const problems = [r.zerotier_error, r.cloudflared_error].filter(Boolean);
+    note.textContent = problems.length ? problems.join(' ') : 'Applied.';
+    await loadSettings();
+    loadRemote();
+  } catch (err) {
+    note.textContent = err.message;
+  }
+  setTimeout(() => { note.textContent = ''; }, 8000);
+});
+
+
 /* ── This box ────────────────────────────────────────────────────────────── */
 
 async function loadSystem() {
@@ -599,6 +625,48 @@ async function loadSystem() {
   }
 
   loadStorage(false);
+  loadRemote();
+}
+
+/* ── Remote access ───────────────────────────────────────────────────────────
+   What is set up, and what the box managed to do with it. "Set up but not
+   running" is the state worth showing plainly: it is the one that means the
+   box still cannot be reached. */
+
+async function loadRemote() {
+  const el = $('#remote-facts');
+  if (!el) return;
+  let r = null;
+  try { r = await api('GET', '/api/remote'); } catch (e) { return; }
+  const rows = [];
+  const add = (k, v) => rows.push(`<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`);
+
+  const zt = r.zerotier || {};
+  if (zt.joined) {
+    add('Remote access address', zt.ip + ' (ZeroTier)');
+  } else if (!zt.network_id) {
+    add('ZeroTier', zt.installed ? 'Installed, no network set' : 'Not installed');
+  } else if (!zt.installed) {
+    add('ZeroTier', 'Not installed on this box');
+  } else {
+    add('ZeroTier', zt.running
+      ? 'Joining ' + zt.network_id + ' — waiting to be authorised'
+      : 'Set up, but the service is not running');
+  }
+
+  const cf = r.cloudflared || {};
+  if (!cf.configured) {
+    add('Cloudflare tunnel',
+        cf.installed ? 'Installed, not set up' : 'Not installed');
+  } else if (!cf.installed) {
+    add('Cloudflare tunnel', 'Not installed on this box');
+  } else if (cf.running) {
+    add('Cloudflare tunnel', cf.hostname ? 'Running — ' + cf.hostname : 'Running');
+  } else {
+    add('Cloudflare tunnel', 'Set up, but the service is not running');
+  }
+
+  el.innerHTML = rows.join('');
 }
 
 /* ── Storage ─────────────────────────────────────────────────────────────────

@@ -15,6 +15,19 @@
 # player that starts on power-up, and leaves the box showing a screen with its
 # own address and a QR code on it so somebody can finish the job from a phone.
 #
+# It also installs ZeroTier and cloudflared, the two optional tools that make a
+# box at the back of a hall reachable from the office. Give it either or both
+# and the box joins the private network / starts the tunnel as it installs:
+#
+#   ZT_NETWORK_ID=8056c2e21c000001 \
+#   CF_TUNNEL_TOKEN=eyJhIjoi…        \
+#     sudo -E bash scripts/player/install.sh
+#
+# Run from a terminal it asks for them instead; run the one-line way (piped
+# from curl) there is no terminal to ask on, so pass them as above. Both can
+# also be set or changed later from the web interface, and the ZeroTier
+# address is printed on the box's own screen as the remote access address.
+#
 # Safe to run again: it updates an existing installation in place and keeps the
 # settings and the segment cache.
 
@@ -68,6 +81,89 @@ apt-get install -y --no-install-recommends \
   fonts-dejavu-core \
   >/dev/null
 note "done"
+
+# ── Remote access ────────────────────────────────────────────────────────────
+# A box at the back of a hall cannot be fixed without somebody driving to the
+# campus, and a church network rarely allows an inbound port-forward. Two
+# optional tools remove that drive: ZeroTier puts the box on a private network
+# that follows it, and cloudflared publishes the operator page on a public
+# hostname. Both are installed here; whether they are used is decided by the
+# two values below, and either can be added or changed later from the web
+# interface. Nothing below is fatal — a box with neither still plays the
+# event, which is the only thing that has to work.
+say "Setting up remote access (optional)"
+
+ZT_NETWORK_ID="${ZT_NETWORK_ID:-}"
+CF_TUNNEL_TOKEN="${CF_TUNNEL_TOKEN:-}"
+
+install_zerotier() {
+  command -v zerotier-cli >/dev/null 2>&1 && return 0
+  # ZeroTier's own installer adds their repository and the daemon; the stock
+  # Debian package is old enough to be a support problem by itself.
+  curl -fsSL --retry 5 https://install.zerotier.com 2>/dev/null \
+    | bash >/dev/null 2>&1 || true
+  command -v zerotier-cli >/dev/null 2>&1 && return 0
+  apt-get install -y --no-install-recommends zerotier-one >/dev/null 2>&1 || true
+  command -v zerotier-cli >/dev/null 2>&1
+}
+
+install_cloudflared() {
+  command -v cloudflared >/dev/null 2>&1 && return 0
+  # Cloudflare's apt repository, with its signing key pinned by the file we
+  # fetched rather than by trusting whatever the network returned.
+  mkdir -p --mode=0755 /usr/share/keyrings
+  if curl -fsSL --retry 5 https://pkg.cloudflare.com/cloudflare-main.gpg \
+       -o /usr/share/keyrings/cloudflare-main.gpg 2>/dev/null; then
+    echo "deb [signed-by=/usr/share/keyrings/cloudflare-main.gpg] https://pkg.cloudflare.com/cloudflared any main" \
+      > /etc/apt/sources.list.d/cloudflared.list
+    apt-get update -qq || true
+    apt-get install -y --no-install-recommends cloudflared >/dev/null 2>&1 || true
+  fi
+  command -v cloudflared >/dev/null 2>&1
+}
+
+install_zerotier && note "ZeroTier installed" \
+  || warn "could not install ZeroTier — it can be added later"
+install_cloudflared && note "cloudflared installed" \
+  || warn "could not install cloudflared — it can be added later"
+
+# Ask for the two values only when there is a terminal to ask on. Piped in
+# from curl, stdin is the script's own text and reading it there would eat the
+# rest of the installer — so in that form they have to be passed in.
+if [ -z "$ZT_NETWORK_ID" ] && [ -r /dev/tty ]; then
+  printf '    ZeroTier network key (16 hex digits, blank to skip): '
+  read -r ZT_NETWORK_ID < /dev/tty || ZT_NETWORK_ID=""
+fi
+if [ -z "$CF_TUNNEL_TOKEN" ] && [ -r /dev/tty ]; then
+  printf '    Cloudflare tunnel token (blank to skip): '
+  read -r CF_TUNNEL_TOKEN < /dev/tty || CF_TUNNEL_TOKEN=""
+fi
+
+# Join the ZeroTier network now so the address is up by the time the splash
+# screen first draws. The member still has to be authorised in ZeroTier
+# Central before it answers; until then the box shows the setting but no
+# address, which is the honest picture.
+if [ -n "$ZT_NETWORK_ID" ] && command -v zerotier-cli >/dev/null 2>&1; then
+  systemctl enable --quiet --now zerotier-one 2>/dev/null || true
+  for _ in $(seq 1 10); do
+    zerotier-cli info >/dev/null 2>&1 && break
+    sleep 1
+  done
+  if zerotier-cli join "$ZT_NETWORK_ID" >/dev/null 2>&1; then
+    note "joined ZeroTier network $ZT_NETWORK_ID"
+    note "authorise this box in ZeroTier Central to give it an address"
+  else
+    warn "could not join the ZeroTier network — it can be set from the web interface"
+  fi
+fi
+
+if [ -n "$CF_TUNNEL_TOKEN" ] && command -v cloudflared >/dev/null 2>&1; then
+  if cloudflared service install "$CF_TUNNEL_TOKEN" >/dev/null 2>&1; then
+    note "Cloudflare tunnel installed and running"
+  else
+    warn "could not install the Cloudflare tunnel — it can be set from the web interface"
+  fi
+fi
 
 # ── Source ───────────────────────────────────────────────────────────────────
 if [ -d "$SRC_DIR/.git" ]; then
@@ -157,8 +253,10 @@ mkdir -p "$CACHE_DIR" "$STATE_DIR"
 # ── Settings ─────────────────────────────────────────────────────────────────
 mkdir -p "$CONFIG_DIR"
 chmod 0700 "$CONFIG_DIR"
+CONFIG_EXISTED=""
 if [ -f "$CONFIG" ]; then
   say "Keeping the settings already on this box"
+  CONFIG_EXISTED=1
 else
   say "Writing a starting set of settings"
   cat > "$CONFIG" <<EOF
@@ -171,11 +269,35 @@ else
   "audio_enabled": true,
   "alsa_device": "default",
   "buffer_minutes": 10,
-  "start_buffer_seconds": 60
+  "start_buffer_seconds": 60,
+  "zerotier_network_id": "$ZT_NETWORK_ID",
+  "cloudflared_token": "$CF_TUNNEL_TOKEN"
 }
 EOF
   chmod 0600 "$CONFIG"
   note "the storage details still need entering — from a browser, in a moment"
+fi
+
+# Remember a network key or token given above even when the config already
+# existed, without rewriting the rest of the file. python3 is present on
+# Raspberry Pi OS Lite; where it is not, a fresh install has already written
+# the values and only a re-run of the installer loses them.
+if [ -n "$CONFIG_EXISTED" ] && command -v python3 >/dev/null 2>&1 \
+   && { [ -n "$ZT_NETWORK_ID" ] || [ -n "$CF_TUNNEL_TOKEN" ]; }; then
+  python3 - "$CONFIG" "$ZT_NETWORK_ID" "$CF_TUNNEL_TOKEN" <<'PY'
+import json, sys
+path, zt, cf = sys.argv[1], sys.argv[2], sys.argv[3]
+with open(path) as f:
+    cfg = json.load(f)
+if zt:
+    cfg["zerotier_network_id"] = zt
+if cf:
+    cfg["cloudflared_token"] = cf
+with open(path, "w") as f:
+    json.dump(cfg, f, indent=2)
+    f.write("\n")
+PY
+  chmod 0600 "$CONFIG"
 fi
 
 # ── Service ──────────────────────────────────────────────────────────────────
@@ -228,6 +350,20 @@ echo
 note "The same address is on the screen attached to this box — as text and as a"
 note "QR code, so a phone pointed at the screen opens the control page."
 note "Enter the bucket details under Settings, then press Play."
+echo
+
+# The remote access address, if the ZeroTier interface has come up. It only
+# appears once the box has been authorised in ZeroTier Central, so a network
+# key with no address yet is reported as waiting rather than as a failure.
+ZT_IP="$(ip -4 -o addr show 2>/dev/null \
+         | awk '$2 ~ /^zt/ {split($4,a,"/"); print a[1]; exit}')"
+if [ -n "$ZT_IP" ]; then
+  note "Remote access address (shown on the screen as the remote access IP):"
+  note "        http://$ZT_IP:$PORT"
+elif [ -n "${ZT_NETWORK_ID:-}" ]; then
+  note "ZeroTier joined $ZT_NETWORK_ID but has no address yet — authorise this"
+  note "box in ZeroTier Central and it will appear."
+fi
 echo
 note "If something is wrong:  journalctl -u $SERVICE -f"
 note "To update it later:     sudo bash $SRC_DIR/scripts/player/install.sh"
