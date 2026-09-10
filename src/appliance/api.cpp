@@ -111,6 +111,7 @@ json config_json(const Config& c) {
     j["room_id"]            = c.room_id;
     j["pinned_event_id"]    = c.pinned_event_id;
     j["prebuffer_segments"] = c.prebuffer_segments;
+    j["start_buffer_seconds"] = c.start_buffer_seconds;
     j["poll_interval_ms"]   = c.poll_interval_ms;
     j["keep_behind_segments"] = c.keep_behind_segments;
     j["buffer_minutes"]     = c.buffer_minutes;
@@ -169,6 +170,7 @@ Config apply_edit(Config c, const json& j) {
     take(j, "room_id", c.room_id);
 
     take(j, "prebuffer_segments",   c.prebuffer_segments);
+    take(j, "start_buffer_seconds", c.start_buffer_seconds);
     take(j, "poll_interval_ms",     c.poll_interval_ms);
     take(j, "keep_behind_segments", c.keep_behind_segments);
     take(j, "buffer_minutes",       c.buffer_minutes);
@@ -204,6 +206,7 @@ Config apply_edit(Config c, const json& j) {
     // very interface being used to fix it.
     if (c.poll_interval_ms   < 500)  c.poll_interval_ms = 500;
     if (c.prebuffer_segments < 0)    c.prebuffer_segments = 0;
+    if (c.start_buffer_seconds < 0)  c.start_buffer_seconds = 0;
     if (c.buffer_minutes     < 1)    c.buffer_minutes = 1;
     if (c.max_cached_segments < 10)  c.max_cached_segments = 10;
     if (c.stale_after_ms     < 30000) c.stale_after_ms = 30000;

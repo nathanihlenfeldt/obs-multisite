@@ -26,6 +26,9 @@ struct DecoderSettings {
     // so a hold-and-resume has nothing new to play and the picture appears
     // frozen for up to a segment. A small reserve also absorbs network jitter.
     int    prebuffer_segments = 2;
+    // Seconds of programme to bank before playback starts, so the picture
+    // never chases the live edge. 0 restores "start immediately".
+    int    start_buffer_seconds = 60;
     int    poll_interval_ms = 3000;
     int    keep_behind_segments = 200;
     // How far ahead to download, in minutes of programme. This is the figure

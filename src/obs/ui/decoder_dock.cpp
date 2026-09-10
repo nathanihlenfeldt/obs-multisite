@@ -488,6 +488,11 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     form->addRow(tr_("Region"), m_region);
     form->addRow(tr_("RoomID"), m_roomId);
     form->addRow(tr_("Prebuffer"), m_prebuffer);
+    m_startBufferS = new QSpinBox(storeBox);
+    m_startBufferS->setRange(0, 300);
+    m_startBufferS->setSuffix(tr_("Dock.Seconds"));
+    m_startBufferS->setToolTip(tr_("Dock.StartBufferHint"));
+    form->addRow(tr_("StartBufferSeconds"), m_startBufferS);
     m_bufferMins = new QSpinBox(storeBox);
     m_bufferMins->setRange(1, 60);
     m_bufferMins->setSuffix(tr_("Dock.Minutes"));
@@ -512,13 +517,14 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
         m_region->setText(QString::fromStdString(cfg.region));
         m_roomId->setText(QString::fromStdString(cfg.room_id));
         m_prebuffer->setValue(cfg.prebuffer_segments);
+        m_startBufferS->setValue(cfg.start_buffer_seconds);
         m_bufferMins->setValue(cfg.buffer_minutes);
     }
     for (QLineEdit* e : { m_accountId, m_endpoint, m_bucket, m_keyId,
                           m_secret, m_region, m_roomId })
         connect(e, &QLineEdit::editingFinished, this,
                 &DecoderDock::onSaveSettings);
-    for (QSpinBox* sb : { m_prebuffer, m_bufferMins })
+    for (QSpinBox* sb : { m_prebuffer, m_startBufferS, m_bufferMins })
         connect(sb, &QSpinBox::editingFinished, this,
                 &DecoderDock::onSaveSettings);
 
@@ -555,6 +561,7 @@ void DecoderDock::onSaveSettings() {
     cfg.region            = m_region->text().trimmed().toStdString();
     cfg.room_id           = m_roomId->text().trimmed().toStdString();
     cfg.prebuffer_segments = m_prebuffer->value();
+    cfg.start_buffer_seconds = m_startBufferS->value();
     cfg.buffer_minutes     = m_bufferMins->value();
     set_decoder_settings(cfg);
 }

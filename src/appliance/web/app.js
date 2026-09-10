@@ -445,6 +445,7 @@ async function loadSettings() {
   set('#c-secret', settings.secret_access_key);
   set('#c-buffer', settings.buffer_minutes);
   set('#c-prebuffer', settings.prebuffer_segments);
+  set('#c-start-buffer', settings.start_buffer_seconds);
   set('#c-cache', settings.cache_dir);
   set('#c-idle', settings.idle_mode);
   set('#c-channels', settings.audio_channels);
@@ -517,6 +518,7 @@ $('#settings-form').addEventListener('submit', async (e) => {
     secret_access_key: $('#c-secret').value,
     buffer_minutes: Number($('#c-buffer').value),
     prebuffer_segments: Number($('#c-prebuffer').value),
+    start_buffer_seconds: Number($('#c-start-buffer').value),
     cache_dir: $('#c-cache').value.trim(),
     connector: $('#c-display').value,
     out_width: mode[0] || 0,

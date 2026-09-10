@@ -165,6 +165,15 @@
       <p class="hint">Pieces of programme to gather before the picture starts.</p>
     </div>
     <div class="field">
+      <label for="c-start-buffer">Start after this much is ready</label>
+      <input id="c-start-buffer" name="start_buffer_seconds" type="number" min="0" max="3600">
+      <p class="hint">
+        Seconds of programme to bank before playback begins. The buffer fills
+        for this long first, so the picture does not chase the live edge and
+        stall. 0 starts as soon as the first piece is ready.
+      </p>
+    </div>
+    <div class="field">
       <label for="c-cache">Cache folder</label>
       <input id="c-cache" name="cache_dir" autocomplete="off">
       <p class="hint" id="cache-warning"></p>

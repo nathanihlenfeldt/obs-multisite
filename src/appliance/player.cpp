@@ -147,6 +147,7 @@ void Player::rebuild_session() {
     dc.room_id              = cfg.room_id;
     dc.cache_dir            = cfg.cache_dir;
     dc.prebuffer_segments   = cfg.prebuffer_segments;
+    dc.start_buffer_seconds = cfg.start_buffer_seconds;
     dc.buffer_minutes       = cfg.buffer_minutes;
     dc.max_cached_segments  = cfg.max_cached_segments;
     dc.keep_behind_segments = cfg.keep_behind_segments;
@@ -273,6 +274,7 @@ void Player::reconfigure(const Config& cfg) {
         before.room_id            != cfg.room_id ||
         before.cache_dir          != cfg.cache_dir ||
         before.prebuffer_segments != cfg.prebuffer_segments ||
+        before.start_buffer_seconds != cfg.start_buffer_seconds ||
         before.buffer_minutes     != cfg.buffer_minutes ||
         before.keep_behind_segments != cfg.keep_behind_segments ||
         before.max_cached_segments  != cfg.max_cached_segments ||

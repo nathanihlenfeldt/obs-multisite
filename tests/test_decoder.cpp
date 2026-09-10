@@ -175,6 +175,7 @@ int main() {
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d2").string();
         cfg.prebuffer_segments = 2;
+        cfg.start_buffer_seconds = 0;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
 
@@ -203,6 +204,7 @@ int main() {
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d3").string();
         cfg.prebuffer_segments = 2; cfg.buffer_minutes = 3;
+        cfg.start_buffer_seconds = 0;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         for (int i = 0; i < 5; ++i) dec.pump_downloads(10);
@@ -246,6 +248,7 @@ int main() {
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d4").string();
         cfg.prebuffer_segments = 2; cfg.buffer_minutes = 4;
+        cfg.start_buffer_seconds = 0;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         for (int i = 0; i < 8; ++i) dec.pump_downloads(10);
@@ -414,6 +417,7 @@ int main() {
         // Large prebuffer so the head starts at 0 and the gap is genuinely
         // mid-stream (a hole at the live edge is just "not published yet").
         cfg.prebuffer_segments = 6;
+        cfg.start_buffer_seconds = 0;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         dec.pump_downloads(10);
@@ -452,6 +456,7 @@ int main() {
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d10").string();
         cfg.prebuffer_segments = 0; cfg.buffer_minutes = 4;
+        cfg.start_buffer_seconds = 0;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
 
@@ -497,6 +502,7 @@ int main() {
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d11").string();
         cfg.prebuffer_segments = 0; cfg.buffer_minutes = 4;
+        cfg.start_buffer_seconds = 0;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         for (int i = 0; i < 6; ++i) dec.pump_downloads(10);
@@ -565,6 +571,7 @@ int main() {
         // A realistic prebuffer: playback sits behind live, which is the
         // normal case and the one where resume must continue immediately.
         cfg.prebuffer_segments = 3; cfg.buffer_minutes = 4;
+        cfg.start_buffer_seconds = 0;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         for (int i = 0; i < 6; ++i) dec.pump_downloads(10);
@@ -611,6 +618,7 @@ int main() {
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d14").string();
         cfg.prebuffer_segments = 0;      // deliberately AT the live edge
+        cfg.start_buffer_seconds = 0;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         for (int i = 0; i < 6; ++i) dec.pump_downloads(10);
@@ -680,6 +688,7 @@ int main() {
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d16").string();
         cfg.prebuffer_segments = 2; cfg.buffer_minutes = 5;
+        cfg.start_buffer_seconds = 0;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         for (int i = 0; i < 20; ++i) dec.pump_downloads(32);
@@ -773,6 +782,7 @@ int main() {
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d18").string();
         cfg.prebuffer_segments = 4; cfg.buffer_minutes = 5;
+        cfg.start_buffer_seconds = 0;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         for (int i = 0; i < 10; ++i) dec.pump_downloads(32);
@@ -887,6 +897,7 @@ int main() {
         DecoderConfig cfg;
         cfg.room_id = "r"; cfg.cache_dir = (base / "d9").string();
         cfg.prebuffer_segments = 0;
+        cfg.start_buffer_seconds = 0;
         DecoderSession dec(cfg, store);
         dec.poll(enc.clock_ms);
         dec.pump_downloads(10);
@@ -948,6 +959,41 @@ int main() {
         dec.poll(enc.clock_ms);
         CHECK(dec.link_health() == LinkHealth::Healthy,
               "recovery happens as soon as the store answers again");
+    }
+
+    std::printf("== 22. Playback waits for the start buffer ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTSTARTBUFFERSTARTBU");
+        enc.publish_start();
+        for (int i = 0; i < 15; ++i) enc.publish_segment();   // 90 s of programme
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d22").string();
+        cfg.prebuffer_segments = 0;
+        cfg.start_buffer_seconds = 60;          // 10 x 6 s segments
+        cfg.buffer_minutes = 10;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+
+        // A partial download must not be enough to go to air: the buffer has
+        // to accumulate the full start window first, otherwise playback starts
+        // near the live edge and stalls after a segment.
+        dec.pump_downloads(4);
+        CHECK(!dec.start(), "refuses to start with less than 60 s banked");
+        CHECK(dec.play_state() == PlayState::Stopped,
+              "playback stays stopped while the buffer accumulates");
+
+        // Keep filling; once 60 s is contiguously cached it may begin.
+        for (int i = 0; i < 20 && !dec.start(); ++i) dec.pump_downloads(4);
+        CHECK(dec.play_state() == PlayState::Playing,
+              "starts once 60 s is banked");
+        CHECK(dec.behind_live_s() >= 60.0 - 1e-6,
+              "begins about a minute behind live");
+        CHECK(dec.buffered_ahead_s() >= 60.0 - 1e-6,
+              "and has a minute buffered ahead of the playhead");
+        std::printf("     (started %.0fs behind live, %.0fs buffered ahead)\n",
+                    dec.behind_live_s(), dec.buffered_ahead_s());
     }
 
     fs::remove_all(base);

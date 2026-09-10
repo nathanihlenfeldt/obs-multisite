@@ -176,7 +176,9 @@ but has not yet carried real encoder output.
 - CMAF segments from any OBS encoder — H.264 or HEVC via x264, NVENC, QuickSync
   or AMF.
 - Satellite receive with a deep local buffer, checksum verification, and
-  timeslipping — hold, resume, catch up, scrub, jump to a marker.
+  timeslipping — hold, resume, catch up, scrub, jump to a marker. Playback
+  waits until a minute of the service is buffered before starting, so the
+  picture never chases the live edge.
 - **Multi-track production audio.** Up to 6 OBS tracks — main mix, ISOs, click —
   travel in the same fragment and are exposed at the satellite as separate
   sources, sharing one download and one playout clock.

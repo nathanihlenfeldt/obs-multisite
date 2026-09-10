@@ -48,6 +48,7 @@ struct Config {
 
     // ── Receive tuning (see DecoderConfig for what each one buys) ────────────
     int prebuffer_segments   = 2;
+    int start_buffer_seconds = 60;
     int poll_interval_ms     = 3000;
     int keep_behind_segments = 200;
     int buffer_minutes       = 10;

@@ -3,6 +3,7 @@
 #include "session.h"     // for now_ms()
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 
 namespace multisite {
@@ -273,7 +274,7 @@ int DecoderSession::pump_downloads(int max) {
             // start() refused to begin.
             from = m_first_available_seq.load();
         } else {
-            const uint64_t back = (uint64_t)std::max(0, m_cfg.prebuffer_segments);
+            const uint64_t back = start_reserve_segments();
             from = (m_latest_seq.load() > back) ? (m_latest_seq.load() - back)
                                                 : m_first_available_seq.load();
         }
@@ -285,6 +286,9 @@ int DecoderSession::pump_downloads(int max) {
         const double seg = m_segment_duration_s.load() > 0.1 ? m_segment_duration_s.load() : 6.0;
         uint64_t want_ahead = (uint64_t)std::max(
             1.0, ((double)std::max(1, m_cfg.buffer_minutes) * 60.0) / seg);
+        // The start gate must be reachable: never download less than the
+        // reserve start() is waiting for, or playback could never begin.
+        want_ahead = std::max(want_ahead, start_reserve_segments());
         if (want_ahead > (uint64_t)m_cfg.max_cached_segments)
             want_ahead = (uint64_t)m_cfg.max_cached_segments;
         to = std::min<uint64_t>(m_latest_seq.load(), from + want_ahead);
@@ -370,6 +374,13 @@ int DecoderSession::pump_downloads(int max) {
 }
 
 // ── Playback ─────────────────────────────────────────────────────────────────
+uint64_t DecoderSession::start_reserve_segments() const {
+    const double seg = m_segment_duration_s.load() > 0.1 ? m_segment_duration_s.load() : 6.0;
+    const uint64_t by_time =
+        (uint64_t)std::ceil(std::max(0, m_cfg.start_buffer_seconds) / seg);
+    return std::max((uint64_t)std::max(0, m_cfg.prebuffer_segments), by_time);
+}
+
 bool DecoderSession::start() {
     std::lock_guard<std::mutex> lk(m_mtx);
     const RoomState rs = m_room.load();
@@ -382,16 +393,28 @@ bool DecoderSession::start() {
             // A recording that has already finished is video-on-demand: start
             // at the beginning. Starting near the end (which is what treating
             // it as "live" does) means loading a finished service and landing
-            // twelve seconds from the close.
+            // twelve seconds from the close. The whole recording already
+            // exists, so it cannot stall the way a live edge can.
             want = m_first_available_seq.load();
         } else {
-            // Live: start `prebuffer_segments` behind the edge for a cushion.
-            const uint64_t back = (uint64_t)std::max(0, m_cfg.prebuffer_segments);
-            want = (m_latest_seq.load() > back) ? (m_latest_seq.load() - back)
-                                                : m_first_available_seq.load();
+            // Live: sit `reserve` segments behind the edge, and don't go to
+            // air until that many are contiguously cached. This is what stops
+            // the picture chasing the live edge — the buffer accumulates for
+            // a full start-buffer window before the first frame, instead of
+            // starting a couple of segments behind and stalling after one.
+            const uint64_t reserve = start_reserve_segments();
+            want = (m_latest_seq.load() > reserve) ? (m_latest_seq.load() - reserve)
+                                                   : m_first_available_seq.load();
         }
         want = std::max(want, m_first_available_seq.load());
-        if (!m_cache->has(want)) return false;      // prebuffer not ready yet
+        // A recording needs only its first segment; live needs the whole
+        // reserve present as a contiguous run ahead of `want`.
+        const uint64_t need = is_vod(rs) ? 1
+                                         : std::max<uint64_t>(1, start_reserve_segments());
+        const auto idx = m_cache->cached_seqs();
+        uint64_t have = 0;
+        for (uint64_t s = want; idx.count(s); ++s) ++have;
+        if (have < need) return false;      // buffer still accumulating
         m_head = want;
         m_head_set = true;
     }

@@ -121,6 +121,11 @@ Sending stereo only? Do nothing: track 1 is the default at both ends.
 3. **Load event**, let the buffer fill, then **Play** when you are ready. Use
    **Lock** during the service so nothing can be clicked by accident.
 
+   The decoder holds playback until a whole minute of the service is buffered
+   (set in **Settings… → Start after this much is ready**). The buffer fills
+   first, then the picture starts — so it does not chase the live edge and
+   stall after a single piece on a slow or uneven connection.
+
 The **Internet** line in the Status box tells you whether the box can reach the
 bucket, separately from whether anything is on air. If it flips to red
 ("no connection") mid-service, the **Could broadcast for** figure is how long

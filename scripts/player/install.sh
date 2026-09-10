@@ -170,7 +170,8 @@ else
   "auto_play": true,
   "audio_enabled": true,
   "alsa_device": "default",
-  "buffer_minutes": 10
+  "buffer_minutes": 10,
+  "start_buffer_seconds": 60
 }
 EOF
   chmod 0600 "$CONFIG"

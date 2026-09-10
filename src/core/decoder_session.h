@@ -51,6 +51,12 @@ struct DecoderConfig {
     std::string cache_dir;
     // Segments to buffer before playback starts. Higher = more resilient.
     int    prebuffer_segments = 2;
+    // Seconds of programme that must be banked (contiguously cached) before
+    // playback starts, so the picture never has to chase the live edge. The
+    // buffer accumulates for this long first, instead of starting a couple of
+    // segments behind live and stalling after one. 0 restores "start as soon
+    // as the first segment is ready".
+    int    start_buffer_seconds = 60;
     // How far ahead of the playhead to keep downloading, in MINUTES of
     // programme. This is the reliability figure that matters: it is how long
     // the campus could keep broadcasting if its connection died. Downloading
@@ -281,6 +287,10 @@ private:
     std::string event_prefix() const;
     std::string segment_key(uint64_t seq) const;
     std::string checksum_for(uint64_t seq) const;
+    // How many segments the start gate requires ahead of the playhead: the
+    // larger of the prebuffer cushion and the start_buffer_seconds window,
+    // converted at the current segment duration.
+    uint64_t start_reserve_segments() const;
 
 };
 

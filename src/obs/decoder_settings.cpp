@@ -51,6 +51,8 @@ void DecoderSettings::load() {
         room_id = obs_data_get_string(d, "room_id");
     if (obs_data_has_user_value(d, "prebuffer_segments"))
         prebuffer_segments = (int)obs_data_get_int(d, "prebuffer_segments");
+    if (obs_data_has_user_value(d, "start_buffer_seconds"))
+        start_buffer_seconds = (int)obs_data_get_int(d, "start_buffer_seconds");
     if (obs_data_has_user_value(d, "poll_interval_ms"))
         poll_interval_ms = (int)obs_data_get_int(d, "poll_interval_ms");
     if (obs_data_has_user_value(d, "keep_behind_segments"))
@@ -73,6 +75,7 @@ void DecoderSettings::save() const {
     obs_data_set_string(d, "region", region.c_str());
     obs_data_set_string(d, "room_id", room_id.c_str());
     obs_data_set_int(d, "prebuffer_segments", prebuffer_segments);
+    obs_data_set_int(d, "start_buffer_seconds", start_buffer_seconds);
     obs_data_set_int(d, "poll_interval_ms", poll_interval_ms);
     obs_data_set_int(d, "keep_behind_segments", keep_behind_segments);
     obs_data_set_int(d, "buffer_minutes", buffer_minutes);

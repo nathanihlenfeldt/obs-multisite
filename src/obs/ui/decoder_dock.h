@@ -146,6 +146,7 @@ private:
     QLineEdit* m_region = nullptr;
     QLineEdit* m_roomId = nullptr;
     QSpinBox*  m_prebuffer = nullptr;
+    QSpinBox*  m_startBufferS = nullptr;
     QSpinBox*  m_bufferMins = nullptr;
     // In a dialog rather than the dock, for the same reason as the encoder:
     // settings are set once, the dock is watched mid-service.

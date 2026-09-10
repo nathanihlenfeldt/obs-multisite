@@ -1122,6 +1122,8 @@ static void src_update(void* data, obs_data_t* s) {
     dc.prebuffer_segments   = (int)obs_data_get_int(s, S_PREBUF);
     dc.keep_behind_segments = (int)obs_data_get_int(s, S_KEEP);
     dc.buffer_minutes       = shared.buffer_minutes;
+    // Edited on the settings page, like buffer_minutes — not per-source.
+    dc.start_buffer_seconds = shared.start_buffer_seconds;
     ctx->poll_interval_ms   = (int)obs_data_get_int(s, S_POLL_MS);
     ctx->audio_track        = (int)obs_data_get_int(s, S_ATRACK);
 
@@ -1181,8 +1183,10 @@ static void src_update(void* data, obs_data_t* s) {
     ctx->deliver_thread = std::thread(deliver_loop, ctx);
     ctx->poll_thread    = std::thread(poll_loop, ctx);
     ctx->feed_thread    = std::thread(feed_loop, ctx);
-    mlog_info("source: watching room '%s' (prebuffer %d segments, poll %dms)",
-              dc.room_id.c_str(), dc.prebuffer_segments, ctx->poll_interval_ms);
+    mlog_info("source: watching room '%s' (prebuffer %d segments, start after "
+              "%ds buffered, poll %dms)",
+              dc.room_id.c_str(), dc.prebuffer_segments,
+              dc.start_buffer_seconds, ctx->poll_interval_ms);
 }
 
 static void* src_create(obs_data_t* settings, obs_source_t* source) {

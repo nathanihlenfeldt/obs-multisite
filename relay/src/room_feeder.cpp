@@ -30,6 +30,9 @@ RoomFeeder::RoomFeeder(FeederConfig cfg) : m_cfg(std::move(cfg)) {
     // reached yet, with margin for a restart.
     dc.keep_behind_segments = 100;
     dc.prebuffer_segments = 0;
+    // The relay runs its own delay buffer (delay_s) and must not also wait for
+    // a start-buffer window; it starts as soon as its first segment is ready.
+    dc.start_buffer_seconds = 0;
     dc.pinned_event_id = m_cfg.pinned_event_id;
     m_session = std::make_unique<DecoderSession>(dc, *m_tx);
 }

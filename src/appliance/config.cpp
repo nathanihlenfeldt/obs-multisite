@@ -83,6 +83,7 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "pinned_event_id",      pinned_event_id);
 
     take(j, "prebuffer_segments",   prebuffer_segments);
+    take(j, "start_buffer_seconds", start_buffer_seconds);
     take(j, "poll_interval_ms",     poll_interval_ms);
     take(j, "keep_behind_segments", keep_behind_segments);
     take(j, "buffer_minutes",       buffer_minutes);
@@ -130,6 +131,7 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["pinned_event_id"]      = pinned_event_id;
 
     j["prebuffer_segments"]   = prebuffer_segments;
+    j["start_buffer_seconds"] = start_buffer_seconds;
     j["poll_interval_ms"]     = poll_interval_ms;
     j["keep_behind_segments"] = keep_behind_segments;
     j["buffer_minutes"]       = buffer_minutes;
