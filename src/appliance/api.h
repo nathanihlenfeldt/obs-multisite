@@ -9,13 +9,13 @@
 //
 // Two rules run through the whole surface:
 //
-//   • The answer is immediate. An operator pressing Hold during a service must
+//   • The answer is immediate. An operator pressing Hold during an event must
 //     see the interface acknowledge it at once, not after the next network
 //     poll. Every control acts on live state and returns the new status in the
 //     same response.
 //   • Lock means lock. With the controls locked, anything that would change
 //     what is on air is refused — the tablet left on a music stand cannot
-//     stop the service by being leant on.
+//     stop the player by being leant on.
 //
 #include "player.h"
 #include "http_server.h"

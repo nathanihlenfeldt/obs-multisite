@@ -44,6 +44,10 @@ struct VideoInfo {
 struct EventInfo {
     std::string event_id;
     std::string room_id;
+    // Operator-facing title, e.g. "Sun 14 Sep 2025, 10:30" or "Harvest
+    // Festival". Empty means "no custom name" and the UI falls back to the
+    // start time.
+    std::string name;
     int64_t     started_at_ms = 0;
     uint64_t    first_seq = 0;
     double      segment_duration_s = 6.0;
@@ -67,6 +71,9 @@ struct EventInfo {
 struct RoomEventEntry {
     std::string event_id;
     std::string room_id;
+    // Mirrors EventInfo.name so a listing can label the event without reading
+    // the full descriptor.
+    std::string name;
     int64_t     started_at_ms = 0;
     std::string to_json() const;
     static RoomEventEntry from_json(const std::string&);
@@ -87,6 +94,9 @@ struct ManifestSegment {
 struct Manifest {
     std::string event_id;
     std::string status = "live";
+    // Operator-facing event title, carried here (not only in event.json) so the
+    // event list can show it without an extra request.
+    std::string name;
     int64_t     updated_at_ms = 0;
     // When this event started, so a satellite can convert any position to a
     // clock time even for segments outside the rolling window.

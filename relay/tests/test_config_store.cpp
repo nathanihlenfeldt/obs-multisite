@@ -89,7 +89,7 @@ int main() {
               "flip back on");
 
         // Enabling is what Start does, and it has to outlive a restart or a
-        // container replacement mid-service would come back doing nothing.
+        // container replacement mid-event would come back doing nothing.
         cs.set_enabled(d.id, true);
         CHECK(cs.destination(d.id)->enabled, "starting a destination persists");
 

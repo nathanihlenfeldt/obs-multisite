@@ -3,7 +3,7 @@
 //
 // Deliberately Qt-free. `obs_frontend_add_tools_menu_item` takes a plain C
 // callback, and hotkeys need no UI toolkit at all — only docks require a
-// QWidget. For a live service, hotkeys are also the better interface: an
+// QWidget. For a live event, hotkeys are also the better interface: an
 // operator holding for their own welcome wants a keypress, not a properties
 // dialog. A Qt dock (scrub bar, behind-live readout) can be layered on later
 // without changing any of this.
@@ -241,7 +241,7 @@ static void hotkey_toggle(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
 static void hotkey_live(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
     if (pressed) for_each_decoder([](DecoderControls* d) { d->jump_to_live(); });
 }
-// Play / Stop / Lock and jog, so a service can be run from the keyboard
+// Play / Stop / Lock and jog, so an event can be run from the keyboard
 // without touching the mouse — the same reason Resi ships hotkeys.
 static void hotkey_play(void*, obs_hotkey_id, obs_hotkey_t*, bool pressed) {
     if (pressed) decoder_play_all();

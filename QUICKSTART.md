@@ -7,7 +7,7 @@ inbound ports at any site.
 
 > **This is alpha software.** A six-hour soak test has run end to end, and the
 > Raspberry Pi campus player is working on real hardware, but **it has not yet
-> carried a real congregation's service.** If you put it in front of one, do it
+> carried a real congregation's event.** If you put it in front of one, do it
 > with a tested fallback and a technical person on hand. See
 > [Known gaps](README.md#known-gaps) before you plan around it.
 
@@ -15,13 +15,13 @@ inbound ports at any site.
 
 - **OBS Studio 32.2.2** at the main site and at each campus.
 - **An S3-compatible bucket.** Cloudflare R2 is the assumed default — it
-  charges no egress, which is what makes sending the same service to several
+  charges no egress, which is what makes sending the same event to several
   campuses affordable.
 - **An API token that can read *and* write the bucket**, including
   `s3:ListBucket`. Cloudflare's "Object Read & Write" token has it; an
   object-scoped token does not, and the recordings list will tell you so
   rather than showing you an empty list.
-- Roughly **2.7 GB of storage per hour** of service at 6 Mbps.
+- Roughly **2.7 GB of storage per hour** of event at 6 Mbps.
 
 ## 1. Install the plugin
 
@@ -47,7 +47,7 @@ under View → Docks.
 ## 2. Set a retention rule — do this before your first broadcast
 
 **Nothing in this project deletes anything.** Without a lifecycle rule, every
-service you ever broadcast stays in the bucket for ever.
+event you ever broadcast stays in the bucket for ever.
 
 In your storage provider's console, add a rule for the prefix `events/` and
 another for `rooms/`, both deleting objects after the same number of days.
@@ -78,13 +78,13 @@ sources to tracks in Advanced Audio Properties, then name them under
 2. Add a **Multisite Source (Decoder)** to a scene and enter the same feed
    name.
 3. Press **Load event**, let the buffer fill, then **Play** when you are ready.
-4. Press **Lock** for the service so nothing gets clicked by accident.
+4. Press **Lock** for the event so nothing gets clicked by accident.
 
 Each campus runs its own clock: **hold** the picture for a local welcome,
 **resume**, then **catch up to now** — or stay a set number of minutes behind
-live all service. What one campus does has no effect on any other.
+live all event. What one campus does has no effect on any other.
 
-To play a past service instead, pick it from the **Recordings** list. To add an
+To play a past event instead, pick it from the **Recordings** list. To add an
 ISO or the click, add a **Multisite Audio Track (Decoder)** for the same feed —
 it costs no extra download, because every track already arrives in the same
 segment.
@@ -94,7 +94,7 @@ segment.
 - **Stream to the public** without uploading twice — the relay container in
   [`relay/`](relay/README.md) reads the same files and pushes to YouTube,
   Facebook or any RTMP destination.
-- **Download a finished service** as one MP4, with every audio track.
+- **Download a finished event** as one MP4, with every audio track.
 - **Run a campus without a PC** — a Raspberry Pi 5 appliance with HDMI output
   and a browser control panel:
   ```sh

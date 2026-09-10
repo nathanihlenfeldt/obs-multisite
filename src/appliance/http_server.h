@@ -98,7 +98,7 @@ public:
 
     // Binds and starts accepting. Returns false (with `error` set) if the port
     // is taken — worth reporting plainly, because the usual cause is a second
-    // copy of the service already running.
+    // copy of the player already running.
     bool start(std::string& error);
     void stop();
 

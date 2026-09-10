@@ -36,7 +36,7 @@ bool header_is(const std::string& line, const char* name, std::string& value);
 // A single segment's rate is a poor guide — it includes connection setup and
 // whatever else the venue's link was doing that second — and a plain average
 // over the session hides the link getting worse, which is the thing worth
-// noticing during a service. So an exponentially-weighted mean: recent
+// noticing during an event. So an exponentially-weighted mean: recent
 // requests dominate, one slow fetch does not panic the display.
 class RateMeter {
 public:

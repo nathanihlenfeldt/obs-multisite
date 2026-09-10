@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
-// destination.h — one place a service is sent to, and what the operator chose
+// destination.h — one place an event is sent to, and what the operator chose
 // for it.
 //
 // A destination is deliberately dumb data: a URL, a key, and a selection. All
@@ -98,7 +98,7 @@ bool is_listener(const Destination& d);
 
 // Tidy a destination the way it was typed into the way it is stored, in place.
 //
-// Services publish SRT in every shape there is: a bare srt://host:port with
+// Events publish SRT in every shape there is: a bare srt://host:port with
 // the rest on the form beside it, or the whole thing in one line with the
 // stream id, passphrase and latency already in the query, or a listener
 // address with no host at all. All of those arrive in the same box, so this

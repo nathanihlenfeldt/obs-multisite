@@ -31,6 +31,10 @@ struct BroadcastSettings {
     std::string secret_access_key;
     std::string region = "auto";
     std::string room_id = "main-auditorium";
+    // Operator-facing title for the next event, taken from the dock at Go
+    // Live. Not persisted: it is per-event and defaults to the current
+    // date/time. Empty means "no custom name".
+    std::string event_name;
     bool        send_expiry_tag = false;   // R2 rejects tagging; a tag deletes nothing
 
     // media

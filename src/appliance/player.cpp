@@ -14,7 +14,7 @@ using namespace multisite;
 namespace {
 
 // The playout clock is monotonic, not wall time: a box that corrects its clock
-// by NTP mid-service must not jump the picture.
+// by NTP mid-event must not jump the picture.
 uint64_t now_ns() {
     using namespace std::chrono;
     return (uint64_t)duration_cast<nanoseconds>(
@@ -77,7 +77,7 @@ Player::StorageHealth Player::storage_health(bool probe) {
     }
 
     // Always cheap: these come from the segment traffic already flowing, so
-    // they cost nothing and describe the link actually carrying the service.
+    // they cost nothing and describe the link actually carrying the event.
     h.endpoint     = tx->host();
     h.colo         = tx->last_colo();
     h.server       = tx->last_server();
@@ -174,7 +174,7 @@ void Player::start() {
     }
 
     // The identity screen comes up immediately and stays for a few seconds,
-    // even though a service may be about to take the picture over.
+    // even though an event may be about to take the picture over.
     m_boot_splash_until_ns = now_ns() + kBootSplashNs;
     m_boot_splash_drawn = false;
 
@@ -212,7 +212,7 @@ void Player::stop() {
         m_catalog.reset();
         m_transport.reset();
     }
-    // Never leave the last frame of a service on a screen in an empty room.
+    // Never leave the last frame of an event on a screen in an empty room.
     m_video.blank();
     m_audio.close();
     m_audio_open = false;
@@ -263,7 +263,7 @@ void Player::reconfigure(const Config& cfg) {
     m_delay_from_live_s = cfg.delay_from_live_s;
 
     // Only a change to what is being received justifies taking the picture
-    // away. Editing the idle colour must not interrupt a service.
+    // away. Editing the idle colour must not interrupt an event.
     const bool receive_changed =
         before.endpoint_host      != cfg.endpoint_host ||
         before.r2_account_id      != cfg.r2_account_id ||
@@ -282,7 +282,7 @@ void Player::reconfigure(const Config& cfg) {
 
     // Settings that decide where picture and sound come OUT are applied by
     // reopening those outputs, not by restarting the receive path. Changing
-    // the resolution must not tear down a service's buffer, and a setting
+    // the resolution must not tear down an event's buffer, and a setting
     // that only takes effect after a reboot is no use on a box with no
     // keyboard.
     const bool display_changed =
@@ -390,7 +390,7 @@ void Player::on_audio(const DecodedAudioFrame& f) {
     if (!m_running.load()) return;
 
     // One track goes to air. OBS publishes up to six and an event carries
-    // every one it was told to, so a six-track service used to put all six
+    // every one it was told to, so a six-track event used to put all six
     // into the same stereo device: six times real time into an output that
     // accepts one, on the thread that also presents video. ALSA applied the
     // back-pressure it should, and video starved behind it — a few frames a
@@ -525,7 +525,7 @@ void Player::deliver_loop() {
 
         // Boot splash: while it is showing, drop video and audio alike so the
         // picture stays on the identity screen and the playout clock keeps
-        // running — the box simply comes in a few seconds into the service.
+        // running — the box simply comes in a few seconds into the event.
         if (now_ns() < m_boot_splash_until_ns.load()) continue;
 
         // Something has reached the output, so whatever was asked for has
@@ -613,7 +613,7 @@ SplashInfo Player::splash_info() const {
         const double ahead = sess->buffered_ahead_s();
         // A dead link while content is still buffered is the one moment the
         // screen must say something specific: the venue's internet is gone but
-        // the service can keep playing for a while. Saying "waiting for the
+        // the event can keep playing for a while. Saying "waiting for the
         // main site" here would read as a fault at the main site, which it is
         // not.
         if (sess->link_health() == LinkHealth::Offline && ahead > 1.0) {
@@ -629,7 +629,7 @@ SplashInfo Player::splash_info() const {
                 info.state = "RECORDING READY";
                 break;
             case RoomState::Interrupted:
-                info.state = "LAST SERVICE WAS CUT SHORT";
+                info.state = "LAST EVENT WAS CUT SHORT";
                 break;
             case RoomState::Offline:
                 info.state = "WAITING FOR THE MAIN SITE";
@@ -651,7 +651,7 @@ SplashInfo Player::splash_info() const {
 
 void Player::update_screen() {
     // Boot splash: the identity screen owns the display for the first few
-    // seconds after power-on, whatever idle mode is set and whether a service
+    // seconds after power-on, whatever idle mode is set and whether an event
     // is already arriving (delivery holds its frames back meanwhile).
     if (now_ns() < m_boot_splash_until_ns.load()) {
         if (!m_boot_splash_drawn.exchange(true)) {
@@ -670,7 +670,7 @@ void Player::update_screen() {
         m_idle_showing = false;
     }
 
-    // Frames are reaching the display: there is a service on, and nothing
+    // Frames are reaching the display: there is an event on, and nothing
     // here should touch the screen.
     const uint64_t last = m_last_frame_ns.load();
     if (last != 0 && now_ns() - last < 2000000000ULL) {
@@ -789,6 +789,7 @@ void Player::poll_loop() {
                 for (const auto& e : cat->events()) {
                     EventEntry row;
                     row.event_id   = e.event_id;
+                    row.name       = e.name;
                     row.started_ms = (long long)e.started_at_ms;
                     row.duration_s = e.duration_s;
                     row.state      = (int)e.state;
@@ -974,7 +975,7 @@ void Player::stop_playback() {
     m_paused = false;
     flush_delivery();
     // Stopping is a deliberate act, so the screen should reflect it rather
-    // than keeping the last frame of a service up. Downloading continues.
+    // than keeping the last frame of an event up. Downloading continues.
     Config cfg = config();
     if (cfg.idle_mode != IdleMode::HoldFrame) m_video.blank();
     plog_info("STOPPED (still downloading, ready to play again)");

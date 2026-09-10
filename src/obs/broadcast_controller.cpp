@@ -255,6 +255,7 @@ bool BroadcastController::go_live(std::string& error) {
     obs_data_set_string(s, "secret_access_key", m_cfg.secret_access_key.c_str());
     obs_data_set_string(s, "region", m_cfg.region.c_str());
     obs_data_set_string(s, "room_id", m_cfg.room_id.c_str());
+    obs_data_set_string(s, "event_name", m_cfg.event_name.c_str());
     obs_data_set_double(s, "segment_duration_s", m_cfg.segment_duration_s);
     obs_data_set_string(s, "track_labels", m_cfg.track_labels.c_str());
     obs_data_set_string(s, "channel_labels", m_cfg.channel_labels.c_str());

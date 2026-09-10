@@ -3,9 +3,9 @@
 A campus can receive in one of two ways, and they suit different rooms.
 
 **OBS on a PC** — the decoder is a *source in a scene*, so the campus can
-produce around the relayed service. **The Pi appliance** — a fixed-function box
-that plays the service and nothing else. Both are built; neither has yet run a
-real service.
+produce around the relayed event. **The Pi appliance** — a fixed-function box
+that plays the event and nothing else. Both are built; neither has yet run a
+real event.
 
 ### What running the decoder in OBS makes possible
 
@@ -13,10 +13,10 @@ Because the relayed programme is an ordinary source, everything OBS does applies
 to it. This is the reason to choose a PC over the appliance, and for many
 churches it is the deciding factor.
 
-**Local content over the relayed service**
+**Local content over the relayed event**
 
 - Lower thirds, campus announcements, scripture graphics, a countdown before the
-  service, a logo bug — keyed over the incoming picture with OBS's normal
+  event, a logo bug — keyed over the incoming picture with OBS's normal
   sources and filters.
 - Cut away entirely to a local camera for a campus host, a local worship set or
   notices, then back to the relay. The decoder keeps downloading while it is off
@@ -91,12 +91,12 @@ channels through this pipeline with the channel order intact either way.
 ### Any location can be the origin
 
 Both plugins are one module, so any machine running OBS can take either role.
-What originates a service is a laptop with OBS on it, so a broadcast can start
+What originates an event is a laptop with OBS on it, so a broadcast can start
 anywhere someone can run it:
 
 - a guest speaker or travelling pastor, publishing from wherever they are;
 - a conference or camp venue, for a week, and then never again;
-- a second campus hosting this week's combined service, with the usual main
+- a second campus hosting this week's combined event, with the usual main
   site receiving for once;
 - a temporary or overflow site set up at short notice.
 
@@ -114,7 +114,7 @@ which would kill a direct stream — it arrives whole or visibly incomplete, nev
 broken in the middle.
 
 The latency rule is unchanged: tens of seconds each way means this relays a
-service, it does not hold a conversation between sites.
+event, it does not hold a conversation between sites.
 
 Keep rooms separate — a guest publishes to `guest-speaker`, not to
 `main-auditorium` — so an occasional broadcast can never be mistaken for the
@@ -123,11 +123,11 @@ main programme.
 ### When the appliance is the better answer
 
 The appliance gives all of that up on purpose. No scene, no overlays, no local
-sources: it plays the relayed service, on a box that costs less than a monitor,
-boots into the service on power-up, and is driven from a phone with no desktop
+sources: it plays the relayed event, on a box that costs less than a monitor,
+boots into the event on power-up, and is driven from a phone with no desktop
 to leave in the wrong state.
 
-Choose it where a campus needs the service on a screen and nothing more — an
+Choose it where a campus needs the event on a screen and nothing more — an
 overflow room, a chapel, a plant meeting in a school hall. Choose OBS where the
 campus produces around the relay, or where it has to reach existing SDI, NDI or
 Dante infrastructure.
@@ -145,13 +145,13 @@ stock **Raspberry Pi OS Lite (64-bit)**:
 curl -fsSL --retry 5 https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/install.sh | sudo bash
 ```
 
-That installs the dependencies, builds the player, installs it as a service
+That installs the dependencies, builds the player, installs it as an event
 that starts on power-up, and puts a screen up on the HDMI output showing the
 box's own address and a QR code of it: point a phone at the screen and the
 control page opens, nothing to type. Everything else is done from a phone or
 tablet on the same network — storage credentials, which room to follow, the
 output resolution and frame rate, the sound device, the clock, and the
-transport controls during a service.
+transport controls during an event.
 
 - **It owns the display.** The player sets the KMS mode itself, so the output
   resolution and frame rate are exactly what was asked for and there is no

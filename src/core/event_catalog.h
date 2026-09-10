@@ -34,6 +34,9 @@ const char* to_string(EventState s);
 struct EventSummary {
     std::string event_id;
     std::string room_id;
+    // Operator-facing title, read from the manifest. Empty for events that
+    // predate naming, or where the encoder never set one.
+    std::string name;
     int64_t     started_at_ms = 0;
     int64_t     last_update_ms = 0;      // manifest.updated_at_ms
     EventState  state = EventState::Unknown;

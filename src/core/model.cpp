@@ -69,6 +69,7 @@ std::string EventInfo::to_json() const {
     json j;
     j["event_id"]           = event_id;
     j["room_id"]            = room_id;
+    j["name"]               = name;
     j["started_at_ms"]      = started_at_ms;
     j["first_seq"]          = first_seq;
     j["segment_duration_s"] = segment_duration_s;
@@ -82,6 +83,7 @@ EventInfo EventInfo::from_json(const std::string& s) {
     EventInfo e;
     e.event_id           = j.value("event_id", "");
     e.room_id            = j.value("room_id", "");
+    e.name               = j.value("name", "");
     e.started_at_ms      = j.value("started_at_ms", (int64_t)0);
     e.first_seq          = j.value("first_seq", (uint64_t)0);
     e.segment_duration_s = j.value("segment_duration_s", 6.0);
@@ -131,7 +133,7 @@ std::string event_id_from_index_key(const std::string& key) {
 // ── RoomEventEntry ────────────────────────────────────────────────────────────
 std::string RoomEventEntry::to_json() const {
     json j = { {"event_id", event_id}, {"room_id", room_id},
-               {"started_at_ms", started_at_ms} };
+               {"name", name}, {"started_at_ms", started_at_ms} };
     return j.dump();
 }
 RoomEventEntry RoomEventEntry::from_json(const std::string& s) {
@@ -139,6 +141,7 @@ RoomEventEntry RoomEventEntry::from_json(const std::string& s) {
     RoomEventEntry e;
     e.event_id      = j.value("event_id", "");
     e.room_id       = j.value("room_id", "");
+    e.name          = j.value("name", "");
     e.started_at_ms = j.value("started_at_ms", (int64_t)0);
     return e;
 }
@@ -196,6 +199,7 @@ std::string Manifest::to_json() const {
     json j;
     j["event_id"]            = event_id;
     j["status"]              = status;
+    j["name"]                = name;
     j["updated_at_ms"]       = updated_at_ms;
     j["started_at_ms"]       = started_at_ms;
     j["first_available_seq"] = first_available_seq;
@@ -216,6 +220,7 @@ Manifest Manifest::from_json(const std::string& s) {
     Manifest m;
     m.event_id            = j.value("event_id", "");
     m.status              = j.value("status", "live");
+    m.name                = j.value("name", "");
     m.updated_at_ms       = j.value("updated_at_ms", (int64_t)0);
     m.started_at_ms       = j.value("started_at_ms", (int64_t)0);
     m.first_available_seq = j.value("first_available_seq", (uint64_t)0);

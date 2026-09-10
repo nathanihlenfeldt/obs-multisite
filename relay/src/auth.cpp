@@ -20,7 +20,7 @@ namespace {
 constexpr int kIterations = 210000;
 constexpr size_t kSaltBytes = 16;
 constexpr size_t kHashBytes = 32;
-constexpr int64_t kSessionLifetimeMs = 12LL * 60 * 60 * 1000;   // a long service day
+constexpr int64_t kSessionLifetimeMs = 12LL * 60 * 60 * 1000;   // a long event day
 
 int64_t now_ms() {
     return std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -92,10 +92,10 @@ std::string Auth::set_credentials(const std::string& user_in,
     const std::string user = trim(user_in);
     if (user.empty()) return "Choose a username.";
     // Not a policy, a floor. The only thing standing between this and a
-    // stranger redirecting a church's service is what gets typed here.
+    // stranger redirecting a church's event is what gets typed here.
     if (password.size() < 10)
         return "Use a password of at least 10 characters. This is the only "
-               "thing stopping a stranger from changing where your service "
+               "thing stopping a stranger from changing where your event "
                "is sent.";
 
     const std::string salt_hex = random_hex(kSaltBytes);

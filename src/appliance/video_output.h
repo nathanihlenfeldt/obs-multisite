@@ -82,7 +82,7 @@ public:
                               const uint8_t* pixels) = 0;
 
     // Show nothing at all. Used for the black idle mode and on shutdown, so a
-    // stopped box does not leave the last frame of a service on a screen in
+    // stopped box does not leave the last frame of an event on a screen in
     // an empty room.
     virtual void blank() = 0;
 

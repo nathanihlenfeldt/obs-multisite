@@ -129,8 +129,8 @@ int main(int argc, char** argv) {
         }
     }
 
-    // Binds to localhost unless told otherwise. The relay can change where a
-    // church's service is sent, so publishing it to the internet has to be a
+    // Binds to localhost unless told otherwise. The relay can change where an
+    // event is sent, so publishing it to the internet has to be a
     // deliberate act — put a TLS-terminating proxy in front of it and point
     // that at this, rather than opening the port.
     const std::string bind = env("RELAY_BIND", "127.0.0.1");

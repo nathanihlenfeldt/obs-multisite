@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 // test_link_health.cpp — the three-state connection readout.
 //
-// This is what tells an operator, mid-service, that their venue's internet has
+// This is what tells an operator, mid-event, that their venue's internet has
 // gone while the buffered segments are still playing out. The arithmetic is
 // kept in the core so it can be tested without a network, a bucket or libcurl.
 #include "../src/core/link_health.h"

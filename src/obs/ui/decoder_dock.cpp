@@ -60,7 +60,7 @@ static QString position(long long ms) {
     return QString("%1:%2").arg(m).arg(s, 2, 10, QChar('0'));
 }
 
-// Clock time of a position in the service, e.g. "10:42:06".
+// Clock time of a position in the event, e.g. "10:42:06".
 static QString clock_time(long long ms) {
     if (ms <= 0) return QString("--:--");
     return QDateTime::fromMSecsSinceEpoch((qint64)ms).toString("HH:mm:ss");
@@ -141,7 +141,7 @@ void TimelineBar::paintEvent(QPaintEvent*) {
     // Three states, three distinct colours — and no translucent overlays.
     // Layering a see-through "played" band over the downloaded band produced
     // a second greenish shade that meant nothing, which is exactly the kind of
-    // thing an operator should never have to decode mid-service.
+    // thing an operator should never have to decode mid-event.
     //
     //   grey  = exists in storage, not downloaded here
     //   blue  = downloaded and already played
@@ -309,7 +309,7 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     }
 
     // Load, then play. Loading fills the buffer; Play puts it to air. Keeping
-    // these separate is how an operator prepares before a service rather than
+    // these separate is how an operator prepares before an event rather than
     // having playback start the moment enough has arrived.
     auto* startRow = new QHBoxLayout();
     m_start = new QPushButton(tr_("Dock.Load"), this);
@@ -386,7 +386,7 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     // ── Recordings ──────────────────────────────────────────────────────────
     // Everything the room still holds, newest first, with anything live at the
     // top. Choosing one plays it instead of the live feed; the decoder stays on
-    // it even if a service starts, and says so rather than switching.
+    // it even if an event starts, and says so rather than switching.
     {
         auto* evBox = new QGroupBox(tr_("Dock.Recordings"), this);
         auto* evRoot = new QVBoxLayout(evBox);
@@ -642,7 +642,10 @@ static QString event_row_text(const EventEntry& e) {
             : QString("%1 min").arg(mins);
     }
 
-    QString row = when;
+    QString row;
+    const QString name = QString::fromStdString(e.name).trimmed();
+    if (!name.isEmpty()) row = name + "   " + when;   // title first, time after
+    else                 row = when;
     if (!len.isEmpty())   row += "   " + len;
     if (!state.isEmpty()) row += "   " + state;
     return row;
@@ -742,7 +745,7 @@ void DecoderDock::refreshEvents(const DecoderSnapshot& s) {
                             m_events->currentItem() != nullptr);
     m_returnLive->setEnabled(ctl && !s.loading && !s.pinned_event_id.empty());
 
-    // A service has started while a recording is pinned. The decoder stays
+    // An event has started while a recording is pinned. The decoder stays
     // where it is on purpose — being pulled out of a recording mid-watch would
     // be worse — so the dock offers the switch rather than taking it.
     if (m_liveElsewhere) {
@@ -823,7 +826,7 @@ void DecoderDock::refresh() {
             break;
         case 3:
             // Three different situations, and an operator needs to tell them
-            // apart: the encoder died mid-service, the service they were
+            // apart: the encoder died mid-event, the event they were
             // watching has just finished, or this was already a recording when
             // they loaded it.
             if (s.interrupted) {

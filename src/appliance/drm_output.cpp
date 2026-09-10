@@ -12,7 +12,7 @@
 // Frames arrive as I420 at whatever size the main site encoded. They are
 // scaled and converted straight into a scan-out buffer with libswscale, which
 // is NEON-accelerated on ARM. Letterboxing is done here rather than by
-// stretching: a service delivered in one shape and shown in another looks
+// stretching: an event delivered in one shape and shown in another looks
 // wrong in a way a congregation notices.
 //
 #include "video_output.h"
@@ -224,7 +224,7 @@ bool DrmOutput::pick_device(const Config& cfg, std::string& error) {
         if (fd < 0) {
             last = path + ": " + strerror(errno);
             if (errno == EACCES)
-                last += " (the service needs to be in the 'video' group)";
+                last += " (the player needs to be in the 'video' group)";
             continue;
         }
 
@@ -367,7 +367,7 @@ void DrmOutput::close() {
     if (m_fd < 0) return;
     wait_for_flip();
 
-    // Put the console back the way it was, so a stopped service does not
+    // Put the console back the way it was, so a stopped event does not
     // leave a black screen that looks like broken hardware.
     if (m_saved_crtc) {
         drmModeSetCrtc(m_fd, m_saved_crtc->crtc_id, m_saved_crtc->buffer_id,
@@ -393,7 +393,7 @@ void DrmOutput::wait_for_flip() {
     ev.page_flip_handler = on_page_flip;
 
     // A bounded wait. If the driver never reports the flip — which happens if
-    // the screen is unplugged mid-service — playback must carry on rather than
+    // the screen is unplugged mid-event — playback must carry on rather than
     // block the delivery thread for ever.
     pollfd pfd{};
     pfd.fd = m_fd;

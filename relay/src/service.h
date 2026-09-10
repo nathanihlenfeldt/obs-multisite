@@ -35,13 +35,13 @@ struct ServiceStatus {
     // by name and warn before anything is started.
     std::vector<std::string> audio_labels;
     std::string video_summary;    // "1920x1080 H.264"
-    // Whether ANY destination could carry this service. The two protocols do
+    // Whether ANY destination could carry this event. The two protocols do
     // not accept the same video, so these are three separate facts and not one:
     // nothing can take it, everything can, or some can and some cannot.
     bool        can_send = false;
     // Why nothing can. Empty when something can.
     std::string cannot_send_reason;
-    // Why some can and some cannot — an HEVC service, in practice, which no
+    // Why some can and some cannot — an HEVC event, in practice, which no
     // streaming site will take but an SRT destination carries unchanged. Kept
     // apart from the above because it is information rather than an obstacle,
     // and showing it as one would have an operator stop setting up a stream
@@ -75,7 +75,7 @@ public:
 
     void set_enabled(int64_t id, bool on);
 
-    // ── Past services ────────────────────────────────────────────────────────
+    // ── Past events ──────────────────────────────────────────────────────────
     std::vector<multisite::EventSummary> events(bool force = false);
     // Whether this event may be downloaded or rebroadcast: it must exist, and
     // it must not be the one currently on air. Returns a reason, or empty.
@@ -83,7 +83,7 @@ public:
     RoomFeeder* feeder();
 
     // ── Rebroadcast (proof of concept) ───────────────────────────────────────
-    // Plays a finished service out to a destination as though it were live.
+    // Plays a finished event out to a destination as though it were live.
     // One at a time on purpose: this is the first version of the idea, and a
     // church running several at once needs answers about bandwidth and
     // scheduling that do not exist yet.

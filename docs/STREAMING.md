@@ -1,11 +1,11 @@
 # Streaming to the public
 
 The campuses are not always the only audience. `relay/` is a small self-hosted
-service that reads the same segments and pushes them out to YouTube, Facebook,
+event that reads the same segments and pushes them out to YouTube, Facebook,
 or any RTMP destination — and over SRT to anywhere that prefers it.
 
 It relays from the bucket rather than adding a second output to OBS, which
-matters twice over. The main site uploads once whether the service is going to
+matters twice over. The main site uploads once whether the event is going to
 two campuses or to two campuses and the internet — often the difference between
 possible and not on a venue connection. And the public stream inherits the
 buffering the campus feed already has: it runs a few minutes behind on purpose,
@@ -23,15 +23,15 @@ Then open it in a browser, put in the bucket details, and add a destination.
 A $5/month VPS is the target rather than a stretch, because nothing is being
 re-encoded.
 
-- **It has a login, and binds to localhost by default.** This service decides
-  where your services are sent, so exposing it is a decision rather than a
+- **It has a login, and binds to localhost by default.** This event decides
+  where your events are sent, so exposing it is a decision rather than a
   default. Put HTTPS in front of it; `relay/Caddyfile.example` is a working
   config.
 - **One chosen sound feed per destination**, picked by the name the main site
   gave it — "Main Mix", "Sermon ISO" — never a track number. A future
   "clean feed to Facebook, main mix to YouTube" is just two destinations.
 - **A delay you choose**, three minutes by default. This is the setting worth
-  understanding: it is how much of the service the relay holds in hand, and so
+  understanding: it is how much of the event the relay holds in hand, and so
   how long an outage at the main site can last before the public sees it.
 - **It reconnects by itself** and resumes from where it stopped, so nothing is
   skipped. A silence under 45 seconds is ridden out without even dropping the
@@ -55,10 +55,10 @@ re-encoded.
   because sending any of them onward would mean a stream the destination
   rejects, or a mic ISO going out to the public.
 
-It also does two things with services that have already finished:
+It also does two things with events that have already finished:
 
 - **Download one as an MP4**, streamed straight from storage — nothing is
-  assembled on the server, so a two-hour service costs no disk. The file
+  assembled on the server, so a two-hour event costs no disk. The file
   carries every audio track the main site sent, not just the streamed one, so
   the ISOs and the click are there for whoever edits it.
 - **Replay one to a destination** as though it were happening now, for a

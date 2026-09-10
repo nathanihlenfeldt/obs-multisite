@@ -4,7 +4,7 @@
 //
 // The classification is the point. A list of event IDs is useless; what matters
 // is which one is on air, which are finished recordings, and which were cut off
-// mid-service by an encoder that died. That last state is the one the protocol
+// mid-event by an encoder that died. That last state is the one the protocol
 // previously had no way to express: an interrupted event stays marked "live"
 // forever, and before this it could never be played back at all — precisely
 // when you would most want to watch it again.
@@ -86,19 +86,23 @@ public:
 // given state.
 static void make_event(MemStore& s, const std::string& id, const std::string& room,
                        int64_t started_ms, const std::string& status,
-                       int64_t updated_ms, bool with_index = true) {
+                       int64_t updated_ms, bool with_index = true,
+                       const std::string& name = "") {
     EventInfo ev;
     ev.event_id = id; ev.room_id = room; ev.started_at_ms = started_ms;
+    ev.name = name;
     s.objects[event_prefix_for(id) + "event.json"] = ev.to_json();
 
     if (with_index) {
         RoomEventEntry ix;
         ix.event_id = id; ix.room_id = room; ix.started_at_ms = started_ms;
+        ix.name = name;
         s.objects[room_event_key(room, id)] = ix.to_json();
     }
 
     Manifest m;
     m.event_id = id; m.status = status;
+    m.name = name;
     m.started_at_ms = started_ms; m.updated_at_ms = updated_ms;
     m.latest_seq = 100; m.first_available_seq = 0;
     ManifestSegment seg;
@@ -156,6 +160,27 @@ int main() {
         CHECK(cat.skipped() == 0, "nothing skipped");
     }
 
+    // ── The event name surfaces from the manifest ─────────────────────────────
+    std::printf("Event names\n");
+    {
+        MemStore s;
+        make_event(s, "01NAMED", "main", NOW - 60 * MIN, "ended", NOW - 30 * MIN,
+                   true, "Harvest Festival");
+        make_event(s, "01UNNAMED", "main", NOW - 120 * MIN, "ended", NOW - 90 * MIN);
+
+        CatalogConfig cfg; cfg.room_id = "main";
+        EventCatalog cat(cfg, s);
+        CHECK(cat.refresh(NOW), "refresh succeeds");
+        auto ev = cat.events();
+        CHECK(ev.size() == 2, "both events listed");
+        if (ev.size() == 2) {
+            CHECK(ev[0].event_id == "01NAMED" && ev[0].name == "Harvest Festival",
+                  "a named event surfaces its name");
+            CHECK(ev[1].event_id == "01UNNAMED" && ev[1].name.empty(),
+                  "an unnamed event has an empty name (UI falls back to the time)");
+        }
+    }
+
     // ── A room with no live pointer at all ───────────────────────────────────
     std::printf("A room that is not on air\n");
     {
@@ -204,9 +229,9 @@ int main() {
     }
 
     // ── A bucket part-way through the change ─────────────────────────────────
-    // The case a real bucket is actually in: services recorded before the room
+    // The case a real bucket is actually in: events recorded before the room
     // index existed, and one recorded since. Treating a non-empty index as the
-    // whole truth hid every older service the moment one indexed event
+    // whole truth hid every older event the moment one indexed event
     // appeared — the operator saw the newest recording and nothing else, while
     // the rest sat in storage, playable, and unlisted.
     std::printf("Indexed and un-indexed events in one bucket\n");

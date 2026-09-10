@@ -310,7 +310,7 @@ SystemInfo system_info() {
     }
 
     // Sustained decode on a passively cooled Pi throttles during a long
-    // service, and an under-powered supply produces exactly the same symptom
+    // event, and an under-powered supply produces exactly the same symptom
     // as a bad network. Both are worth reporting rather than guessing at.
     if (have_command("vcgencmd")) {
         const std::string th = run("vcgencmd get_throttled");
@@ -333,7 +333,7 @@ SystemInfo system_info() {
 }
 
 std::string restart_service() {
-    plog_info("restarting the player service at the operator's request");
+    plog_info("restarting the player at the operator's request");
     // Detached, because systemd will stop this very process: replying first
     // and acting a moment later is what lets the browser see the answer.
     int rc = 0;

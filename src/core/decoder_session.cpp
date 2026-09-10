@@ -78,7 +78,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
 
     // 1. Which event is live in this room? Read even when an event is pinned:
     //    the answer is not what to play, but it is what tells an operator
-    //    watching a recording that a service has started.
+    //    watching a recording that an event has started.
     std::string pinned;
     {
         std::lock_guard<std::mutex> lk(m_mtx);
@@ -225,7 +225,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
     // event whose manifest stops advancing. Stop treating it as live — but
     // it is still a recording of everything that happened up to the moment the
     // encoder went, and that is exactly the material someone wants afterwards.
-    // Reporting it as Offline (as this once did) made a crashed service
+    // Reporting it as Offline (as this once did) made a crashed event
     // permanently unwatchable, since nothing offline can be played.
     const int64_t age = now - m_manifest_updated_ms;
     if (m_manifest.status == "ended") {
@@ -240,7 +240,7 @@ RoomState DecoderSession::poll(int64_t now_override) {
         { std::lock_guard<std::mutex> elk(m_err_mtx); m_last_error.clear(); }
     }
     // Whether the ROOM is live, which is not the same as whether the event
-    // being played is: a pinned recording sits alongside a live service.
+    // being played is: a pinned recording sits alongside a live event.
     m_room_is_live = (!live.event_id.empty() && live.status == "live" &&
                       (m_cfg.stale_after_ms <= 0 ||
                        now - live.updated_at_ms <= (int64_t)m_cfg.stale_after_ms));
@@ -392,7 +392,7 @@ bool DecoderSession::start() {
         if (is_vod(rs)) {
             // A recording that has already finished is video-on-demand: start
             // at the beginning. Starting near the end (which is what treating
-            // it as "live" does) means loading a finished service and landing
+            // it as "live" does) means loading a finished event and landing
             // twelve seconds from the close. The whole recording already
             // exists, so it cannot stall the way a live edge can.
             want = m_first_available_seq.load();
@@ -707,7 +707,7 @@ int64_t DecoderSession::seek_to_wall_ms(int64_t wall_ms) {
             // Outside the window: derive from the event start.
             const int64_t offset = wall_ms - m_manifest.started_at_ms;
             if (offset < 0)
-                return fail("that is before this service started");
+                return fail("that is before this event started");
             target = (uint64_t)((double)offset / 1000.0 / seg);
             seg_start = m_manifest.started_at_ms +
                         (int64_t)((double)target * seg * 1000.0);

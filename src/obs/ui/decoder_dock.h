@@ -149,7 +149,7 @@ private:
     QSpinBox*  m_startBufferS = nullptr;
     QSpinBox*  m_bufferMins = nullptr;
     // In a dialog rather than the dock, for the same reason as the encoder:
-    // settings are set once, the dock is watched mid-service.
+    // settings are set once, the dock is watched mid-event.
     QDialog* m_settings = nullptr;
     QPushButton* m_settingsBtn = nullptr;
 };

@@ -51,7 +51,7 @@ public:
     long write_some(const uint8_t* data, size_t len);
 
     // No more content. ffmpeg flushes what it has and exits by itself; this is
-    // how the last few seconds of a service reach the destination instead of
+    // how the last few seconds of an event reach the destination instead of
     // being cut off.
     void close_input();
 

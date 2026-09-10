@@ -159,7 +159,7 @@ bool HttpServer::start(std::string& error) {
     if (::bind(m_listen_fd, (sockaddr*)&addr, sizeof(addr)) != 0) {
         error = "cannot listen on port " + std::to_string(m_port) + ": " +
                 strerror(errno) +
-                (errno == EADDRINUSE ? " (is the service already running?)" : "");
+                (errno == EADDRINUSE ? " (is the player already running?)" : "");
         ::close(m_listen_fd); m_listen_fd = -1;
         return false;
     }

@@ -1,6 +1,6 @@
 # obs-multisite
 
-Distribute a live church service from a main campus to any number of satellite
+Distribute a live church event from a main campus to any number of satellite
 campuses, reliably, over ordinary venue internet — using nothing but an
 S3-compatible bucket you control.
 
@@ -21,13 +21,13 @@ far more than one that is two seconds behind and stutters.
 
 > **⚠️ Alpha — development build.** This is pre-release software under active
 > development. A six-hour continuous soak has been run end to end (see
-> [Status](#status)), but it has not yet carried a real congregation's service.
+> [Status](#status)), but it has not yet carried a real congregation's event.
 > Interfaces, settings and the storage protocol may still change without a
 > migration path, and there is no support contract, warranty or uptime
 > guarantee of any kind.
 >
 > Production use comes with caveats. Run it only with a tested fallback in
-> place, a technical person on hand, and the assumption that any given service
+> place, a technical person on hand, and the assumption that any given event
 > may have to go ahead without it. Treat a successful rehearsal as necessary
 > rather than sufficient.
 
@@ -40,7 +40,7 @@ far more than one that is two seconds behind and stutters.
 | Get broadcasting in about twenty minutes | [QUICKSTART.md](QUICKSTART.md) |
 | Install, configure and operate in depth | [Operator guide](docs/OPERATOR.md) |
 | Choose between a PC and the Pi box | [Choosing a satellite](docs/SATELLITE.md) |
-| Send the service to YouTube or Facebook | [Streaming to the public](docs/STREAMING.md) |
+| Send the event to YouTube or Facebook | [Streaming to the public](docs/STREAMING.md) |
 | Build, test or contribute | [Developer guide](docs/DEVELOPER.md) |
 | Read the design and storage protocol | [PROJECT-SCOPE.md](PROJECT-SCOPE.md) |
 
@@ -68,7 +68,7 @@ is smaller than a year of subscription.
 
 ### What this is not
 
-**It is not a managed service.** The commercial products are, and that is worth
+**It is not a managed event.** The commercial products are, and that is worth
 paying for. Someone answers the phone. Someone watches the infrastructure.
 Someone ships you a decoder that boots and works. If your church can afford one
 and it is available where you are, you should probably buy it.
@@ -80,7 +80,7 @@ instead: you own your storage, you own your content, your ongoing cost is a few
 dollars a month of object storage, and nothing can be taken away from you or
 priced beyond your reach later.
 
-**It is not low latency, and it is not two-way.** This carries a service from
+**It is not low latency, and it is not two-way.** This carries an event from
 one site to others with a delay measured in tens of seconds. It cannot support a
 live conversation between campuses, a two-way interview, or anything else where
 people need to respond to each other in real time. For that, use SRT or WebRTC:
@@ -93,9 +93,9 @@ than SRT's own.)
 
 This project takes the opposite trade deliberately. Content is written to disk
 before it is sent, sent again until the storage confirms it, and buffered deeply
-at the far end before it is played. Minutes of the service can be held at the
+at the far end before it is played. Minutes of the event can be held at the
 satellite in advance, so an outage part-way through is something the
-congregation never sees. Latency is the price, and for a service being relayed
+congregation never sees. Latency is the price, and for an event being relayed
 rather than a conversation being held, it is a price worth paying.
 
 ### What it asks of your network
@@ -107,7 +107,7 @@ IP, no VPN, and no firewall rules to negotiate with a building's IT.
 That means it works on connections that would defeat a direct stream: mobile
 data, LEO satellite, consumer fibre, and networks behind carrier-grade NAT. If a
 laptop at the site can load a web page, it can usually send or receive a
-service.
+event.
 
 ### On intellectual property
 
@@ -119,7 +119,7 @@ Where our design resembles existing products, it is because we are solving the
 same problem under the same constraints and arriving at similar answers, or
 because we have deliberately followed conventions that operators already
 understand. Familiarity is a feature in a room where a volunteer is running the
-service.
+event.
 
 It is released under the **GPLv3** in support of kingdom expansion and the
 enabling of local churches: free for any church to run, adapt and keep running
@@ -155,29 +155,29 @@ Audio and video stayed in sync across the whole run, checked by eye and ear as
 well as by the reported A/V offset, which held between 0.005 s and 0.021 s
 through several decoder restarts.
 
-It has still **not carried a real congregation's service** — a soak test on
+It has still **not carried a real congregation's event** — a soak test on
 looping media is not a Sunday morning with people in the room.
 
 A campus can receive in either of two ways — the OBS decoder on a PC, or the
 Raspberry Pi appliance — and both are built. See
 [Choosing a satellite](docs/SATELLITE.md). The appliance has not run a
-service either.
+event either.
 
 The public simulcast relay is built and is the first piece of Phase 7. It has
 pushed live streams to YouTube, sends over SRT as well as RTMP, and survives
 having its encoder killed mid-stream — but it has not yet been through a full
-service. HEVC can now go out over SRT; that path is verified against ffmpeg
+event. HEVC can now go out over SRT; that path is verified against ffmpeg
 but has not yet carried real encoder output.
 
 **What works**
 
 - Durable store-and-forward upload: nothing is lost through an outage, a crash,
-  or a mid-service restart.
+  or a mid-event restart.
 - CMAF segments from any OBS encoder — H.264 or HEVC via x264, NVENC, QuickSync
   or AMF.
 - Satellite receive with a deep local buffer, checksum verification, and
   timeslipping — hold, resume, catch up, scrub, jump to a marker. Playback
-  waits until a minute of the service is buffered before starting, so the
+  waits until a minute of the event is buffered before starting, so the
   picture never chases the live edge.
 - **Multi-track production audio.** Up to 6 OBS tracks — main mix, ISOs, click —
   travel in the same fragment and are exposed at the satellite as separate
@@ -186,7 +186,7 @@ but has not yet carried real encoder output.
   on air, which are finished recordings and which were cut short by an encoder
   that died, and plays any of them back.
 - Finished *and interrupted* events play as video-on-demand from the beginning —
-  a service whose encoder crashed is still watchable afterwards.
+  an event whose encoder crashed is still watchable afterwards.
 - Operator docks in plain language, plus hotkeys.
 - **Public simulcast.** A separate container reads the same segments and pushes
   them to YouTube, Facebook or any RTMP destination — or over SRT, to a
@@ -259,7 +259,7 @@ to find SQLite for something it does not use.
 
 <details>
 <summary>What does not work yet, and what has not yet been proven. The short
-version: never carried a real service, packed-channel routing is deliberately
+version: never carried a real event, packed-channel routing is deliberately
 out of scope, and the relay cannot re-encode.</summary>
 
 - **Routing packed channels to separate outputs is not our job.** A packed
@@ -281,14 +281,14 @@ out of scope, and the relay cannot re-encode.</summary>
   everywhere, Raspberry Pi campuses included.
 - **HEVC over SRT has not carried real encoder output.** The remux is verified
   — ffmpeg copies HEVC into MPEG-TS correctly and it reads back as HEVC at the
-  far end — but no service has yet gone out that way from an actual HEVC
+  far end — but no event has yet gone out that way from an actual HEVC
   encoder. Rehearse it before relying on it.
 - **SRT in listener mode needs a port opened**, and nothing is shipped to help.
   Publish it on the container and open it on the firewall yourself; unlike the
   web interface there is no proxy in front of it.
 - **The relay cannot split packed multi-channel audio**, and cannot start
   itself on a schedule or when the encoder goes live.
-- **Replaying a past service is a proof of concept.** One at a time, started by
+- **Replaying a past event is a proof of concept.** One at a time, started by
   hand, and it cannot be scheduled, looped, or started part-way in.
 - **The relay speaks plain HTTP** and relies on something in front of it for
   TLS. It binds to localhost so that is a deliberate choice rather than an
@@ -302,12 +302,12 @@ out of scope, and the relay cannot re-encode.</summary>
   To test it: send identical audio on two tracks, play one through the main
   source and one through a companion into the same mix, and listen for comb
   filtering.
-- **Not yet used for a real service.** A six-hour soak has been run (see
+- **Not yet used for a real event.** A six-hour soak has been run (see
   [Status](#status)) but no congregation has watched anything through this. The
   soak covered sustained upload, timeslipping and playout; it did not cover a
   room full of people, a volunteer under pressure, or a venue's actual network
   on a Sunday. The relay has run 44 minutes unattended without a fault, which
-  is encouraging and is not a service.
+  is encouraging and is not an event.
 
 </details>
 
@@ -321,13 +321,13 @@ remaining extensions (Phase 7), and an external control API (Phase 8).</summary>
 
 - **Phase 6 — Satellite appliance.** Built and installable for the ARM64 /
   Raspberry Pi HDMI tier (see above), and now proven on a Pi 5 — though not
-  yet through a service. Still to come: DeckLink SDI output for the production
+  yet through an event. Still to come: DeckLink SDI output for the production
   tier, and hardware-decoder selection on Pi 4. The packed-channel
   de-interleaver has been dropped rather than deferred; see
   [Known gaps](#known-gaps).
 - **Phase 7 — Extensions.** The public simulcast relay is built (see
   [Streaming to the public](docs/STREAMING.md)) and has not yet carried a
-  service. SRT output, caller and listener, is in and carrying a real client.
+  event. SRT output, caller and listener, is in and carrying a real client.
   Still to come there: re-encoding, so an HEVC feed can reach a streaming site
   too; splitting packed multi-channel audio; signing in to YouTube instead of
   pasting a stream key; and starting automatically when the encoder goes live.
@@ -335,7 +335,7 @@ remaining extensions (Phase 7), and an external control API (Phase 8).</summary>
   for a persistent web player embed, web and mobile simulcast served straight
   from the bucket, redundancy, and local insertion.
 
-- **Phase 8 — External control API.** So a service can be run from a physical
+- **Phase 8 — External control API.** So an event can be run from a physical
   button rather than a dock. The plan: both plugins expose their commands as
   **obs-websocket vendor requests**, using the same names and payloads as the
   appliance's existing HTTP routes — one API, two transports, and a control
@@ -365,7 +365,7 @@ Works.
 What it means in practice: run it, adapt it, install it for as many churches as
 you like. If you distribute a modified version — as a binary or as source —
 those modifications are GPLv3 too, and recipients get the source. It places no
-condition on the services you broadcast with it, or on anything in your bucket.
+condition on the events you broadcast with it, or on anything in your bucket.
 
 Releases up to and including **v0.1.4-alpha were MIT**, and that grant cannot
 be withdrawn: anyone who has those versions keeps their MIT rights to them.

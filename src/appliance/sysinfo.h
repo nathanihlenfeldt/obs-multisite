@@ -70,14 +70,14 @@ struct SystemInfo {
     double      uptime_s = 0;
     double      load_1min = 0;
     double      cpu_temp_c = 0;     // 0 when the box cannot report one
-    // The Pi reports under-voltage and thermal throttling; both explain a
-    // service that stutters, and neither is visible any other way.
+    // The Pi reports under-voltage and thermal throttling; both explain an
+    // event that stutters, and neither is visible any other way.
     bool        throttled = false;
     bool        under_voltage = false;
 };
 SystemInfo system_info();
 
-// Restart the player service, reboot, or shut down. Each returns an empty
+// Restart the player, reboot, or shut down. Each returns an empty
 // string once the request has been made.
 std::string restart_service();
 std::string reboot_box();

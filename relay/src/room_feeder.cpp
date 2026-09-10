@@ -146,7 +146,7 @@ std::vector<RoomFeeder::EventPart> RoomFeeder::event_parts(
     do {
         auto r = m_tx->list(prefix, "", token, 1000);
         if (!r.success) {
-            error = "Could not read that service from storage.";
+            error = "Could not read that event from storage.";
             return {};
         }
         for (const auto& e : r.keys) {
@@ -162,7 +162,7 @@ std::vector<RoomFeeder::EventPart> RoomFeeder::event_parts(
     } while (!token.empty());
 
     if (init_part.empty()) {
-        error = "That service has no opening data and cannot be downloaded.";
+        error = "That event has no opening data and cannot be downloaded.";
         return {};
     }
     // Segment names are zero-padded, so name order is play order.
@@ -198,7 +198,7 @@ bool RoomFeeder::stream_parts(
             // Nothing can be done about this mid-stream: the length has
             // already been promised, so the download will be short and the
             // browser will report it as failed. That is the honest outcome.
-            error = "The service could not be read all the way through.";
+            error = "The event could not be read all the way through.";
             return false;
         }
         if (!sink(obj.body.data(), obj.body.size())) return true;  // gave up

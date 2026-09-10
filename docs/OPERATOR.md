@@ -50,8 +50,8 @@ says so rather than showing an empty list.
 **Do this once, before your first broadcast.** Nothing in this project deletes
 anything — the plugins only write and read. Expiry is a **bucket lifecycle
 rule** you configure in your storage provider's console, and without one every
-service you ever broadcast stays in the bucket and the bill grows without
-limit. At 6 Mbps that is roughly **2.7 GB per hour** of service.
+event you ever broadcast stays in the bucket and the bill grows without
+limit. At 6 Mbps that is roughly **2.7 GB per hour** of event.
 
 Two prefixes need a rule, both with the same age:
 
@@ -67,7 +67,7 @@ not merely housekeeping.
 On **Cloudflare R2**: your bucket → Settings → Object lifecycle rules → Add
 rule → prefix `events/`, delete objects 7 days after creation; then the same
 for `rooms/`. (`rooms/{room}/live.json` is rewritten on every heartbeat, so it
-stays fresh while a room is in use, and ageing out between services is
+stays fresh while a room is in use, and ageing out between events is
 harmless — the next Go Live recreates it.)
 
 On **AWS S3, MinIO, Backblaze B2 or Wasabi**: the equivalent lifecycle
@@ -98,10 +98,10 @@ that away.
 1. Open the **Multisite Encoder** dock (View → Docks).
 2. **Settings…** — enter your bucket details, choose a video encoder, name your
    markers. Settings are saved as you type.
-3. **Go live.** Watch the status readout: how much of the service has been sent,
+3. **Go live.** Watch the status readout: how much of the event has been sent,
    how much is waiting, and the **Internet** line (green/amber/red). That line
    is live even before you go on air — the dock checks the bucket every few
-   seconds — so a broken connection is visible before it costs you a service.
+   seconds — so a broken connection is visible before it costs you an event.
 
 **Production audio** is set up in OBS itself, not in the dock. In Settings →
 Output → Recording, enable the audio tracks you intend to send; in Advanced
@@ -119,22 +119,22 @@ Sending stereo only? Do nothing: track 1 is the default at both ends.
    afterwards is already configured.
 2. Add a **Multisite Source (Decoder)** to a scene.
 3. **Load event**, let the buffer fill, then **Play** when you are ready. Use
-   **Lock** during the service so nothing can be clicked by accident.
+   **Lock** during the event so nothing can be clicked by accident.
 
-   The decoder holds playback until a whole minute of the service is buffered
+   The decoder holds playback until a whole minute of the event is buffered
    (set in **Settings… → Start after this much is ready**). The buffer fills
    first, then the picture starts — so it does not chase the live edge and
    stall after a single piece on a slow or uneven connection.
 
 The **Internet** line in the Status box tells you whether the box can reach the
 bucket, separately from whether anything is on air. If it flips to red
-("no connection") mid-service, the **Could broadcast for** figure is how long
+("no connection") mid-event, the **Could broadcast for** figure is how long
 the picture will keep going from what is already downloaded — enough notice to
 act, rather than a surprise when the picture freezes.
 
-To play something other than the live service, use the **Recordings** list:
-pick a past service and press **Load recording**. Playback then stays on it —
-if a new service starts mid-watch the dock offers the switch rather than taking
+To play something other than the live event, use the **Recordings** list:
+pick a past event and press **Load recording**. Playback then stays on it —
+if a new event starts mid-watch the dock offers the switch rather than taking
 it, because being pulled out of a recording you are part-way through is worse
 than being told. **Back to live** returns to following the room.
 

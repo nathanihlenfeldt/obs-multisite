@@ -4,7 +4,7 @@
 //
 // A box with no display attached, or a development machine with no KMS at all,
 // still has to receive the feed and answer its web UI: a campus should be able
-// to prepare a service before the screen is plugged in, and a failure to open
+// to prepare an event before the screen is plugged in, and a failure to open
 // an output must never take the receiver down with it. So the factories fall
 // back to a null output and say so, rather than refusing to start.
 //

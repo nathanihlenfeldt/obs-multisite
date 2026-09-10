@@ -43,7 +43,7 @@ public:
     virtual void write(const multisite::DecodedAudioFrame& frame) = 0;
 
     // Seconds of audio written but not yet heard. The playout clock watches
-    // this: over a two-hour service a soundcard running a few parts per
+    // this: over a two-hour event a soundcard running a few parts per
     // million away from the system clock will drift lips out of sync unless
     // somebody is looking at it.
     virtual double delay_s() const = 0;

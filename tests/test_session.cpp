@@ -123,6 +123,7 @@ int main() {
         cfg.room_id = "main-auditorium";
         cfg.spool_dir = (base / "s1").string();
         cfg.segment_duration_s = 6.0;
+        cfg.event_name = "Morning event";
         Session ses(cfg, store);
 
         CHECK(ses.start_new(blob(0, 1500), video, tracks), "start_new succeeded");
@@ -137,6 +138,10 @@ int main() {
         CHECK(ev.audio_tracks.size() == 3 && ev.audio_tracks[2].label == "Click",
               "event.json carries all 3 audio tracks");
         CHECK(ev.video.width == 1920, "event.json carries video info");
+        CHECK(ev.name == "Morning event", "event.json carries the event name");
+
+        Manifest mf = Manifest::from_json(store.text("events/" + event_id + "/manifest.json"));
+        CHECK(mf.name == "Morning event", "manifest.json carries the event name");
 
         LivePointer lp = LivePointer::from_json(store.text("rooms/main-auditorium/live.json"));
         CHECK(lp.event_id == event_id && lp.status == "live",
@@ -153,6 +158,8 @@ int main() {
               "the index entry names its event and room");
         CHECK(ix.started_at_ms == ev.started_at_ms,
               "and agrees with event.json about when the event started");
+        CHECK(ix.name == "Morning event",
+              "the index entry carries the event name");
         ses.end();
     }
 

@@ -15,7 +15,7 @@ constexpr int kBackoffMaxMs   = 15000;
 // A child that streamed for this long before dying is treated as a fresh
 // problem rather than a continuing one, so an outage hours ago does not leave
 // a destination reconnecting on a fifteen-second backoff for the rest of the
-// service.
+// event.
 constexpr int64_t kBackoffResetAfterMs = 120000;
 // A segment that is a moment late is not a stall. Running close to the live
 // edge, the next fragment is routinely a second or two behind its due time,
@@ -44,14 +44,14 @@ const char* to_string(RelayState s) {
 std::string describe(RelayState s) {
     switch (s) {
         case RelayState::Idle:         return "Not sending";
-        case RelayState::Waiting:      return "Waiting for the service to start";
+        case RelayState::Waiting:      return "Waiting for the event to start";
         case RelayState::Awaiting:     return "Ready — waiting to be connected to";
         case RelayState::Streaming:    return "Sending";
         case RelayState::Stalled:      return "Nothing coming from the main site";
         case RelayState::Reconnecting: return "Reconnecting";
         case RelayState::Ending:       return "Finishing off";
         case RelayState::Stopped:      return "Finished";
-        case RelayState::Blocked:      return "Cannot send this service";
+        case RelayState::Blocked:      return "Cannot send this event";
     }
     return {};
 }
@@ -161,7 +161,7 @@ RelayDecision RelayMachine::step(const RelayInput& in) {
         // or the operator picking a track that exists.
         enter(RelayState::Waiting, now, {});
         m_last_error.clear();
-        d.note = "this service can be sent now";
+        d.note = "this event can be sent now";
     }
 
     // ── An unexpected exit ───────────────────────────────────────────────────
@@ -190,7 +190,7 @@ RelayDecision RelayMachine::step(const RelayInput& in) {
         }
         if (m_state != RelayState::Waiting && m_state != RelayState::Stopped) {
             enter(RelayState::Waiting, now, {});
-            d.note = "waiting for the service to start";
+            d.note = "waiting for the event to start";
         }
         return d;
     }
@@ -207,7 +207,7 @@ RelayDecision RelayMachine::step(const RelayInput& in) {
 
         // Take up position FIRST, before waiting on anything. The downloader
         // fetches around wherever the destinations are reading, so until this
-        // is set nothing knows which part of the service to bring down — and
+        // is set nothing knows which part of the event to bring down — and
         // a relay starting three minutes back would sit waiting for segments
         // that were never going to be fetched.
         if (!m_head_set) {
@@ -230,7 +230,7 @@ RelayDecision RelayMachine::step(const RelayInput& in) {
         if (!in.init_ready || !in.next_segment_ready) {
             if (m_state != RelayState::Waiting) {
                 enter(RelayState::Waiting, now, {});
-                d.note = "waiting for the service to download";
+                d.note = "waiting for the event to download";
             }
             return d;
         }
@@ -258,7 +258,7 @@ RelayDecision RelayMachine::step(const RelayInput& in) {
             d.note = in.room == RoomState::Interrupted
                        ? "the main site stopped unexpectedly — sending what "
                          "arrived"
-                       : "the service has ended — sending the last of it";
+                       : "the event has ended — sending the last of it";
             return d;
         }
         return d;   // waiting for ffmpeg to finish
@@ -272,7 +272,7 @@ RelayDecision RelayMachine::step(const RelayInput& in) {
     //
     //   • Called (an SRT listener) and nothing has ever gone out: the far end
     //     has not attached yet. That is the resting state of a listener, it
-    //     may last the whole first half of a service, and it is neither a
+    //     may last the whole first half of an event, and it is neither a
     //     fault nor something to give up on.
     //   • Anything else: the destination has stopped reading. Held for the
     //     same grace period a silence gets — a receiver pausing for a moment
@@ -286,7 +286,7 @@ RelayDecision RelayMachine::step(const RelayInput& in) {
             }
             // Keep taking up position while we wait. There is no continuity
             // to preserve for a connection that has never carried anything,
-            // so someone attaching forty minutes in should get the service as
+            // so someone attaching forty minutes in should get the event as
             // it is now rather than the forty minutes they missed — and
             // holding a stale position would pin the cache open besides.
             if (!in.from_beginning)

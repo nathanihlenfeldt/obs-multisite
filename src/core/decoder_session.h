@@ -34,11 +34,11 @@ enum class RoomState {
     Offline,    // nothing to play: no live event, or nothing could be fetched
     Live,       // event is live and updating
     Ended,      // the encoder finished cleanly
-    Interrupted,// the encoder died mid-service: still marked live, not advancing
+    Interrupted,// the encoder died mid-event: still marked live, not advancing
 };
 
 // Whether a state means "this event is not growing any more, so play it as
-// video-on-demand". A recording and an interrupted service differ in how they
+// video-on-demand". A recording and an interrupted event differ in how they
 // should be DESCRIBED, not in how they play.
 inline bool is_vod(RoomState s) {
     return s == RoomState::Ended || s == RoomState::Interrupted;
@@ -73,7 +73,7 @@ struct DecoderConfig {
     int    stale_after_ms = 600000;      // 10 minutes
     int    max_download_retries = 5;
     // Play this specific event instead of whatever live.json names. Set when
-    // an operator picks a past service from the event list; empty means
+    // an operator picks a past event from the event list; empty means
     // "follow the room", which is the live behaviour.
     std::string pinned_event_id;
 };
@@ -108,9 +108,9 @@ public:
 
     // ── Pinning ──────────────────────────────────────────────────────────────
     // Play one specific event and stop following the room. Pinning an event
-    // that is not the live one is how a past service is watched.
+    // that is not the live one is how a past event is watched.
     //
-    // A pinned session deliberately does NOT switch when a new service starts:
+    // A pinned session deliberately does NOT switch when a new event starts:
     // being yanked out of a recording someone is watching, because a rehearsal
     // began in the room, would be far worse than staying put. live_elsewhere()
     // reports that something is on air so the host can offer the jump instead
@@ -163,7 +163,7 @@ public:
     bool jump_to_marker(const std::string& marker_id);
 
     // The marker at or before the playback head — i.e. "where are we in the
-    // service", for display.
+    // event", for display.
     std::optional<Marker> current_marker() const;
 
     // Increments whenever playback jumps (seek, jump-to-live, event change).
@@ -184,7 +184,7 @@ public:
     // died. Both play; only the wording differs.
     bool    was_interrupted() const { return m_room.load() == RoomState::Interrupted; }
     // Whether this event was seen LIVE at any point since it was loaded.
-    // "The broadcast just ended" and "this is a recording of a past service"
+    // "The broadcast just ended" and "this is a recording of a past event"
     // are different things to an operator, and only this distinguishes them.
     bool    was_live_this_session() const { return m_saw_live.load(); }
     // Wall-clock time just past the last frame of the recording.
@@ -233,7 +233,7 @@ public:
     // Whether the store has been answering, as measured from this session's own
     // poll and download traffic. Distinct from room_state(): an empty room with
     // a good connection reads Healthy + Offline, while a dead link reads
-    // Offline + Offline. This is the figure an operator acts on mid-service.
+    // Offline + Offline. This is the figure an operator acts on mid-event.
     LinkHealth link_health() const { return m_link.health(); }
     // True once the session has observed at least one request, so a UI can
     // tell "measured healthy" from "nothing to report yet".

@@ -48,6 +48,9 @@ struct DecoderSnapshot;   // defined below
 // int for the same reason room_state is: this header stays free of the core.
 struct EventEntry {
     std::string event_id;
+    // Operator-facing title, from the encoder's event name. Empty for events
+    // recorded before naming existed, or where the encoder left it blank.
+    std::string name;
     long long   started_ms = 0;
     long long   duration_s = 0;
     int         state = 0;        // 0 unknown, 1 live, 2 recording, 3 interrupted
@@ -99,7 +102,7 @@ struct DecoderControls {
     virtual void refresh_events() = 0;
     virtual void event_listing(EventListing& out) const = 0;
     // Play one specific event. Pinning does NOT follow the room afterwards: a
-    // service starting must not drag an operator out of the recording they are
+    // event starting must not drag an operator out of the recording they are
     // watching. `unpin_event` returns to following live.json.
     virtual void pin_event(const std::string& event_id) = 0;
     virtual void unpin_event() = 0;

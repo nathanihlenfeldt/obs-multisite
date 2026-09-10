@@ -64,7 +64,7 @@ bool EventCatalog::collect_event_ids(std::vector<std::string>& out,
     // The index is only written by encoders new enough to write it, so a
     // bucket that predates it holds events with media and no entry. Treating a
     // non-empty index as the whole truth hid every one of them: one recent
-    // service would list, and the older ones — still in storage, still
+    // event would list, and the older ones — still in storage, still
     // playable — would not appear at all.
     //
     // So the scan always runs. Only the ids the index missed cost anything
@@ -135,6 +135,7 @@ bool EventCatalog::classify(const std::string& event_id, const LivePointer& live
 
     out.event_id            = event_id;
     out.room_id             = m_cfg.room_id;
+    out.name                = m.name;
     out.started_at_ms       = m.started_at_ms;
     out.last_update_ms      = m.updated_at_ms;
     out.latest_seq          = m.latest_seq;

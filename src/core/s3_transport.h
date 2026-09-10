@@ -87,7 +87,7 @@ public:
     void cancel_pending();
 
     // Where the last response came from, and how fast the link has been.
-    // Populated by ordinary traffic, so during a service these reflect the
+    // Populated by ordinary traffic, so during an event these reflect the
     // real segment fetches rather than a synthetic test.
     std::string last_colo() const;
     std::string last_server() const;

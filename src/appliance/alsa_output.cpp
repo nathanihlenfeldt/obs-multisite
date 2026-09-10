@@ -108,7 +108,7 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
             return false;
         }
         // This is worth shouting about. A campus that thinks it is receiving
-        // a click track and is not will only find out during a service.
+        // a click track and is not will only find out during an event.
         plog_error("%s will only take %u channels but the feed carries %d — "
                    "the extra channels are NOT being played. Check the output "
                    "device, or use an HDMI de-embedder that takes all eight.",
@@ -134,7 +134,7 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
     // Half a second of buffer. Generous on purpose: the delivery thread paces
     // frames against a monotonic clock, and a card whose own clock runs a few
     // parts per million away from it needs somewhere for that difference to go
-    // over a two-hour service.
+    // over a two-hour event.
     unsigned buffer_us = 500000;
     snd_pcm_hw_params_set_buffer_time_near(m_pcm, hw, &buffer_us, nullptr);
     unsigned period_us = 40000;

@@ -25,7 +25,7 @@ static AudioTrack track(int idx, const std::string& label, int ch = 2) {
     return t;
 }
 
-// The ordinary multi-track service: a stereo main mix, a mono sermon ISO and
+// The ordinary multi-track event: a stereo main mix, a mono sermon ISO and
 // a mono click, exactly as PROJECT-SCOPE.md 4.3 describes.
 static Manifest ordinary() {
     Manifest m;
@@ -84,7 +84,7 @@ int main() {
     // ── The ordinary case ────────────────────────────────────────────────────
     {
         auto p = plan_stream(ordinary(), dest("Sermon ISO"), "/tmp/f.fifo");
-        CHECK(p.ok, "a normal H.264 multi-track service can be sent");
+        CHECK(p.ok, "a normal H.264 multi-track event can be sent");
         CHECK(p.audio_index == 1, "the chosen track resolves to its position");
         CHECK(has_pair(p.args, "-map", "0:a:1"), "ffmpeg is told to take a:1");
         CHECK(has_pair(p.args, "-map", "0:v:0"), "and the video");
@@ -187,7 +187,7 @@ int main() {
     std::printf("\nSRT\n");
     {
         auto p = plan_stream(ordinary(), srt_dest(), "pipe:0");
-        CHECK(p.ok, "an ordinary service can go out over SRT");
+        CHECK(p.ok, "an ordinary event can go out over SRT");
         CHECK(has_pair(p.args, "-f", "mpegts"), "as MPEG-TS, not FLV");
         CHECK(!has_arg(p.args, "flv"), "and nothing FLV comes along with it");
         CHECK(has_pair(p.args, "-c", "copy"),
@@ -342,13 +342,13 @@ int main() {
     // One warning line sits above every destination. It used to be answered by
     // a single RTMP probe, which was right while RTMP was all there was and
     // became wrong the moment SRT could carry something RTMP could not: an
-    // HEVC service was declared unsendable on the page while an SRT
+    // HEVC event was declared unsendable on the page while an SRT
     // destination was busy sending it.
     std::printf("\nroom sendability\n");
     {
         auto r = sendability(ordinary());
         CHECK(r.any && r.rtmp_ok && r.srt_ok,
-              "an ordinary H.264 service can go anywhere");
+              "an ordinary H.264 event can go anywhere");
         CHECK(r.problem.empty() && r.note.empty(),
               "and the operator is told nothing, because there is nothing to say");
     }
@@ -356,10 +356,10 @@ int main() {
         Manifest m = ordinary();
         m.video.codec = "hevc";
         auto r = sendability(m);
-        CHECK(r.any, "an HEVC service is NOT unsendable");
+        CHECK(r.any, "an HEVC event is NOT unsendable");
         CHECK(!r.rtmp_ok && r.srt_ok, "it just cannot go to a streaming site");
         CHECK(r.problem.empty(),
-              "so nothing tells the operator the service cannot be streamed");
+              "so nothing tells the operator the event cannot be streamed");
         CHECK(!r.note.empty(), "but they are told why half of it is unavailable");
         CHECK(r.note.find("SRT") != std::string::npos,
               "and where it CAN go, which is the point of saying anything");
@@ -380,7 +380,7 @@ int main() {
         m.audio_tracks.clear();
         auto r = sendability(m);
         CHECK(!r.any && !r.problem.empty(),
-              "a service with no sound in it can go nowhere either");
+              "an event with no sound in it can go nowhere either");
     }
 
     std::printf("== ffmpeg's own stderr is redacted too ==\n");

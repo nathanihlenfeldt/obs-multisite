@@ -310,6 +310,7 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         json rows = json::array();
         for (const auto& e : listing.events)
             rows.push_back(json{{"event_id", e.event_id},
+                                {"name", e.name},
                                 {"started_ms", e.started_ms},
                                 {"duration_s", e.duration_s},
                                 {"state", e.state}});

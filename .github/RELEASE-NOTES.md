@@ -3,19 +3,19 @@
 This is pre-release software. A six-hour continuous soak test has been run end
 to end — 3,661 segments, over 15 GB, zero retries and zero upload failures, 10
 lagged frames in 658,837 — but it has still not carried a real congregation's
-service. Interfaces, settings and the storage protocol may change without a
+event. Interfaces, settings and the storage protocol may change without a
 migration path. There is no warranty, no support contract and no uptime
 guarantee.
 
 If you put this in front of a congregation, do it with a tested fallback in
-place, a technical person on hand, and the assumption that any given service may
+place, a technical person on hand, and the assumption that any given event may
 have to go ahead without it.
 
 ## Before you start: set a retention rule
 
 **Nothing in this project deletes anything.** The plugins only write and read.
 Expiry is a bucket lifecycle rule you configure once in your storage provider's
-console, and without one every service you broadcast stays for ever — roughly
+console, and without one every event you broadcast stays for ever — roughly
 **2.7 GB per hour** at 6 Mbps.
 
 Add a rule for the prefix `events/` and another for `rooms/`, both deleting
@@ -38,7 +38,7 @@ every redraw and never released it — one `FT_Library` and one font face,
 abandoned each time. Not a single leak and not bounded by anything an
 operator does: the idle screen redraws whenever its content changes, which
 includes the box's own IP address, so even a DHCP renewal on an otherwise
-quiet box would trigger it. A box left running for days between services
+quiet box would trigger it. A box left running for days between events
 would have accumulated this the whole time.
 
 Confirmed both ways before calling it fixed: a standalone harness built
@@ -61,9 +61,9 @@ been rebuilt:
   the operator UI in the browser. No typing, no laptop; the address is still
   printed alongside for anyone who prefers it.
 - **A five-second boot splash.** On power-up the identity screen now shows for
-  five seconds whatever is configured — even with auto-play and a live service
+  five seconds whatever is configured — even with auto-play and a live event
   already arriving — so the box visibly proves it is alive before the picture
-  takes over. (The box comes in a few seconds into the service; it sits minutes
+  takes over. (The box comes in a few seconds into the event; it sits minutes
   behind live anyway.)
 - **A modern look.** The screen has a gradient background and anti-aliased text
   rendered from the system font through FreeType, instead of the 5×7 bitmap
@@ -161,10 +161,10 @@ kept.
 
 ## Known gaps
 
-- **Not yet used for a real service.** The soak covered sustained upload,
+- **Not yet used for a real event.** The soak covered sustained upload,
   timeslipping and playout. It did not cover a room full of people, a volunteer
   under pressure, or a venue's network on a Sunday.
-- **The campus player has not carried a service either**, though it now holds
+- **The campus player has not carried an event either**, though it now holds
   30 fps on a Pi 5 through several runs, with a handful of dropped frames.
 - **Alignment between separate audio tracks is unverified.** Audio stays locked
   to the picture — measured, and checked by ear — but nobody has confirmed that
@@ -176,16 +176,16 @@ kept.
   separate install under AGPL-3.0. On the appliance, one chosen track is played
   when fed multi-track, and packed channels go out of HDMI in order.
 - **The relay has pushed live streams to YouTube** but has not been through a
-  full service.
+  full event.
 - **HEVC to a streaming site needs SRT.** RTMP cannot carry it and re-encoding
   is not built, so YouTube and Facebook remain H.264 only. The HEVC-over-SRT
-  remux is verified against ffmpeg, but no service has yet been carried from a
+  remux is verified against ffmpeg, but no event has yet been carried from a
   real HEVC encoder through the relay. Rehearse it before relying on it.
 - **AV1 is refused by the relay on both protocols**, deliberately: too little
   of what would receive it can decode it yet.
 - **The relay does not terminate TLS.** It binds to localhost and expects a
   proxy in front of it; a working Caddy config is included.
-- **Replaying a past service is a proof of concept** — one at a time, started
+- **Replaying a past event is a proof of concept** — one at a time, started
   by hand, with no scheduling.
 - **AV1 is carried but lightly exercised**; seeking is accurate to about a
   second, not to a frame.

@@ -26,7 +26,7 @@
   <form class="card form gate-card" id="sign-in-form">
     <h2 id="gate-title">Sign in</h2>
     <p class="gate-intro" id="gate-intro">
-      This relay decides where your services are sent, so it needs a login.
+      This relay decides where your events are sent, so it needs a login.
     </p>
     <div class="warning" id="gate-insecure" hidden>
       This connection is not private, so your password would cross the internet
@@ -39,7 +39,7 @@
       <input name="password" type="password" autocomplete="current-password" required>
       <span class="hint" id="gate-hint" hidden>
         At least 10 characters. This is the only thing stopping a stranger from
-        changing where your service is sent.
+        changing where your event is sent.
       </span>
     </label>
     <button type="submit" class="primary wide" id="gate-submit">Sign in</button>
@@ -59,7 +59,7 @@
 
 <nav id="tabs">
   <button class="tab is-on" data-tab="send">Sending</button>
-  <button class="tab" data-tab="past">Past services</button>
+  <button class="tab" data-tab="past">Past events</button>
   <button class="tab" data-tab="settings">Settings</button>
   <button class="tab" data-tab="log">Log</button>
 </nav>
@@ -123,7 +123,7 @@
       <select name="audio_label" id="add-audio"></select>
       <span class="hint">The main mix is what a congregation should hear.</span>
     </label>
-    <label>Start this far behind the service
+    <label>Start this far behind the event
       <input name="delay_min" type="number" min="0" max="60" step="1" value="3">
       <span class="hint">Minutes. This is what lets a wobble at the main site
         pass without the public stream breaking. Three is a good default.</span>
@@ -136,7 +136,7 @@
   </form>
 </section>
 
-<!-- Past services ───────────────────────────────────────────────────────── -->
+<!-- Past events ───────────────────────────────────────────────────────── -->
 <section id="tab-past" class="panel">
   <div class="card" id="rebroadcast-card" hidden>
     <div class="dest-head">
@@ -151,7 +151,7 @@
   </div>
 
   <p class="lead">
-    Services that have finished. A service still going out cannot be
+    Events that have finished. An event still going out cannot be
     downloaded or replayed until it ends.
     <button class="link" id="past-refresh">Refresh</button>
   </p>
@@ -162,7 +162,7 @@
 <!-- Settings ────────────────────────────────────────────────────────────── -->
 <section id="tab-settings" class="panel">
   <form class="card form" id="config-form">
-    <h2>Where the service comes from</h2>
+    <h2>Where the event comes from</h2>
     <label>Feed name
       <input name="room_id" placeholder="main-auditorium">
       <span class="hint">Must match the name set at the main site.</span>

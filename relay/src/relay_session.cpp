@@ -109,7 +109,7 @@ void RelaySession::run() {
         { std::lock_guard<std::mutex> lk(m_mtx); dest = m_dest; }
 
         // The gate. Re-evaluated every pass rather than once at start, because
-        // a service can change underneath us — a new event with a different
+        // an event can change underneath us — a new event with a different
         // codec, or a track the operator chose that this one does not have.
         StreamPlan plan;
         if (snap.have_event_info) {
@@ -225,7 +225,7 @@ void RelaySession::run() {
                 //
                 // Bounded, because a drain is not guaranteed to finish: an SRT
                 // listener that nobody ever attached to will never empty its
-                // pipe, and without a deadline the end of a service would hang
+                // pipe, and without a deadline the end of an event would hang
                 // this thread for good. Thirty seconds is far longer than a
                 // real tail takes and far shorter than anyone would wait.
                 const int64_t give_up_at = now_ms() + 30000;

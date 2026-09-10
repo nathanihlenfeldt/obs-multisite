@@ -49,7 +49,7 @@ struct RelayStatus {
 
 class RelaySession {
 public:
-    // `from_beginning` makes this a rebroadcast of a finished service rather
+    // `from_beginning` makes this a rebroadcast of a finished event rather
     // than a relay of a live one. The feeder it is given must be pinned to
     // that event.
     RelaySession(Destination dest, RoomFeeder& feeder,

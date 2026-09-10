@@ -211,7 +211,7 @@ struct S3Transport::Impl {
 
             // Measured from the segment uploads themselves, so a main site's
             // figure is what its own connection is actually managing during a
-            // service — which is the number an operator wants when the queue
+            // event — which is the number an operator wants when the queue
             // starts to build.
             curl_off_t start_us = 0, total_us = 0;
             curl_easy_getinfo(curl, CURLINFO_STARTTRANSFER_TIME_T, &start_us);
@@ -243,7 +243,7 @@ struct S3Transport::Impl {
     // satellite fetches comes through here. That is why the observations are
     // taken here rather than in a separate test — the colo and the throughput
     // shown to an operator are measured from the traffic actually carrying the
-    // service, not from a synthetic probe that might take a different route.
+    // event, not from a synthetic probe that might take a different route.
     PutResult do_get(const std::string& key, std::vector<uint8_t>& out,
                      HeaderCtx* hdrs = nullptr, int64_t* elapsed_ms = nullptr) {
         ensure_curl();

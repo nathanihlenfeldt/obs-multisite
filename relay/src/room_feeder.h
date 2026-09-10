@@ -3,7 +3,7 @@
 //
 // room_feeder.h — one room's receive side, shared by every destination.
 //
-// There is exactly ONE of these per room, however many places the service is
+// There is exactly ONE of these per room, however many places the event is
 // being sent to. Each destination having its own poller would multiply the
 // bucket reads (and, on a store that bills egress, the bill) by the number of
 // destinations, for identical bytes. So the feeder downloads once into one
@@ -45,7 +45,7 @@ struct FeederConfig {
     int stale_after_ms = 600000;      // the same 10 minutes a campus uses
     // Follow one specific event instead of whatever live.json names. This is
     // what makes a rebroadcast possible: DecoderSession already knows how to
-    // pin an event (§7.5), so playing a past service needs no new receive path.
+    // pin an event (§7.5), so playing a past event needs no new receive path.
     std::string pinned_event_id;
 };
 
@@ -87,10 +87,10 @@ public:
     // minutes back would find its segments already pruned.
     void set_lowest_reader(uint64_t seq);
 
-    // ── Past services ────────────────────────────────────────────────────────
+    // ── Past events ────────────────────────────────────────────────────────
     // What the room has recorded, each with its own state. Uses the same
     // EventCatalog the decoder dock uses, so the relay's list and a campus's
-    // list cannot disagree about which service is which.
+    // list cannot disagree about which event is which.
     //
     // A refresh makes one request per event, so it is cached: a caller asking
     // for the list every second gets the same answer until it is stale.
@@ -115,7 +115,7 @@ public:
     // Streams a whole event as one fragmented MP4: the init segment followed
     // by every fragment in order, which is already a valid MP4 and needs no
     // re-muxing. `sink` returns false to abandon the download — a browser
-    // closing the tab must not leave this fetching a five-gigabyte service.
+    // closing the tab must not leave this fetching a five-gigabyte event.
     // Reads straight from the store, deliberately bypassing the relay's cache
     // so a download cannot evict what a live stream is about to need.
     bool stream_event(const std::string& event_id,
@@ -129,7 +129,7 @@ public:
                       std::string& error) const;
 
     // A one-off credential and connectivity check, so a mistyped key is
-    // reported when it is entered rather than when a service starts.
+    // reported when it is entered rather than when an event starts.
     std::string check_storage();
 
 private:

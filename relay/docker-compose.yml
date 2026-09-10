@@ -12,8 +12,8 @@ services:
     # image: ghcr.io/stageaudioworks/multisite-relay:latest
     restart: unless-stopped
     # THIS LINE is what decides who can reach the relay, not anything inside
-    # the container. Bound to the host's localhost on purpose: this service can
-    # change where a church's service is sent, so publishing it to the internet
+    # the container. Bound to the host's localhost on purpose: this container can
+    # change where an event is sent, so publishing it to the internet
     # has to be a decision rather than a default.
     #
     # Reach it over an SSH tunnel:  ssh -L 8080:localhost:8080 you@your-server

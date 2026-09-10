@@ -1,17 +1,17 @@
 # Simulcast relay
 
-Sends a service that is already being distributed to your campuses out to
+Sends an event that is already being distributed to your campuses out to
 YouTube, Facebook, or any other streaming site, from a small server you run
 yourself.
 
 It reads the same segments the campuses read, so the main site uploads once
-however many places the service goes. On a venue connection that will not
+however many places the event goes. On a venue connection that will not
 carry a second upload, that is the whole point. It also means the public
 stream inherits the buffering the campus feed already has: a wobble at the
 main site delays the public stream rather than breaking it.
 
 > **Alpha.** Like the rest of this project, this has not yet carried a real
-> service. Run it with a fallback and someone technical on hand.
+> event. Run it with a fallback and someone technical on hand.
 
 ---
 
@@ -25,11 +25,11 @@ main site delays the public stream rather than breaking it.
   unmistakable.
 - Sends one chosen audio track per destination, picked by the name the main
   site published — "Main Mix", "Sermon ISO".
-- Sits a configurable time behind the service (three minutes by default), so
+- Sits a configurable time behind the event (three minutes by default), so
   a dropout at the main site is absorbed instead of reaching the public.
 - Supervises each stream: if the connection dies it reconnects by itself and
   resumes from where it stopped, without skipping anything.
-- Ends each stream deliberately when the service ends, rather than letting it
+- Ends each stream deliberately when the event ends, rather than letting it
   time out.
 
 **Does not, yet**
@@ -38,7 +38,7 @@ main site delays the public stream rather than breaking it.
   tiny server. If the main site records in HEVC, streaming sites cannot take
   it over RTMP, and the relay refuses to send it rather than pushing something
   that looks fine here and is dead at the far end. Either set the main site's
-  encoder to H.264 for services you want on YouTube, or send it to an SRT
+  encoder to H.264 for events you want on YouTube, or send it to an SRT
   destination — those carry HEVC unchanged.
 - **Anything but H.264 and HEVC.** AV1 is refused on both protocols. There is
   a way to put it in an MPEG-TS stream, but too little of what would receive
@@ -72,7 +72,7 @@ written to the log.
 **Latency**, under Advanced, is how long SRT will keep asking for a lost
 packet before giving up on it. The relay uses two seconds, which is far more
 generous than ffmpeg's own default and is nearly free here — the relay is
-already sitting three minutes behind the service, so two seconds is invisible.
+already sitting three minutes behind the event, so two seconds is invisible.
 Raise it if the far end is a long way away. Note that an SRT address writes
 this in *millionths* of a second, so a pasted `latency=2000000` is the 2000
 the form shows.
@@ -90,13 +90,13 @@ is asked for. It means opening that UDP port to whoever needs to reach it,
 which the relay cannot do for you: publish it on the container and open it on
 the firewall yourself. A listener that nothing has attached to yet shows as
 **Ready — waiting to be connected to**, and will sit there indefinitely
-without being counted as a failure; it keeps up with the service while it
+without being counted as a failure; it keeps up with the event while it
 waits, so whoever attaches gets what is happening now rather than everything
 they missed.
 
 **On HEVC over SRT:** the remux is verified — ffmpeg copies HEVC into MPEG-TS
 correctly and it reads back as HEVC at the far end — but as of this writing no
-service has actually been sent from an HEVC encoder through the relay. The
+event has actually been sent from an HEVC encoder through the relay. The
 transport is proven; that one path is not. Rehearse it before you rely on it.
 
 SRT needs an ffmpeg built with it. The container's is; if you have swapped in
@@ -107,7 +107,7 @@ than letting you save something that will never start.
 
 ## Before anything else: it has a login, and it needs one
 
-This service decides where your services are sent. Anyone who can reach it can
+This event decides where your events are sent. Anyone who can reach it can
 point your stream at their own server, take it off air mid-sermon, or read your
 storage settings. So:
 
@@ -194,12 +194,12 @@ encoder's.
 
 Roughly, for one destination at the main site's own bitrate:
 
-| | Per hour | A two-hour service |
+| | Per hour | A two-hour event |
 |---|---|---|
 | Down from the bucket | bitrate × 1 | 6 Mbps → about 2.7 GB → 5.4 GB |
 | Up to the destination | bitrate × 1 per destination | 6 Mbps → about 2.7 GB → 5.4 GB |
 
-Four services a month to two destinations is roughly 43 GB out and 22 GB in —
+Four events a month to two destinations is roughly 43 GB out and 22 GB in —
 comfortable on any VPS transfer allowance. The download happens **once** no
 matter how many destinations you add; only the upload multiplies.
 
@@ -209,32 +209,32 @@ generous.
 
 ---
 
-## Past services
+## Past events
 
-Everything the room has recorded is listed under **Past services**, with the
+Everything the room has recorded is listed under **Past events**, with the
 same states a campus sees: on air now, finished, or cut short by an encoder
-that died. A service still going out can be neither downloaded nor replayed —
+that died. An event still going out can be neither downloaded nor replayed —
 it has no end yet.
 
-**Download.** A finished service downloads as one MP4, streamed straight from
+**Download.** A finished event downloads as one MP4, streamed straight from
 storage as you download it. Nothing is assembled on the server first, so a
-two-hour service costs no disk and no CPU, and several people can download at
+two-hour event costs no disk and no CPU, and several people can download at
 once without the relay noticing.
 
 The file carries **every audio track the main site sent**, not just the one
 being streamed — so the mic ISOs and the click are there for whoever edits it
 afterwards. It is a fragmented MP4, which plays in VLC, in browsers, and in
 DaVinci Resolve and Premiere. Some older tools want a classic MP4 index; if
-yours does, `ffmpeg -i service.mp4 -c copy -movflags +faststart out.mp4` will
+yours does, `ffmpeg -i event.mp4 -c copy -movflags +faststart out.mp4` will
 convert it without re-encoding.
 
-**Replay (proof of concept).** A finished service can be played out to a
+**Replay (proof of concept).** A finished event can be played out to a
 destination as though it were happening now — for a second congregation in a
 different time zone, or an evening repeat. It plays at normal speed from the
 beginning and ends by itself at the end of the recording.
 
 This is a first version and is honest about it: one replay at a time, started
-by hand, to a destination that is not currently carrying the live service. What
+by hand, to a destination that is not currently carrying the live event. What
 it does not do yet is schedule itself, loop, start part-way in, or run several
 at once.
 
@@ -242,13 +242,13 @@ at once.
 
 ## Choosing the delay
 
-The delay is how far behind the actual service the public stream runs. It is
+The delay is how far behind the actual event the public stream runs. It is
 the single most useful setting here.
 
-The relay holds that much of the service in hand. If the main site's internet
+The relay holds that much of the event in hand. If the main site's internet
 drops for less than the delay, the public stream never notices — it keeps
 playing out of what has already been banked, and the gap is absorbed. If the
-outage outlasts the delay, the stream stops and reconnects when the service
+outage outlasts the delay, the stream stops and reconnects when the event
 comes back, which splits the recording on the destination into two parts.
 
 - **Three minutes** (the default) covers the outages that actually happen on a
@@ -259,7 +259,7 @@ comes back, which splits the recording on the destination into two parts.
   and costs nothing except being ten minutes behind.
 
 A short interruption — under about forty-five seconds — is ridden out without
-even dropping the connection, and the service resumes exactly where it left
+even dropping the connection, and the event resumes exactly where it left
 off with nothing missing.
 
 ---
@@ -271,11 +271,11 @@ not running. The Log tab has the detail.
 
 | What you see | What it means |
 |---|---|
-| **Waiting for the service to start** | Nothing is on air at the main site, or the opening data is still downloading. Normal before a service. |
+| **Waiting for the event to start** | Nothing is on air at the main site, or the opening data is still downloading. Normal before an event. |
 | **Nothing coming from the main site** | The main site has stopped sending for more than a few seconds. The connection is held open for forty-five seconds before giving up. |
 | **Reconnecting** | The connection dropped. It retries by itself, backing off up to fifteen seconds between attempts. |
-| **Cannot send this service** | Something about the feed means it must not be sent — usually the wrong video format, or a sound feed that no longer exists. The message says which. |
-| **Finishing off** | The service ended; the last of it is still going out. |
+| **Cannot send this event** | Something about the feed means it must not be sent — usually the wrong video format, or a sound feed that no longer exists. The message says which. |
+| **Finishing off** | The event ended; the last of it is still going out. |
 
 Stream keys are never shown in the interface or written to the log, and the
 database file is not readable by other users on the machine. They are stored
@@ -294,7 +294,7 @@ cmake --build build --target multisite-relay
 
 Needs libcurl, OpenSSL and SQLite development packages, plus the `ffmpeg`
 command at runtime. The relay is off by default in the main build: it is a
-server-side service, and a plugin build should not be made to find SQLite for
+server-side event, and a plugin build should not be made to find SQLite for
 something it does not use.
 
 Run the tests with `ctest -R "stream_plan|relay_state|config_store"`. They
@@ -323,7 +323,7 @@ One process. One downloader per room, feeding one ffmpeg per destination.
 
 The downloader is the same code a campus decoder runs — event discovery, the
 cache, checksum verification, and the live/ended/interrupted classification —
-so the relay and a campus can never disagree about whether a service is still
+so the relay and a campus can never disagree about whether an event is still
 running.
 
 Each destination has its own ffmpeg child, fed one fragment at a time through

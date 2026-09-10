@@ -33,6 +33,9 @@ namespace multisite {
 
 struct SessionConfig {
     std::string room_id = "main-auditorium";
+    // Operator-facing title for the next event (editable in the encoder dock).
+    // Empty means "no custom name" — the satellite falls back to the time.
+    std::string event_name;
     std::string spool_dir;                 // local durable queue location
     double      segment_duration_s = 6.0;
     size_t      manifest_window = 50;      // rolling window size

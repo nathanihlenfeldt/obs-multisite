@@ -43,6 +43,10 @@ private:
     // have not registered their encoders yet.
     void populateEncoders();
     void setLiveState(bool live);
+    // The event-name field is pre-filled with the current date/time. Keep it
+    // fresh while untouched, so a field left alone always names "now".
+    void ensureEventName();
+    QString defaultEventName() const;
 
     // storage
     QLineEdit* m_accountId = nullptr;
@@ -72,6 +76,8 @@ private:
     QLabel*  m_audioNote = nullptr;
 
     // controls + status
+    QLineEdit*   m_eventName = nullptr;   // editable title, pre-filled with now
+    QString      m_eventNameDefault;
     QPushButton* m_goLive = nullptr;
     QPushButton* m_end = nullptr;
     QPushButton* m_markers[4] = { nullptr, nullptr, nullptr, nullptr };
@@ -86,7 +92,7 @@ private:
     QTimer* m_timer = nullptr;
 
     // Settings live in a modal dialog rather than in the dock: they are
-    // configured once, while the dock is what an operator watches mid-service.
+    // configured once, while the dock is what an operator watches mid-event.
     // Keeping them inline made the dock taller than the screen.
     QDialog* m_settings = nullptr;
     QPushButton* m_settingsBtn = nullptr;

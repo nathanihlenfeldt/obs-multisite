@@ -16,7 +16,7 @@ namespace {
 // longer SRT gives up and the loss reaches the destination as a glitch.
 //
 // Two seconds is §1 applied to the one place in this system where it is
-// cheapest: the relay already sits three minutes behind the service, so two
+// cheapest: the relay already sits three minutes behind the event, so two
 // seconds is invisible, and it buys recovery across a path many times longer
 // than the default can manage.
 constexpr int kDefaultSrtLatencyMs = 2000;
@@ -82,7 +82,7 @@ std::string output_url(const Destination& d) {
         add("mode", "listener");
         // Wait indefinitely for the far end. A listener that nobody has
         // connected to yet is not a failure and must not be given up on:
-        // a broadcast partner may well attach five minutes into the service.
+        // a broadcast partner may well attach five minutes into the event.
         add("listen_timeout", "-1");
     } else if (!d.stream_key.empty()) {
         add("streamid", d.stream_key);
@@ -183,16 +183,16 @@ StreamPlan plan_stream(const Manifest& manifest,
     const bool video_ok =
         vc == "h264" || (proto == Protocol::Srt && vc == "hevc");
     if (!video_ok) {
-        p.problem = "This service is being recorded as " + vc + " video, and " +
+        p.problem = "This event is being recorded as " + vc + " video, and " +
                     (proto == Protocol::Srt
                        ? "this kind of connection cannot carry it."
                        : "streaming sites need H.264.");
         p.remedy  = proto == Protocol::Srt
                       ? "Set the main site's encoder to H.264 or HEVC for "
-                        "services you want to send here."
+                        "events you want to send here."
                       : "The video would have to be re-encoded on the way "
                         "out, which this server cannot do yet. Set the main "
-                        "site's encoder to H.264 for services you want to "
+                        "site's encoder to H.264 for events you want to "
                         "stream publicly, or send this to an SRT destination "
                         "instead — those can carry HEVC unchanged.";
         return p;
@@ -202,14 +202,14 @@ StreamPlan plan_stream(const Manifest& manifest,
         // "copy it" is exactly the quiet wrong answer the brief rules out.
         p.problem = "This destination is set to re-encode the video.";
         p.remedy  = "Re-encoding is not built yet. Turn it off to send the "
-                    "service as-is.";
+                    "event as-is.";
         return p;
     }
 
     // ── Audio ────────────────────────────────────────────────────────────────
     const auto& tracks = manifest.audio_tracks;
     if (tracks.empty()) {
-        p.problem = "This service has no sound in it.";
+        p.problem = "This event has no sound in it.";
         p.remedy  = "Check that the main site has at least one audio track "
                     "switched on.";
         return p;
@@ -232,7 +232,7 @@ StreamPlan plan_stream(const Manifest& manifest,
 
     // Resolve the operator's choice. By label, always — the UI never shows an
     // index, and a saved destination must keep meaning the same thing even if
-    // the encoder operator reorders their tracks between services.
+    // the encoder operator reorders their tracks between events.
     int index = -1;
     std::string label;
     if (dest.audio.label.empty()) {
@@ -246,7 +246,7 @@ StreamPlan plan_stream(const Manifest& manifest,
             break;
         }
         if (index < 0) {
-            p.problem = "This service does not have a sound feed called \"" +
+            p.problem = "This event does not have a sound feed called \"" +
                         dest.audio.label + "\".";
             p.remedy  = "It is sending " + join_labels(tracks) +
                         ". Choose one of those instead.";

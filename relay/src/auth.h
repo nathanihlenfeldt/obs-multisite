@@ -6,7 +6,7 @@
 // The relay started life shaped like the campus appliance, which sits on a
 // church LAN and is guarded by the building's own network. This is not that:
 // it runs on a VPS with a port open, and anyone who can reach that port can
-// point a service at their own server. So it needs a login, and the login is
+// point an event at their own server. So it needs a login, and the login is
 // not optional.
 //
 // Deliberately small: one operator, one password. A church has one person
@@ -70,7 +70,7 @@ private:
 // True behind a TLS-terminating proxy that sets X-Forwarded-Proto, and for a
 // connection to localhost — which is what an SSH tunnel looks like from here.
 // Anything else is reported to the operator rather than refused: locking
-// someone out of their own relay mid-service would be the worse failure.
+// someone out of their own relay mid-event would be the worse failure.
 bool connection_is_private(const std::map<std::string, std::string>& headers);
 
 } // namespace multisite_relay

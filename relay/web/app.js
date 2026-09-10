@@ -56,7 +56,7 @@ function showGate(needsSetup) {
   $('#gate-intro').textContent = needsSetup
     ? 'Nobody has claimed this relay yet. Choose a username and password — '
       + 'until you do, it is not protected.'
-    : 'This relay decides where your services are sent, so it needs a login.';
+    : 'This relay decides where your events are sent, so it needs a login.';
   $('#sign-in-form').password.autocomplete =
     needsSetup ? 'new-password' : 'current-password';
 }
@@ -162,8 +162,8 @@ async function refresh() {
   } else if (s.cannot_send_reason) {
     message = s.cannot_send_reason;
   } else if (s.send_note) {
-    // Some destinations can take this service and some cannot — an HEVC
-    // service, in practice. Shown in the same place, because it is the same
+    // Some destinations can take this event and some cannot — an HEVC
+    // event, in practice. Shown in the same place, because it is the same
     // question, and there is only ever one of the two.
     message = s.send_note;
   }
@@ -195,7 +195,7 @@ function renderDestinations(list) {
       <div class="stats">
         <div>${esc(duration(d.uptime_s))}<span>on air</span></div>
         <div>${esc(rate(d.bitrate_kbps))}<span>going out</span></div>
-        <div>${esc(behind(d.behind_live_s))}<span>behind the service</span></div>
+        <div>${esc(behind(d.behind_live_s))}<span>behind the event</span></div>
         ${d.restarts ? `<div>${d.restarts}<span>reconnections</span></div>` : ''}
       </div>` : ''}
       ${d.error ? `<div class="dest-error">${esc(d.error)}</div>` : ''}
@@ -373,7 +373,7 @@ async function refreshLog() {
   } catch (e) { /* the page will try again */ }
 }
 
-// ── past services ───────────────────────────────────────────────────────────
+// ── past events ───────────────────────────────────────────────────────────
 let destinationsCache = [];
 
 function whenText(ms, durationS) {
@@ -398,7 +398,7 @@ async function refreshEvents(force) {
     ]);
     destinationsCache = dests;
     if (!events.length) {
-      host.innerHTML = '<div class="empty">No services in storage yet.</div>';
+      host.innerHTML = '<div class="empty">No events in storage yet.</div>';
       return;
     }
     host.innerHTML = events.map((e) => {

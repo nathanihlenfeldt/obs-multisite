@@ -1,7 +1,7 @@
 /*
  * app.js — the operator interface.
  *
- * One rule runs through all of it: the language is the language of a service,
+ * One rule runs through all of it: the language is the language of an event,
  * not of a video pipeline. Times are clock times, durations are minutes, and
  * nothing here ever says "segment", "buffer" or "live edge". The audience is a
  * volunteer who has been handed a tablet, not the person who wrote it.
@@ -119,7 +119,7 @@ function netFor(s) {
   return { text: 'No internet', cls: 'off' };
 }
 
-// What the banner says. A live service, a recording of a past one, and a
+// What the banner says. A live event, a recording of a past one, and a
 // broadcast that has just closed are three different things to an operator and
 // must not read the same.
 function bannerFor(s) {
@@ -159,7 +159,7 @@ function drawStatus() {
   }
 
   let room = s.room_id || '';
-  if (s.pinned_event_id) room += ' · playing a past service';
+  if (s.pinned_event_id) room += ' · playing a past event';
   if (s.live_elsewhere) room += ' · something is live now';
   $('#room').textContent = room;
 
@@ -232,7 +232,7 @@ function drawTransport(s) {
 }
 
 // The bar spans what storage still holds. For a finished recording that is the
-// whole service and it must not move; while live the right-hand edge is the
+// whole event and it must not move; while live the right-hand edge is the
 // live edge and necessarily grows.
 function drawTimeline(s) {
   const from = s.earliest_ms || s.started_ms;
@@ -295,7 +295,7 @@ function drawReadout(s) {
   const offline = !!(net && net.cls === 'off');
 
   push('Internet', net ? net.text : '—', offline);
-  // The reliability figure that actually matters mid-service: how long this
+  // The reliability figure that actually matters mid-event: how long this
   // campus could keep broadcasting if its connection died right now.
   push('Could keep going for', spoken(s.buffered_ahead_s),
        offline || (s.playing && !s.paused && s.buffered_ahead_s < 30));
@@ -373,7 +373,7 @@ timeline.addEventListener('pointermove', (e) => {
 });
 timeline.addEventListener('pointerleave', () => { $('#tl-hover').textContent = ''; });
 
-/* ── Services (the event list) ───────────────────────────────────────────── */
+/* ── Events (the event list) ───────────────────────────────────────────── */
 
 async function refreshEvents() {
   try {
@@ -384,14 +384,14 @@ async function refreshEvents() {
     if (listing.loading && !listing.listed_once) note.textContent = 'Looking…';
     else if (listing.error) note.textContent = listing.error;
     else if (listing.fallback_scan) note.textContent =
-      'These were found by scanning; older services may take a moment.';
+      'These were found by scanning; older events may take a moment.';
     else if (listing.skipped) note.textContent =
       listing.skipped + ' could not be read and are not shown.';
     else note.textContent = '';
 
     if (!listing.events.length) {
       ul.innerHTML = listing.listed_once
-        ? '<li class="muted">No services stored for this room yet.</li>' : '';
+        ? '<li class="muted">No events stored for this room yet.</li>' : '';
       return;
     }
 
@@ -402,10 +402,16 @@ async function refreshEvents() {
                   : e.state === EVENT.RECORDING ? ['', 'Recording']
                   : ['', 'Unknown'];
       const isPlaying = e.event_id === playing;
+      const when = escapeHtml(shortDateTime(e.started_ms));
+      const label = (e.name || '').trim();
+      const main = label || when;
+      const small = label
+        ? `${when}${e.duration_s ? ' · ' + spoken(e.duration_s) + ' long' : ''}`
+        : (e.duration_s ? spoken(e.duration_s) + ' long' : '');
       return `<li class="${isPlaying ? 'playing' : ''}">
         <span class="badge ${badge[0]}">${badge[1]}</span>
-        <span class="when">${escapeHtml(shortDateTime(e.started_ms))}
-          <small>${e.duration_s ? spoken(e.duration_s) + ' long' : ''}</small></span>
+        <span class="when">${escapeHtml(main)}
+          <small>${escapeHtml(small)}</small></span>
         <button data-load="${escapeHtml(e.event_id)}">
           ${isPlaying ? 'Playing' : 'Load'}</button>
       </li>`;
@@ -571,7 +577,7 @@ async function loadSystem() {
         (s.disk.is_sd_card ? ' — this is the SD card' : ''));
   $('#facts').innerHTML = rows.join('');
 
-  // Both of these explain a service that stutters, and neither is visible any
+  // Both of these explain an event that stutters, and neither is visible any
   // other way.
   const warnings = [];
   if (s.under_voltage) warnings.push('The power supply is not keeping up.');
@@ -658,7 +664,7 @@ $('#btn-settime').onclick = async () => {
   } catch (e) { notify(e.message, true); }
 };
 
-// The three that interrupt a service get a confirmation. Everything else is
+// The three that interrupt an event get a confirmation. Everything else is
 // instant on purpose.
 function confirmThen(question, path) {
   return async () => {

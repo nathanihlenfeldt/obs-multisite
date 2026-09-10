@@ -1,6 +1,6 @@
 # Self-Hosted Multisite Streaming Platform — Project Scope
 
-A free, open-source, self-hosted platform for distributing a live service from a
+A free, open-source, self-hosted platform for distributing a live event from a
 main campus to any number of satellite campuses **reliably**, over commodity
 hardware and unreliable venue internet. It runs as a pair of OBS Studio plugins
 and uses nothing but an S3-compatible bucket you control — no central server, no
@@ -9,13 +9,13 @@ is a dumb file store.
 
 > **⚠️ Alpha — development build.** This is pre-release software under active
 > development. A six-hour continuous soak has been run end to end (see
-> the README's Status section), but it has not yet carried a real congregation's service.
+> the README's Status section), but it has not yet carried a real congregation's event.
 > Interfaces, settings and the storage protocol may still change without a
 > migration path, and there is no support contract, warranty or uptime
 > guarantee of any kind.
 >
 > Production use comes with caveats. Run it only with a tested fallback in
-> place, a technical person on hand, and the assumption that any given service
+> place, a technical person on hand, and the assumption that any given event
 > may have to go ahead without it. Treat a successful rehearsal as necessary
 > rather than sufficient.
 
@@ -23,10 +23,10 @@ is a dumb file store.
 
 ## 1. Design priorities (ranked)
 
-1. **Reliability above all.** A live service must not drop frames at a campus
+1. **Reliability above all.** A live event must not drop frames at a campus
    because the main site's internet hiccupped. Every segment is durable,
    retried, and verifiable; nothing is silently lost.
-2. **Feature completeness** for how services actually run — production audio
+2. **Feature completeness** for how events actually run — production audio
    distribution, markers/cues, pause-and-hold, resume-after-crash, multisite.
 3. **Simplicity of operation.** Decentralized and file-based. An operator's whole
    mental model is "hit Go Live" at the main site and "add the source" at a
@@ -60,9 +60,9 @@ This ranking is the tie-breaker for every design choice.
 - **Crash & outage resilience.** OBS crash or power loss at either end is
   recoverable: the encoder resumes the same event and sequence; decoders hold the
   last frame and resume seamlessly when the feed returns.
-- **Out to the public, from the same upload.** A small self-hosted service
+- **Out to the public, from the same upload.** A small self-hosted event
   reads the segments already in the bucket and pushes them to YouTube, Facebook
-  or any RTMP destination, so the main site uploads once whether the service is
+  or any RTMP destination, so the main site uploads once whether the event is
   going to two campuses or to two campuses and the internet. It runs a few
   minutes behind on purpose, so a wobble at the main site delays the public
   stream rather than breaking it (§8.2).
@@ -74,9 +74,9 @@ This ranking is the tie-breaker for every design choice.
   it starts on power-up. Campuses that also mix local cameras or graphics run
   the OBS source plugin instead; both share the same core.
 - **The origin is not tied to hardware.** Encoder and decoder ship in one module,
-  so any machine running OBS can take either role, and what originates a service
+  so any machine running OBS can take either role, and what originates an event
   is a laptop with OBS on it. A broadcast can come from a guest speaker's laptop, a
-  conference venue for one week, a campus hosting this week's combined service,
+  conference venue for one week, a campus hosting this week's combined event,
   or a site set up at short notice; adding an origin costs a room name and a key
   that can write to it. Nothing ships, clears customs, or is licensed per
   location. Store-and-forward matters *more* for an occasional origin than a
@@ -110,7 +110,7 @@ This ranking is the tie-breaker for every design choice.
   the same path: objects in a bucket.
 - **Read-only decoders.** Satellites need only `GetObject` + `ListBucket`.
 - **Addressable by number.** Deterministic segment names (`{seq:08d}`) let any
-  node fetch any segment without a directory service.
+  node fetch any segment without a directory event.
 
 ---
 
@@ -135,14 +135,14 @@ events/{event_id}/                # event_id = ULID minted by the encoder at "Go
   nothing in an event's key says which room it belongs to, only `event.json`
   does. Without the index, listing one room's events means listing every event
   ever recorded and reading each descriptor to discard most of them. Writing it
-  is deliberately non-fatal — a service must not be held off air because an
+  is deliberately non-fatal — an event must not be held off air because an
   index entry failed.
 - **The index is a shortcut, not the register.** An event with no entry — one
   recorded before the index existed, or one whose entry failed to write — must
   still list, so discovery is the *union* of the index and a scan of `events/`
   rather than the index when it has anything and the scan when it does not.
-  Treating a non-empty index as the whole truth hid every older service the
-  moment one indexed service appeared. The scan costs a descriptor read only
+  Treating a non-empty index as the whole truth hid every older event the
+  moment one indexed event appeared. The scan costs a descriptor read only
   for the ids the index did not already name.
 - `event_id` is a ULID minted locally by the encoder at "Go Live".
 - Decoders need only read access; the encoder needs write access scoped to its
@@ -293,7 +293,7 @@ limited to the manifest window — essential for timeslipping.
   retention window — enabling deep DVR rather than a short buffer.
 - **The rule must cover `rooms/` as well as `events/`.** The per-room index
   entry for an event is a few hundred bytes and outlives nothing on its own, so
-  a rule that expires only the media leaves the event list advertising services
+  a rule that expires only the media leaves the event list advertising events
   whose segments have gone. The catalog handles it — such an event is counted
   as skipped rather than offered — but the list degrades over time for no
   reason. Same age on both prefixes.
@@ -374,7 +374,7 @@ and a satellite must be able to load and play it exactly like a live feed that
 happens not to be advancing.
 
 - **Loading a finished event starts at the beginning**, not at the live edge.
-  Treating a completed service as "live" meant loading it and landing seconds
+  Treating a completed event as "live" meant loading it and landing seconds
   from the close.
 - **Ending a broadcast mid-playback changes nothing for the satellite**: it
   keeps playing through the remaining segments to the end. Nothing is cut off.
@@ -398,9 +398,9 @@ happens not to be advancing.
   advancing is reported as offline after the stale threshold.
 - **"Ended" covers two situations that must not read the same.** A broadcast
   that finished *while the satellite was watching* is reported as
-  "BROADCAST ENDED" — the service has just closed and the recording is playing
+  "BROADCAST ENDED" — the event has just closed and the recording is playing
   out. An event that was *already finished when loaded* is reported as
-  "RECORDING (not live)" — this is a past service, and nothing has just
+  "RECORDING (not live)" — this is a past event, and nothing has just
   happened. The satellite remembers whether it ever saw the event live, and
   the memory resets when the event changes.
 
@@ -421,7 +421,7 @@ what makes the list scannable — the date alone does not say which one is
 happening now. Entries are labelled by start date and time, newest first, with
 the live one pinned to the top.
 
-Choosing an event pins playback to it. A service starting mid-watch does **not**
+Choosing an event pins playback to it. An event starting mid-watch does **not**
 steal the playback; the operator is told something is live and offered the
 switch, because being pulled out of a recording part-way through is worse than
 being told about it.
@@ -439,7 +439,7 @@ at all, which is what lets the same engine drive the planned appliance.
 - **Go live / End broadcast**, with failures shown in the dock rather than left
   in the log.
 - Marker buttons, named by the operator.
-- The reliability readout that matters mid-service: how much of the service has
+- The reliability readout that matters mid-event: how much of the event has
   been sent, how much is waiting, retries, and link health.
 
 **Decoder dock (satellite)**
@@ -450,7 +450,7 @@ at all, which is what lets the same engine drive the planned appliance.
   cursor; clicking goes there.
 - Hold picture / Continue / Catch up to now, jog in ±1 s to ±1 min steps, and
   "stay behind live by N minutes".
-- **Lock**, to stop anything being changed by accident during a service.
+- **Lock**, to stop anything being changed by accident during an event.
 - Position and state in plain language, switching vocabulary between a live
   event and a finished recording.
 
@@ -460,7 +460,7 @@ broadcast for 12 min") and plain states. The audience is a volunteer, not the
 person who wrote it.
 
 **Hotkeys** cover play, stop, hold, resume, catch-up, jog and marker drops, and
-work without Qt — useful for an operator running the service from the keyboard,
+work without Qt — useful for an operator running the event from the keyboard,
 and the fallback when a build has no docks.
 
 ---
@@ -514,7 +514,7 @@ Two tiers, sharing one build:
   will wear out an SD card, so a USB SSD is required rather than recommended,
   and the cache location must be configurable.
 - **Thermals.** Sustained decode needs active cooling; a passively cooled case
-  will throttle during a long service.
+  will throttle during a long event.
 - **Output:** DeckLink (video plus embedded multichannel audio, which suits the
   packed channel layout), or DRM/KMS for direct display. Audio to ALSA/JACK or
   embedded in SDI. Packed channels go out in the order they arrived, which is
@@ -525,7 +525,7 @@ Two tiers, sharing one build:
   browser on the church network — hold, resume, catch up to now, jump to a
   moment, and see what is playing and how far behind. No app to install.
 - **Operation:** starts on power-up (systemd), restarts on failure, keeps its
-  local cache across reboots so a restart mid-service resumes rather than
+  local cache across reboots so a restart mid-event resumes rather than
   restarting.
 
 **What it reuses.** Everything in the receive path: room and event discovery,
@@ -554,9 +554,9 @@ HTML with a WebSocket for live updates. It should carry the same plain language
   put its own address, name, room and state on it. Idle behaviour is
   configurable — black, hold the last picture, the identity screen, or a
   campus-supplied slide — because a screen a congregation can see is not
-  always best left showing the last frame of a service.
+  always best left showing the last frame of an event.
 - **A script on a stock distribution, not an image.** One command on stock
-  Raspberry Pi OS installs the dependencies, builds, installs the service and
+  Raspberry Pi OS installs the dependencies, builds, installs the event and
   enables it. It works from day one with no release infrastructure, updates
   are the same command again, and it does not tie the project to particular
   hardware. A prebuilt package can follow once the player has settled.
@@ -575,10 +575,10 @@ Docker container on a small VPS. It is not part of the plugins and the core
 knows nothing about it.
 
 **Why relay from the bucket rather than add a second OBS output.** The main
-site uploads once however many places the service goes, which is what makes
+site uploads once however many places the event goes, which is what makes
 this possible at all on a venue connection that will not carry a second
 upload. The public stream also inherits the buffering the campus feed already
-has: the relay deliberately runs a configurable time behind the service —
+has: the relay deliberately runs a configurable time behind the event —
 three minutes by default — so a dropout at the main site is absorbed instead
 of reaching air. It is the same trade as §1, applied to the public stream:
 latency spent to buy resilience.
@@ -609,7 +609,7 @@ window in which a lost packet can be asked for again; ffmpeg's default of 120ms
 is enough only on a path short enough that the answer comes back almost
 immediately. The relay sends 2000ms unless told otherwise. That is §1 applied
 where it is cheapest — the relay is already sitting three minutes behind the
-service, so two seconds is invisible, and it buys recovery across a path many
+event, so two seconds is invisible, and it buys recovery across a path many
 times longer than the default can manage. It is on the form, under Advanced,
 for the case where it is not enough.
 
@@ -628,9 +628,9 @@ be noticed by watching, and they mean opposite things depending on which end
 opened the connection. A destination we called that stops taking content has
 gone wrong and is dropped and rebuilt like any other lost connection. A
 listener that has never carried anything is simply waiting, possibly for the
-whole first half of a service, and is neither reported nor acted on as a
+whole first half of an event, and is neither reported nor acted on as a
 failure — it keeps taking up position behind the live edge while it waits, so
-whoever finally attaches gets the service as it is now rather than the forty
+whoever finally attaches gets the event as it is now rather than the forty
 minutes they missed. Once a listener has carried content, losing it is a fault
 like any other: the distinction is whether anything ever went out, not the
 mode.
@@ -688,19 +688,19 @@ reporting anything, so waiting for the child to complain is waiting for ever.
 **What it reuses.** The receive path, unchanged: event discovery, the durable
 cache, checksum verification, and the live/ended/interrupted classification of
 §7.5. It is the same code a campus runs, so the relay and a campus can never
-disagree about whether a service is still running — and an event that ends
+disagree about whether an event is still running — and an event that ends
 cleanly is played out to its last segment and then closed deliberately, rather
 than being cut off or left to time out.
 
-**Finished services.** The relay also does two things with services that have
+**Finished events.** The relay also does two things with events that have
 already ended, both gated on the event actually being finished (§7.5.1's
 classification, so it and a campus agree on what "finished" means):
 
 - **Download as one MP4**, streamed from storage as it is requested rather than
-  assembled on the server, so a two-hour service costs no disk and several
+  assembled on the server, so a two-hour event costs no disk and several
   people can download at once. It carries every audio track, not just the
   streamed one — the ISOs and the click are what a post-production edit needs.
-- **Replay to a destination**, playing a finished service out at normal speed
+- **Replay to a destination**, playing a finished event out at normal speed
   as though it were live, for a second congregation or an evening repeat. This
   falls out of §7.5 rather than being new machinery: a finished event already
   plays and then ends, which is what a replay is. Proof of concept — one at a
@@ -718,14 +718,14 @@ reachable through anything (the port has to be published, and nothing is
 shipped to help); signing in to YouTube (a stream key is pasted, and the
 broadcast is still created in YouTube's own page); and starting by itself,
 either on a schedule or when the encoder goes live. Scheduling matters most,
-because services start late — the intended trigger is `live.json` actually
+because events start late — the intended trigger is `live.json` actually
 going live, optionally bounded by a time window, and `markers.json` makes
 "start the public stream at Sermon Start" possible.
 
 ## 8.2.1 A hosted streaming provider (planned)
 
 A church that wants a player on its own website currently has to put the
-service on YouTube or Facebook and embed theirs. The alternative is a hosted
+event on YouTube or Facebook and embed theirs. The alternative is a hosted
 video API — **Mux** and **Cloudflare Stream** are the two worth supporting,
 and the point of naming both is that neither becomes the answer: the relay
 would carry a provider interface, and a church would choose.
@@ -734,7 +734,7 @@ What it would buy, in the order it is worth having:
 
 - **A persistent player embed.** A hosted provider issues one playback
   identifier that outlives every broadcast. A church embeds it once, and the
-  relay can change what is behind it — this week's service, a replay, a
+  relay can change what is behind it — this week's event, a replay, a
   holding card — without anybody editing the website again. That is the whole
   feature; everything else is machinery for it. The page itself would live in
   the bucket the church already has rather than on the relay, so the public
@@ -745,7 +745,7 @@ What it would buy, in the order it is worth having:
   key.
 - **Provider-side simulcast.** Both providers will push onward to YouTube,
   Facebook and the rest on the church's behalf. The VPS then sends *one*
-  stream out however many places the service goes, instead of one ffmpeg child
+  stream out however many places the event goes, instead of one ffmpeg child
   and one full upload per destination — which on a small VPS is the difference
   between two destinations and six.
 
@@ -773,7 +773,7 @@ discovered late:
 ## 8.3 External control API (planned)
 
 Operators reach for a physical button, not a dock. A volunteer running a
-service on a Stream Deck should be able to hold, resume and catch up without
+event on a Stream Deck should be able to hold, resume and catch up without
 finding a window, and the main site should be able to go live from a button.
 The target is **Bitfocus Companion**, which is what churches in this bracket
 actually use.
@@ -808,7 +808,7 @@ control logic, and no second path to keep in step.
    action, and so can any obs-websocket client — scripts, Stream Deck plugins,
    another automation system.
 2. **A Companion module.** *Custom Vendor Request* is an action only: it cannot
-   light a button red while a service is live, or show "12 s behind" on a
+   light a button red while an event is live, or show "12 s behind" on a
    display. Feedbacks, variables and presets need a purpose-built Companion
    module (Node.js, submitted to Bitfocus) subscribing to the vendor events.
    That is a separate deliverable in a separate repository, and it depends on
@@ -833,21 +833,21 @@ is the better answer for a given church, section 12 says so plainly.
 |---|---|
 | Resilient store-and-forward upload | built |
 | Multisite to any number of campuses (storage cost only) | built |
-| Markers / service cues | built |
+| Markers / event cues | built |
 | Pause & hold at a campus, resuming exactly where it stopped | built |
 | Per-campus independent DVR position | built |
 | Multi-track production audio (main / ISOs / click), up to 6 tracks | built — one source per track at the satellite (§4.3) |
 | Event browsing with live / recording / interrupted state | built |
-| Video-on-demand playback of past and interrupted services | built |
+| Video-on-demand playback of past and interrupted events | built |
 | Any OBS machine can originate a broadcast | built |
-| Dedicated receive appliance (Raspberry Pi / mini-PC) | built, not yet run through a service |
+| Dedicated receive appliance (Raspberry Pi / mini-PC) | built, not yet run through an event |
 | Self-hosted, on storage you own | built |
 | Open protocol, no vendor lock-in | by design — the whole protocol is §4 |
-| Public simulcast to YouTube / Facebook / RTMP or SRT | built and pushing live to YouTube; not yet through a full service. H.264 over either; HEVC over SRT only, and not yet from real encoder output (§8.2) |
-| SRT output, caller or listener | built and receiving on a real client; not yet run through a full service (§8.2) |
+| Public simulcast to YouTube / Facebook / RTMP or SRT | built and pushing live to YouTube; not yet through a full event. H.264 over either; HEVC over SRT only, and not yet from real encoder output (§8.2) |
+| SRT output, caller or listener | built and receiving on a real client; not yet run through a full event (§8.2) |
 | HEVC out over SRT | built, and the remux verified against ffmpeg — but not yet carried from a real HEVC encoder (§8.2) |
-| Download a finished service as an MP4, all audio tracks | built (§8.2) |
-| Replay a finished service to a destination | proof of concept — one at a time, by hand (§8.2) |
+| Download a finished event as an MP4, all audio tracks | built (§8.2) |
+| Replay a finished event to a destination | proof of concept — one at a time, by hand (§8.2) |
 | Per-channel routing of packed audio at an OBS satellite | out of scope — use [atkAudio's OBS plugins](https://github.com/atkAudio/PluginForObsRelease) (§4.3.1) |
 | Re-encoding an HEVC feed for a streaming site | not built; an SRT destination carries HEVC unchanged instead (§8.2) |
 | Hosted streaming provider (Mux / Cloudflare Stream), persistent player embed, provider-side simulcast | planned (§8.2.1) |
@@ -868,7 +868,7 @@ windows for campus announcements.
 
 Each phase leaves the project in a testable, usable state. Phases 1–5 are
 built and have been run end to end. Phases 6 and 7 are built but have not yet
-carried a service; phase 8 has not been started.
+carried an event; phase 8 has not been started.
 
 - **Phase 1 — Reliability core.** ✅ Durable upload queue, retry/backoff, checksums,
   resume-after-crash, decoder cache with verification, and stale detection. This
@@ -893,14 +893,14 @@ carried a service; phase 8 has not been started.
   control surface (decoder controls, event list, storage and system settings,
   decoupled preview), and the systemd/install path that makes it start on
   power-up, **proven on a Pi 5 on 2026-09-07** though not yet through a
-  service. Outstanding: DeckLink SDI output for the production tier, and
+  event. Outstanding: DeckLink SDI output for the production tier, and
   hardware-decoder selection on Pi 4. The channel de-interleaver has been
   dropped from scope rather than deferred (§4.3.1).
 - **Phase 7 — Extensions.** 🟨 Built: the public simulcast relay (§8.2), as a
   separate container in `relay/` — copy remux to one or more RTMP **or SRT**
   destinations, per-destination audio selection, a delay buffer, and
   supervised reconnection, with its own browser UI. Like the appliance it has
-  not yet carried a service. HEVC now has a route out, over SRT, where RTMP
+  not yet carried an event. HEVC now has a route out, over SRT, where RTMP
   can carry only H.264; that remux is verified against ffmpeg but has not yet
   carried real encoder output. Not started: re-encoding, web/mobile simulcast
   served from the bucket, scheduling and auto-go-live, redundancy, and local
@@ -941,7 +941,7 @@ large church in a well-connected part of the world; the commercial platforms
 that solve it are good, and largely unavailable or unaffordable where these
 churches are.
 
-The full argument — what this is and is not, why it is not a managed service,
+The full argument — what this is and is not, why it is not a managed event,
 why latency is traded for resilience, what it asks of a venue's network, and
 the clean-room and licensing position — is in the README, under
 [Why this exists](README.md#why-this-exists). It was duplicated here word for

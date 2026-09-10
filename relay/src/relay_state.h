@@ -29,7 +29,7 @@
 #include "decoder_session.h"   // RoomState: the same live/ended/interrupted
                                  // classification the decoder uses, so the
                                  // relay and a campus never disagree about
-                                 // whether a service is still running.
+                                 // whether an event is still running.
 #include "model.h"
 
 #include <cstdint>
@@ -97,7 +97,7 @@ struct RelayInput {
     // This destination waits to be connected TO rather than connecting out —
     // an SRT listener, where a broadcast partner attaches to us. Sitting
     // there with nothing attached is the normal resting state of one of
-    // those, possibly for the whole first half of a service, and must never
+    // those, possibly for the whole first half of an event, and must never
     // be reported or acted on as a failure.
     bool awaits_receiver = false;
 
@@ -113,7 +113,7 @@ struct RelayInput {
     // How far behind the live edge this destination should sit.
     int delay_s = 180;
 
-    // Rebroadcast: play a finished service from its beginning rather than
+    // Rebroadcast: play a finished event from its beginning rather than
     // taking up position behind a live edge. The rest of the machine is
     // unchanged, because a finished event already behaves as something that
     // plays and then ends (§7.5) — which is exactly what a rebroadcast is.
@@ -198,7 +198,7 @@ private:
 
 // Which segment to start from, so the destination sits `delay_s` behind the
 // live edge. Clamped to what storage still holds: asking for three minutes ago
-// on a service that started ninety seconds ago starts at the beginning.
+// on an event that started ninety seconds ago starts at the beginning.
 uint64_t start_seq_for_delay(const multisite::Manifest& m, int delay_s);
 
 // The same arithmetic without a manifest, for the machine's own use.

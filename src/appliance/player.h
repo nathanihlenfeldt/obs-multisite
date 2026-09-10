@@ -49,6 +49,9 @@ namespace multisite_player {
 // One row of the event list, in the plain terms the UI needs.
 struct EventEntry {
     std::string event_id;
+    // Operator-facing title from the encoder's event name; empty when the
+    // event predates naming or the encoder left it blank.
+    std::string name;
     long long   started_ms = 0;
     double      duration_s = 0;
     // 0 unknown, 1 live, 2 recording, 3 interrupted — matching
@@ -312,7 +315,7 @@ private:
     std::string m_idle_signature;
     bool        m_idle_showing = false;
     // Boot splash: show the identity screen for the first few seconds even if
-    // auto-play is about to put a service on the screen.
+    // auto-play is about to put an event on the screen.
     std::atomic<uint64_t> m_boot_splash_until_ns{0};
     std::atomic<bool>     m_boot_splash_drawn{false};
     // The sound card is opened by the delivery thread, once the first decoded

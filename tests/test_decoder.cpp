@@ -331,7 +331,7 @@ int main() {
 
         // The point of the state. Everything up to the moment the encoder went
         // is recorded and complete; reporting this as Offline (as it once did)
-        // made a crashed service permanently unplayable, which is exactly when
+        // made a crashed event permanently unplayable, which is exactly when
         // you would want to watch it back.
         CHECK(dec.event_ended(), "an interrupted event behaves as video-on-demand");
         dec.pump_downloads(10);
@@ -344,7 +344,7 @@ int main() {
     std::printf("== 6b. Pinning a past event ==\n");
     {
         FakeStore store;
-        // An old service, finished cleanly.
+        // An old event, finished cleanly.
         FakeEncoder past(store, "r", "01EVENTOLDAAAAAAAAAAAAAAAA");
         past.publish_start();
         for (int i = 0; i < 4; ++i) past.publish_segment();
@@ -364,7 +364,7 @@ int main() {
         CHECK(dec.event_id() == "01EVENTNEWBBBBBBBBBBBBBBBB", "playing the live event");
         CHECK(!dec.live_elsewhere(), "nothing is live elsewhere when playing live");
 
-        // Pin the old service.
+        // Pin the old event.
         const uint64_t disc_before = dec.discontinuity_id();
         dec.pin_event("01EVENTOLDAAAAAAAAAAAAAAAA");
         RoomState st = dec.poll(now.clock_ms);
@@ -373,12 +373,12 @@ int main() {
         CHECK(dec.discontinuity_id() != disc_before,
               "the host is told to restart its decoder: new event, new timeline");
 
-        // The whole point of the second design question: a service starting
+        // The whole point of the second design question: an event starting
         // must not yank the operator out of what they are watching.
         for (int i = 0; i < 3; ++i) now.publish_segment();
         dec.poll(now.clock_ms);
         CHECK(dec.event_id() == "01EVENTOLDAAAAAAAAAAAAAAAA",
-              "a new service going live does NOT steal a pinned playback");
+              "a new event going live does NOT steal a pinned playback");
         CHECK(dec.live_elsewhere(),
               "but the operator is told something is live now");
         CHECK(dec.live_event_id() == "01EVENTNEWBBBBBBBBBBBBBBBB",
@@ -474,7 +474,7 @@ int main() {
 
         auto cur = dec.current_marker();
         CHECK(cur && cur->label == "Sermon Start",
-              "current_marker reports where we are in the service");
+              "current_marker reports where we are in the event");
 
         CHECK(dec.jump_to_marker("Offering-id"), "jumped to the later marker");
         CHECK(dec.playback_head() == 10, "head moved to segment 10");
@@ -510,7 +510,7 @@ int main() {
 
         CHECK(dec.event_started_ms() == enc.started_at_ms,
               "event start time reaches the satellite");
-        // Segment 4 holds content 24s after the service started (4 x 6s).
+        // Segment 4 holds content 24s after the event started (4 x 6s).
         const int64_t expect4 = enc.started_at_ms + 24000;
         CHECK(dec.wall_clock_ms(4) == expect4,
               "a position converts to the clock time of its content");
@@ -716,7 +716,7 @@ int main() {
         // these used to be reported to the operator as "that moment is no
         // longer available in storage", which for a seek past the end is not
         // vague but wrong — nothing has been removed, there is simply no more
-        // of the service yet.
+        // of the event yet.
         {
             const int64_t past_end = enc.started_at_ms + 60LL * 60 * 1000;
             CHECK(dec.seek_to_wall_ms(past_end) == 0, "a seek past the end fails");
@@ -729,7 +729,7 @@ int main() {
 
             CHECK(dec.seek_to_wall_ms(enc.started_at_ms - 60000) == 0,
                   "a seek before the start fails");
-            CHECK(dec.last_error().find("before this service started") !=
+            CHECK(dec.last_error().find("before this event started") !=
                       std::string::npos,
                   "and says so, rather than blaming retention");
         }
@@ -808,7 +808,7 @@ int main() {
     std::printf("== 18. 'Ended' means two different things ==\n");
     {
         // (a) Loaded while already finished: this is a recording of a past
-        //     service, not something that just ended.
+        //     event, not something that just ended.
         FakeStore store;
         FakeEncoder enc(store, "r", "01EVENTWASNTLIVEWASNTLIVE");
         enc.publish_start();

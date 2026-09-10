@@ -64,7 +64,7 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     root->setContentsMargins(8, 8, 8, 8);
     root->setSpacing(8);
 
-    // ── Status first: what an operator looks at mid-service ─────────────────
+    // ── Status first: what an operator looks at mid-event ─────────────────
     auto* statusBox = new QGroupBox(tr_("Dock.Status"), this);
     auto* grid = new QGridLayout(statusBox);
     grid->setHorizontalSpacing(14);
@@ -101,7 +101,18 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     grid->addWidget(m_error, 4, 0, 1, 4);
     root->addWidget(statusBox);
 
-    // ── Go live / end ────────────────────────────────────────────────────────
+    // ── Event name / Go live ─────────────────────────────────────────────────
+    // The name is per-event and editable, pre-filled with the current
+    // date/time so an event left unnamed still shows a recognisable label.
+    auto* nameRow = new QHBoxLayout();
+    m_eventName = new QLineEdit(this);
+    m_eventName->setToolTip(tr_("Dock.EventNameHint"));
+    nameRow->addWidget(new QLabel(tr_("Dock.EventName"), this));
+    nameRow->addWidget(m_eventName, 1);
+    root->addLayout(nameRow);
+    m_eventNameDefault = defaultEventName();
+    m_eventName->setText(m_eventNameDefault);
+
     auto* row = new QHBoxLayout();
     m_goLive = new QPushButton(tr_("Dock.GoLive"), this);
     m_end    = new QPushButton(tr_("Dock.End"), this);
@@ -378,7 +389,28 @@ void EncoderDock::onSaveSettings() {
     cfg.track_labels       = m_trackLabels->text().toStdString();
     cfg.channel_labels     = m_channelLabels->text().toStdString();
     cfg.marker_labels      = m_markerLabels->text().toStdString();
+    // The event name is per-event, not a saved setting. Send it only when the
+    // operator has typed their own; an untouched date/time default is sent
+    // empty so the satellite falls back to the time and a resumed event keeps
+    // its original name.
+    ensureEventName();
+    const QString typedName = m_eventName->text().trimmed();
+    cfg.event_name = (typedName.isEmpty() || typedName == m_eventNameDefault)
+                         ? std::string()
+                         : typedName.toStdString();
     BroadcastController::instance().set_settings(cfg);
+}
+
+QString EncoderDock::defaultEventName() const {
+    return QDateTime::currentDateTime().toString("ddd d MMM yyyy, HH:mm");
+}
+
+void EncoderDock::ensureEventName() {
+    const QString typed = m_eventName->text().trimmed();
+    if (typed.isEmpty() || typed == m_eventNameDefault) {
+        m_eventNameDefault = defaultEventName();
+        m_eventName->setText(m_eventNameDefault);
+    }
 }
 
 void EncoderDock::onGoLive() {
@@ -486,7 +518,7 @@ void EncoderDock::refresh() {
     const int mins = (int)(st.uptime_s / 60.0);
     const int secs = (int)st.uptime_s % 60;
     m_uptime->setText(QString("%1:%2").arg(mins).arg(secs, 2, 10, QChar('0')));
-    // How much of the service has been sent, in time — the count of segments
+    // How much of the event has been sent, in time — the count of segments
     // is an implementation detail nobody needs.
     const double seg = m_segDur ? m_segDur->value() : 6.0;
     m_confirmed->setText(friendly_duration((double)st.confirmed * seg));

@@ -12,7 +12,7 @@
 # when GitHub hiccups mid-run.
 #
 # It installs the build dependencies, builds the player, installs it as a
-# service that starts on power-up, and leaves the box showing a screen with its
+# player that starts on power-up, and leaves the box showing a screen with its
 # own address and a QR code on it so somebody can finish the job from a phone.
 #
 # Safe to run again: it updates an existing installation in place and keeps the
@@ -127,7 +127,7 @@ note "installed $($PREFIX/bin/multisite-player --version)"
 # ── Where the cache goes ─────────────────────────────────────────────────────
 # The cache writes roughly 3 GB an hour. On an SD card that is a wear-out
 # problem, not a performance one, so a USB SSD is looked for and used.
-say "Choosing where to keep the downloaded service"
+say "Choosing where to keep the downloaded event"
 CACHE_DIR="$STATE_DIR/cache"
 SSD_MOUNT=""
 while read -r src target fstype _; do
@@ -209,7 +209,7 @@ for _ in $(seq 1 12); do
   sleep 1
 done
 if [ -z "$settled" ] || ! systemctl is-active --quiet "$SERVICE"; then
-  warn "The service did not stay running. What it said:"
+  warn "The player did not stay running. What it said:"
   journalctl -u "$SERVICE" -n 40 --no-pager || true
   warn ""
   warn "To see it fail with the log in front of you:"

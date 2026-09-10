@@ -126,7 +126,7 @@ Thirteen suites, all runnable without OBS (the `cmaf*` ones need FFmpeg and
 | `reliability` | durability across a crash, ordered drain through an outage, checksum rejection, permanent-failure handling |
 | `session` | the write-ordering invariant holds continuously, including across a crash and resume; packed multi-channel audio round-trips, channel order intact |
 | `decoder` | timeslipping: the cache fills while paused, resume continues exactly where it stopped, markers, seek-by-time, VOD playback, and that a gap stalls rather than silently skipping |
-| `responsive` | UI queries stay fast while downloading — the property that keeps OBS usable during a service |
+| `responsive` | UI queries stay fast while downloading — the property that keeps OBS usable during an event |
 | `snapshot` | the figures the dock reads agree with the session they are built from |
 | `s3_list` | a ListObjectsV2 response is read correctly, including pagination and an access-denied body; a signed query string is canonicalised the way S3 does it |
 | `event_catalog` | events are classified as live / recording / interrupted, rooms stay separate, a listing failure is not shown as "no recordings", an event that recorded nothing is not offered, and an event with no room-index entry still lists alongside those that have one |

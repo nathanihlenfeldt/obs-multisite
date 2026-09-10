@@ -120,7 +120,7 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
 
     // ── The guard ────────────────────────────────────────────────────────────
     // The failure mode of getting this wrong is not "a stranger reads a status
-    // page" — it is a stranger changing where a church's service is sent. So
+    // page" — it is a stranger changing where an event is sent. So
     // every route registered through `route()` below is behind a session, and
     // the three that cannot be (signing in, and asking whether you are signed
     // in) are registered directly on the server and are listed here:
@@ -171,7 +171,7 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         j["configured"] = auth.configured();
         j["signed_in"] = auth.valid_session(token);
         // Reported so the interface can say so, not so it can refuse. Locking
-        // an operator out of their own relay mid-service would be the worse
+        // an operator out of their own relay mid-event would be the worse
         // failure by far.
         j["connection_is_private"] = connection_is_private(req.headers);
         res.json(j.dump());
@@ -415,7 +415,7 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         ok(res);
     });
 
-    // ── Past services ────────────────────────────────────────────────────────
+    // ── Past events ──────────────────────────────────────────────────────────
 
     route("GET", "/api/events", [&service](const HttpRequest& req,
                                            HttpResponse& res) {
@@ -427,8 +427,8 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
             j["started_at_ms"] = e.started_at_ms;
             j["duration_s"] = e.duration_s;
             j["state"] = multisite::to_string(e.state);
-            // The one thing the interface needs to decide what to offer: a
-            // service still going out can be neither downloaded nor
+            // The one thing the interface needs to decide what to offer: an
+            // event still going out can be neither downloaded nor
             // rebroadcast, because it has no end yet.
             j["finished"] = e.state != multisite::EventState::Live;
             j["interrupted"] = e.state == multisite::EventState::Interrupted;
@@ -446,16 +446,16 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
         RoomFeeder* feeder = service.feeder();
         if (!feeder) return fail(res, 409, "Storage has not been set up yet.");
 
-        // Named for when the service happened, because a folder of ULIDs is
+        // Named for when the event happened, because a folder of ULIDs is
         // no use to anyone looking for last Sunday.
-        std::string name = "service";
+        std::string name = "event";
         for (const auto& e : service.events()) {
             if (e.event_id != id) continue;
             const std::time_t t = (std::time_t)(e.started_at_ms / 1000);
             char buf[32];
             if (std::strftime(buf, sizeof(buf), "%Y-%m-%d-%H%M",
                               std::localtime(&t)))
-                name = std::string("service-") + buf;
+                name = std::string("event-") + buf;
             break;
         }
 

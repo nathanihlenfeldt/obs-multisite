@@ -96,6 +96,7 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
     EventInfo ev;
     ev.event_id           = m_event_id;
     ev.room_id            = m_cfg.room_id;
+    ev.name               = m_cfg.event_name;
     ev.started_at_ms      = now_ms();
     ev.first_seq          = m_next_seq;
     ev.segment_duration_s = m_cfg.segment_duration_s;
@@ -107,11 +108,12 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
     // rooms/{room}/events/{id}.json — the per-room index the event list reads.
     // Deliberately NOT fatal: this only makes a past event easier to find, and
     // refusing to go live because an index entry failed to write would be a
-    // service off the air for the sake of a listing convenience. A satellite
+    // event off the air for the sake of a listing convenience. A satellite
     // falls back to scanning events/ when the entry is missing.
     RoomEventEntry idx;
     idx.event_id      = m_event_id;
     idx.room_id       = m_cfg.room_id;
+    idx.name          = m_cfg.event_name;
     idx.started_at_ms = ev.started_at_ms;
     if (!put_json(room_event_key(m_cfg.room_id, m_event_id), idx.to_json())) {
         m_last_error.clear();   // reported above; not a go-live failure
@@ -126,6 +128,7 @@ bool Session::begin_common(const std::vector<uint8_t>& init,
         m_manifest = Manifest{};
         m_manifest.event_id            = m_event_id;
         m_manifest.status              = "live";
+        m_manifest.name                = m_cfg.event_name;
         m_manifest.init                = "init.mp4";
         m_manifest.video               = video;
         m_manifest.audio_tracks        = tracks;
@@ -157,6 +160,18 @@ bool Session::resume(const std::vector<uint8_t>& init,
     if (!info.resumable) return false;
     m_event_id = info.event_id;
     m_next_seq = info.last_enqueued + 1;   // continue the sequence
+    // Keep the event's original name unless the operator supplied a new one.
+    // Reading it back costs one GET, and only happens on the rare resume path.
+    if (m_cfg.event_name.empty()) {
+        auto r = m_tx.get(event_prefix() + "event.json");
+        if (r.success) {
+            try {
+                EventInfo old = EventInfo::from_json(
+                    std::string(r.body.begin(), r.body.end()));
+                if (!old.name.empty()) m_cfg.event_name = old.name;
+            } catch (...) {}
+        }
+    }
     m_spool->resume_event();
     return begin_common(init, video, tracks);
 }

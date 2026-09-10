@@ -42,6 +42,7 @@ static constexpr char S_KEYID[]     = "access_key_id";
 static constexpr char S_SECRET[]    = "secret_access_key";
 static constexpr char S_REGION[]    = "region";
 static constexpr char S_ROOM[]      = "room_id";
+static constexpr char S_EVENTNAME[] = "event_name";
 static constexpr char S_SEGDUR[]    = "segment_duration_s";
 static constexpr char S_TRACKLBL[]  = "track_labels";   // comma-separated
 static constexpr char S_TAGS[]      = "send_expiry_tag";
@@ -401,6 +402,7 @@ static bool out_start(void* data) {
 
     SessionConfig sc;
     sc.room_id            = obs_data_get_string(s, S_ROOM);
+    sc.event_name         = obs_data_get_string(s, S_EVENTNAME);
     sc.segment_duration_s = obs_data_get_double(s, S_SEGDUR);
     std::string labels     = obs_data_get_string(s, S_TRACKLBL);
     std::string chan_labels = obs_data_get_string(s, S_CHANLBL);
@@ -507,7 +509,7 @@ static bool out_start(void* data) {
                 mlog_info("upload verified in bucket: %s", st.verify_note.c_str());
         }
         // Always warn when the link degrades — that's the thing an operator
-        // must know about mid-service.
+        // must know about mid-event.
         if (health_changed && st.health != LinkHealth::Healthy) {
             mlog_warn("upload link %s — capture continues, segments are "
                       "queued to disk and will be sent when it recovers",

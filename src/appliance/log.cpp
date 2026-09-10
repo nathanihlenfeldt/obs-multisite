@@ -16,7 +16,7 @@ std::mutex           g_mtx;
 std::deque<LogEntry> g_ring;
 bool                 g_debug = false;
 
-// Enough to cover a service's worth of interesting events without letting a
+// Enough to cover an event's worth of interesting events without letting a
 // chatty failure grow without bound on a box that runs for months.
 constexpr size_t kMaxLines = 500;
 

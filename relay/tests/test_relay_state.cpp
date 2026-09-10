@@ -56,7 +56,7 @@ int main() {
         CHECK(seq_behind_live(100, 0, 6.0, 180) == 70,
               "a three-minute delay starts thirty segments behind live");
         CHECK(seq_behind_live(5, 0, 6.0, 180) == 0,
-              "a service that just started begins at the beginning");
+              "an event that just started begins at the beginning");
         CHECK(seq_behind_live(100, 90, 6.0, 180) == 90,
               "never earlier than what storage still holds");
         CHECK(seq_behind_live(100, 0, 6.0, 0) == 100,
@@ -156,7 +156,7 @@ int main() {
 
     // ── Running close to the live edge ───────────────────────────────────────
     // The next fragment is routinely a second late. That is not a problem and
-    // must not be announced as one, or the screen flickers through a service.
+    // must not be announced as one, or the screen flickers through an event.
     {
         RelayMachine m;
         auto in = live_at(0, 100);
@@ -241,7 +241,7 @@ int main() {
         CHECK(m.state() == RelayState::Stopped, "ending cleanly reaches Stopped");
     }
 
-    // An encoder that died mid-service still gets what it managed to produce.
+    // An encoder that died mid-event still gets what it managed to produce.
     {
         RelayMachine m;
         auto in = live_at(0, 70);
@@ -254,7 +254,7 @@ int main() {
         auto d = m.step(in);
         CHECK(d.action == RelayAction::CloseInput &&
               d.note.find("unexpectedly") != std::string::npos,
-              "an interrupted service is sent out and described as cut short");
+              "an interrupted event is sent out and described as cut short");
     }
 
     // ── Things that must never be sent ───────────────────────────────────────
@@ -262,7 +262,7 @@ int main() {
         RelayMachine m;
         auto in = live_at(0, 100);
         in.plan_ok = false;
-        in.plan_problem = "This service is being recorded as hevc video";
+        in.plan_problem = "This event is being recorded as hevc video";
         auto d = m.step(in);
         CHECK(d.action == RelayAction::None && m.state() == RelayState::Blocked,
               "a feed that cannot be sent never spawns anything");
@@ -278,7 +278,7 @@ int main() {
         ok.plan_problem = "the chosen sound feed has gone";
         d = m2.step(ok);
         CHECK(d.action == RelayAction::Kill,
-              "a feed that turns bad mid-service is stopped rather than "
+              "a feed that turns bad mid-event is stopped rather than "
               "sending the wrong thing");
 
         // ...and recovers by itself once it is valid again.
@@ -289,14 +289,14 @@ int main() {
               "and unblocks when the problem goes away");
     }
 
-    // ── Rebroadcasting a finished service ────────────────────────────────────
+    // ── Rebroadcasting a finished event ────────────────────────────────────
     // A recording played out as if it were live. It falls out of what is
     // already here: a finished event plays and then ends (§7.5), which is what
     // a rebroadcast is, so only where it starts differs.
     {
         RelayMachine m;
         auto in = live_at(0, 100);
-        in.room = RoomState::Ended;         // a finished service
+        in.room = RoomState::Ended;         // a finished event
         in.from_beginning = true;
         in.first_available_seq = 0;
         auto d = m.step(in);
@@ -306,7 +306,7 @@ int main() {
         in.child_alive = true;
         d = m.step(in);
         CHECK(d.action == RelayAction::FeedSegment && d.seq == 0,
-              "and sends the first segment of the service");
+              "and sends the first segment of the event");
 
         // It plays at 1x like anything else, rather than sprinting.
         d = m.step(in);
@@ -352,7 +352,7 @@ int main() {
         CHECK(d.action == RelayAction::Spawn,
               "it starts again immediately, with no backoff");
         CHECK(m.head() == 0,
-              "at the new delay — ten minutes back is before this service began");
+              "at the new delay — ten minutes back is before this event began");
         CHECK(m.restarts() == 0, "still not a reconnection");
     }
 
@@ -360,7 +360,7 @@ int main() {
     {
         Destination a = dest("Main Mix");
         Destination b = a;
-        b.name = "YouTube (main service)";
+        b.name = "YouTube (main event)";
         CHECK(!affects_stream(a, b), "renaming leaves a live stream alone");
         b = a; b.audio.label = "Sermon ISO";
         CHECK(affects_stream(a, b), "changing the sound feed does not");
@@ -391,7 +391,7 @@ int main() {
         CHECK(d.action == RelayAction::None && m.state() == RelayState::Waiting,
               "nothing spawns until the opening data is downloaded");
         // ...but the position must be taken up anyway, because that is what
-        // tells the downloader which part of the service to fetch. Waiting
+        // tells the downloader which part of the event to fetch. Waiting
         // for the download before choosing a position is a deadlock: it sits
         // waiting for segments nothing has been asked to bring down.
         CHECK(m.has_position() && m.head() == 70,
@@ -403,7 +403,7 @@ int main() {
               "and it starts as soon as that arrives");
     }
 
-    // Segment zero is an ordinary position, not a missing one — a service
+    // Segment zero is an ordinary position, not a missing one — an event
     // that has only just started is relayed from its very beginning.
     {
         RelayMachine m;
@@ -411,7 +411,7 @@ int main() {
         in.init_ready = false;
         m.step(in);
         CHECK(m.has_position() && m.head() == 0,
-              "a service younger than the delay starts at segment zero");
+              "an event younger than the delay starts at segment zero");
         CHECK(m.has_position(), "and that counts as having a position");
     }
 
@@ -428,7 +428,7 @@ int main() {
         CHECK(d.action == RelayAction::Spawn, "only once there is");
     }
 
-    // ── Waiting for a service that has not started ───────────────────────────
+    // ── Waiting for an event that has not started ───────────────────────────
     {
         RelayMachine m;
         auto in = live_at(0, 0);
@@ -479,7 +479,7 @@ int main() {
         // The same silence, on a destination that waits to be connected TO.
         // Nothing has attached yet, which is the resting state of a listener
         // and must never be given up on: a broadcast partner may well attach
-        // twenty minutes into the service.
+        // twenty minutes into the event.
         RelayMachine m;
         auto in = live_at(1000, 100);
         in.awaits_receiver = true;
@@ -502,13 +502,13 @@ int main() {
               "and has never been torn down for it");
         CHECK(m.restarts() == 0, "nor counted against it as a fault");
 
-        // Position keeps moving with the service, so whoever finally attaches
+        // Position keeps moving with the event, so whoever finally attaches
         // gets what is happening now rather than the twenty minutes they
         // missed — and the cache is not pinned open holding it for them.
         in.latest_seq = 300;
         m.step(in);
         CHECK(m.head() == seq_behind_live(300, 0, 6.0, 180),
-              "and it has kept up with the service while it waited");
+              "and it has kept up with the event while it waited");
 
         // Somebody attaches.
         const uint64_t waiting_at = m.head();

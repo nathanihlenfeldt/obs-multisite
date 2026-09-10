@@ -18,7 +18,7 @@
 
 <nav id="tabs">
   <button class="tab is-on" data-tab="play">Play</button>
-  <button class="tab" data-tab="events">Services</button>
+  <button class="tab" data-tab="events">Events</button>
   <button class="tab" data-tab="settings">Settings</button>
   <button class="tab" data-tab="system">This box</button>
   <button class="tab" data-tab="log">Log</button>
@@ -76,7 +76,7 @@
   <details class="preview" id="preview-box">
     <summary>Preview picture</summary>
     <p class="hint">
-      A low-rate copy of the picture, for watching the service from a phone.
+      A low-rate copy of the picture, for watching the event from a phone.
       It shows the same moment as the screen in the room — looking at it does
       not change what is on the screen.
     </p>
@@ -101,7 +101,7 @@
   <div class="alert" id="alert" hidden></div>
 </section>
 
-<!-- ── Services ──────────────────────────────────────────────────────────── -->
+<!-- ── Events ──────────────────────────────────────────────────────────── -->
 <section id="tab-events" class="panel">
   <div class="row">
     <button id="btn-refresh-events">Refresh the list</button>
@@ -115,7 +115,7 @@
 <section id="tab-settings" class="panel">
   <form id="settings-form">
 
-    <h2>Where the service comes from</h2>
+    <h2>Where the event comes from</h2>
     <div class="field">
       <label for="c-room">Room</label>
       <input id="c-room" name="room_id" autocomplete="off">
@@ -263,7 +263,7 @@
   <div class="row">
     <button id="storage-check">Check now</button>
     <p class="hint">Reads the feed once to confirm the bucket answers.
-      The figures above come from the service already being received, so
+      The figures above come from the event already being received, so
       they cost nothing.</p>
   </div>
 

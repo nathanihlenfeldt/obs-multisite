@@ -58,7 +58,7 @@ void Service::reload() {
     // Does the downloader itself have to be rebuilt? Only if the bucket or the
     // room changed. Adding a destination must NOT reach this far: doing so
     // tore down every stream that was already on air, which is precisely what
-    // an operator does mid-service when they decide to add Facebook.
+    // an operator does mid-event when they decide to add Facebook.
     const bool feeder_stale =
         !m_feeder || !same_storage(storage, m_feeder_storage) ||
         room.room_id != m_feeder_room;
@@ -199,18 +199,18 @@ std::vector<EventSummary> Service::events(bool force) {
 }
 
 std::string Service::check_event_is_finished(const std::string& event_id) {
-    if (event_id.empty()) return "No service was chosen.";
+    if (event_id.empty()) return "No event was chosen.";
     for (const auto& e : events()) {
         if (e.event_id != event_id) continue;
-        // The rule the brief asks for, and the reason for it: a service still
+        // The rule the brief asks for, and the reason for it: an event still
         // being recorded has no end yet, so a download would be a snapshot of
         // an unfinished thing and a rebroadcast would run into the live edge.
         if (e.state == EventState::Live)
-            return "That service is still going out. Wait until it has "
+            return "That event is still going out. Wait until it has "
                    "finished.";
         return {};
     }
-    return "That service is no longer in storage.";
+    return "That event is no longer in storage.";
 }
 
 std::string Service::start_rebroadcast(const std::string& event_id,
@@ -233,7 +233,7 @@ std::string Service::start_rebroadcast(const std::string& event_id,
     // end that is hard to diagnose from here.
     auto live = m_sessions.find(dest_id);
     if (live != m_sessions.end() && live->second->wants_content())
-        return "That destination is already sending the live service. Stop it "
+        return "That destination is already sending the live event. Stop it "
                "first.";
 
     FeederConfig fc;
@@ -305,15 +305,15 @@ ServiceStatus Service::status() const {
     switch (snap.room) {
         case RoomState::Live:
             s.room_state = "live";
-            s.room_state_text = "A service is on air";
+            s.room_state_text = "An event is on air";
             break;
         case RoomState::Ended:
             s.room_state = "ended";
-            s.room_state_text = "The last service has finished";
+            s.room_state_text = "The last event has finished";
             break;
         case RoomState::Interrupted:
             s.room_state = "interrupted";
-            s.room_state_text = "The main site stopped without ending the service";
+            s.room_state_text = "The main site stopped without ending the event";
             break;
         default:
             s.room_state = "offline";
@@ -342,7 +342,7 @@ ServiceStatus Service::status() const {
         //
         // Once per protocol, because they do not accept the same video: a
         // single RTMP probe used to answer this, and once SRT could carry
-        // HEVC that probe started declaring a service unsendable while an SRT
+        // HEVC that probe started declaring an event unsendable while an SRT
         // destination was busy sending it.
         const auto send = sendability(snap.manifest);
         s.can_send = send.any;

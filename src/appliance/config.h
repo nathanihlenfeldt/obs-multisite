@@ -96,7 +96,7 @@ struct Config {
     // Sit this far behind live, in seconds. 0 rides the live edge.
     double delay_from_live_s = 0.0;
     // Refuse control changes from the UI until unlocked — the same guard the
-    // dock has, for a tablet left on a music stand mid-service.
+    // dock has, for a tablet left on a music stand mid-event.
     bool locked = false;
 
     bool configured() const {
@@ -115,7 +115,7 @@ struct Config {
     bool save(const std::string& path, std::string& error) const;
 };
 
-// The path the service uses unless --config says otherwise.
+// The path the player uses unless --config says otherwise.
 const char* default_config_path();
 
 } // namespace multisite_player

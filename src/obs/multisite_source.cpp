@@ -73,7 +73,7 @@ struct PendingFrame {
 };
 
 // ── Companion audio sources ──────────────────────────────────────────────────
-// An OBS source can emit only one audio stream, so a service carrying a main
+// An OBS source can emit only one audio stream, so an event carrying a main
 // mix plus ISOs plus a click needs one source per track. They all attach to the
 // room's existing decoder rather than opening their own: one download, one
 // decode, one clock.
@@ -183,9 +183,9 @@ struct SourceCtx : DecoderControls {
     std::atomic<long long> skip_until_pts_ns{-1};
 
     // An operator loads an event, lets it buffer, then presses Play on cue.
-    // Auto-playing as soon as enough is buffered is wrong for a service.
+    // Auto-playing as soon as enough is buffered is wrong for an event.
     std::atomic<bool> playing{false};
-    // Guards against accidental clicks mid-service.
+    // Guards against accidental clicks mid-event.
     std::atomic<bool> controls_locked{false};
     // Set while the queue is being torn down (seek, stop, decoder restart) so
     // the decoder's callbacks return immediately instead of waiting for space
@@ -821,6 +821,7 @@ static void poll_loop(SourceCtx* ctx) {
                 for (const auto& e : cat->events()) {
                     EventEntry row;
                     row.event_id   = e.event_id;
+                    row.name       = e.name;
                     row.started_ms = (long long)e.started_at_ms;
                     row.duration_s = (long long)e.duration_s;
                     row.state      = (int)e.state;
@@ -1154,7 +1155,7 @@ static void src_update(void* data, obs_data_t* s) {
         auto ses = std::make_shared<DecoderSession>(dc, *tx);
         // The catalog shares the transport and, deliberately, the same
         // staleness rule as the decoder: the list and the player must never
-        // disagree about whether a service is still running.
+        // disagree about whether an event is still running.
         CatalogConfig cc;
         cc.room_id        = dc.room_id;
         cc.stale_after_ms = dc.stale_after_ms;
@@ -1434,7 +1435,7 @@ void SourceCtx::pin_event(const std::string& event_id) {
     action_started_ns = os_gettime_ns();
     poll_now          = true;         // apply the pin now, not in 3 seconds
     mlog_info("source: pinned event %s — playback will not follow a new "
-              "service starting", event_id.c_str());
+              "event starting", event_id.c_str());
     events_refresh_wanted = true;     // so the list re-marks which row is playing
 }
 
