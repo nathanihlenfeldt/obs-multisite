@@ -603,6 +603,13 @@ SplashInfo Player::splash_info() const {
                                  std::to_string(cfg.web_port));
     }
 
+    // The address a remote operator reaches this box on. It is a different
+    // kind of thing from the addresses above — those only work from inside
+    // the building — so the splash labels it separately, and says nothing at
+    // all when the box has not been put on a remote network. The lookup is the
+    // cheap one on purpose: this runs on every idle redraw.
+    info.remote_ip = zerotier_ip();
+
     // The state line, in the words an operator would use standing in front of
     // the screen.
     if (!cfg.configured()) {
@@ -713,6 +720,7 @@ void Player::update_screen() {
     // Nothing has changed, so nothing needs redrawing.
     std::string signature = info.state + "|" + info.detail + "|" + info.room;
     for (const auto& a : info.addresses) signature += "|" + a;
+    signature += "|" + info.remote_ip;
     if (m_idle_showing && signature == m_idle_signature) return;
     m_idle_signature = signature;
 

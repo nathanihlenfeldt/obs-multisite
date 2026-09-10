@@ -173,6 +173,19 @@ transport controls during an event.
 - **The cache belongs on a USB SSD.** It writes roughly 3 GB an hour, which
   will wear an SD card out. The installer looks for a USB drive and uses it;
   if there is none, both it and the interface say so.
+- **Remote access, so the box does not need a visit.** What makes a wrong
+  setting at a campus expensive is that fixing it means driving there. The
+  installer brings up two optional tools and either can be changed later from
+  Settings → Remote access. **ZeroTier** puts the box on a private network that
+  follows it, so it is reachable from the office wherever it is plugged in:
+  pass `ZT_NETWORK_ID=…` to the installer or type it at its prompt. **cloudflared**
+  publishes this control page on a public hostname with no port-forward and no
+  static address: pass `CF_TUNNEL_TOKEN=…`. The box's ZeroTier address is put on
+  its own screen, labelled **REMOTE ACCESS IP** and kept well apart from the
+  in-room addresses — those are typed into a phone standing in the building,
+  this one is not, and confusing the two is the mistake worth designing out.
+  Neither tool is required to play an event; a box with neither says nothing
+  about remote access and behaves exactly as before.
 
 Run it by hand while setting one up:
 
