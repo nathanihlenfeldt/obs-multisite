@@ -75,6 +75,16 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
   -DLIBOBS_FRONTEND_INCLUDE_DIR="$OBS_SRC/frontend/api"
 cmake --build build --target obs-multisite
 ```
+**Two headers are vendored rather than linked.** `src/vendor/nlohmann/json.hpp`
+is the JSON parser the plugin and the relay use throughout.
+`src/vendor/obs-websocket/obs-websocket-api.h` is obs-websocket's vendor API: it
+is header-only and talks to obs-websocket through OBS's proc handler, so the
+plugin gains no link dependency and builds identically whether libobs comes from
+an OBS source tree, obs-deps or a distro package. It is GPL-2.0-or-later, which
+is compatible with this project's GPL-3.0-or-later, and it is kept byte-for-byte
+as published so updating it is a straight copy.
+
+
 
 Two things are worth knowing about that. Passing every FFmpeg path explicitly
 and pinning `Qt6_DIR` is not belt-and-braces: if Homebrew's copies are
@@ -120,7 +130,7 @@ path outside `/System` and `/usr/lib`.
 
 ## What the tests cover
 
-Nineteen suites, all runnable without OBS. Thirteen are built unconditionally
+Twenty suites, all runnable without OBS. Fourteen are built unconditionally
 wherever the core builds; the `cmaf*` three need FFmpeg, `s3_url` and
 `s3_cancel` need libcurl, and `s3_cancel` and `core_portable` need a POSIX host:
 
@@ -135,6 +145,7 @@ wherever the core builds; the `cmaf*` three need FFmpeg, `s3_url` and
 | `responsive` | UI queries stay fast while downloading — the property that keeps OBS usable during an event |
 | `snapshot` | the figures the dock reads agree with the session they are built from |
 | `http_server` | the shared HTTP server spoken to over a real loopback socket: routing, verbs, the static web root, keep-alive, a handler that throws, and the refusal of a path that climbs out of the web root |
+| `control_api` | the one list of command names: the exact encoder and decoder surface, no name used twice under the single obs-websocket vendor, every name a well-formed path tail, and the path builder that the HTTP routes and the vendor requests both go through |
 | `s3_list` | a ListObjectsV2 response is read correctly, including pagination and an access-denied body; a signed query string is canonicalised the way S3 does it |
 | `event_catalog` | events are classified as live / recording / interrupted, rooms stay separate, a listing failure is not shown as "no recordings", an event that recorded nothing is not offered, and an event with no room-index entry still lists alongside those that have one |
 | `storage_manager` | encoder-side storage management: the listing and the per-event size tally are separable, a tally that fails is reported as unknown rather than as `0 B`, cancellation returns early and is not counted as a store failure, and a prefix that will not finish paging gives up with a reason |

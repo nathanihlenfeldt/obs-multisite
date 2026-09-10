@@ -247,6 +247,12 @@ src/obs/ui/     the Qt docks. The only place Qt appears.
 src/obs/web/    the control pages a phone or tablet uses, and the JSON API
                 behind them — HTTP, not Qt, because the machine that most needs
                 them is the one nobody is sitting at.
+src/obs/websocket/  the same commands again as obs-websocket vendor requests, so
+                a Stream Deck or any automation can drive either half. Reads its
+                names from src/core/control_api.h, which the pages read too, so
+                the two cannot drift.
+src/vendor/     third-party headers kept in-tree: nlohmann/json, and
+                obs-websocket's header-only vendor API. No shipped dependency.
 src/appliance/  the headless campus player: DRM/KMS and ALSA output, the
                 splash and idle screens, and the web control surface.
 src/appliance/web/  the operator interface. No framework, no CDN — a campus
@@ -347,10 +353,14 @@ transcoder and a low-latency mode.</summary>
 - **Phase 7 — Extensions.** The public simulcast relay is built and has pushed
   live streams to YouTube; SRT in and out is in. Still to come: re-encoding,
   signing in to YouTube instead of pasting a stream key, and starting by itself.
-- **Phase 8 — External control API.** Both plugins' commands as obs-websocket
-  vendor requests, then a Bitfocus Companion module for buttons with feedback.
-  The thirteen hotkeys the plugins already register can be triggered from a
-  Stream Deck today — without parameters or feedback, but worth wiring up now.
+- **Phase 8 — External control API.** The vendor API is built: every command of
+  both halves is an obs-websocket vendor request (`obs-multisite.decoder/hold`
+  and the rest), with vendor events on state change and a `status` request for
+  polling, so Companion's OBS module can drive it today through *Custom Vendor
+  Request*. Still to come: a purpose-built Bitfocus Companion module for buttons
+  with feedbacks and variables, which is a separate deliverable. The thirteen
+  hotkeys the plugins already register can also be triggered from a Stream Deck
+  — without parameters or feedback.
 - **Phase 9 — Redundant storage.** Two independent S3 targets: mirrored
   throughout, or holding the manifests only until a failover.
 - **Phase 10 — Tile layout and assigned outputs.** A 2×1 or 2×2 feed exposed as

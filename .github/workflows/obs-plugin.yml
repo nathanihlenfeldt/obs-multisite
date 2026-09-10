@@ -62,7 +62,8 @@ jobs:
           test -f build/obs-multisite.so
           # The C entry points are unmangled, so these are matched exactly.
           for sym in obs_module_load obs_module_unload obs_module_set_pointer \
-                     obs_module_ver obs_module_description; do
+                     obs_module_ver obs_module_description \
+                     obs_module_post_load; do
             nm -D --defined-only build/obs-multisite.so | grep -q " $sym$" \
               || { echo "MISSING SYMBOL: $sym"; exit 1; }
             echo "ok: $sym"
@@ -73,7 +74,8 @@ jobs:
           # source file left out of CMakeLists.txt produces a .so that loads and
           # then fails at the first request or at unload, which nothing else in
           # this job would have caught. That happened once.
-          for sym in start_web_ui stop_web_ui plugin_log_line; do
+          for sym in start_web_ui stop_web_ui plugin_log_line \
+                     register_vendor_api unregister_vendor_api; do
             nm -D --defined-only build/obs-multisite.so | grep -q "$sym" \
               || { echo "MISSING SYMBOL: $sym"; exit 1; }
             echo "ok: $sym (mangled)"
@@ -553,7 +555,8 @@ jobs:
 
           echo "--- OBS entry points ---"
           for sym in obs_module_load obs_module_unload obs_module_set_pointer \
-                     obs_module_ver obs_module_description; do
+                     obs_module_ver obs_module_description \
+                     obs_module_post_load; do
             nm -gU "$BIN" | grep -q " _${sym}$" \
               || { echo "::error::missing exported symbol ${sym}"; exit 1; }
             echo "ok: ${sym}"

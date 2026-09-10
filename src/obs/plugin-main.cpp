@@ -13,6 +13,8 @@ void unregister_ui();
 void start_web_ui();
 void stop_web_ui();
 void shut_down_web_ui();
+void register_vendor_api();
+void unregister_vendor_api();
 #ifdef MULTISITE_HAVE_QT
 void register_docks();
 #endif
@@ -50,7 +52,17 @@ bool obs_module_load(void) {
 void obs_module_unload(void) {
     // Stopped first: while it is running, a request can arrive at any moment,
     // and it must not arrive after the things it controls have gone.
+    multisite_obs::unregister_vendor_api();
     multisite_obs::shut_down_web_ui();
     multisite_obs::unregister_ui();
     mlog_info("obs-multisite unloaded");
+}
+
+// obs-websocket's own header is explicit that a vendor must be registered HERE
+// and not in obs_module_load(): a vendor registered any earlier is never seen by
+// a client. This runs after every module has loaded, so obs-websocket is ready.
+// With obs-websocket absent there is nothing to register against and the call
+// logs one line and returns — hotkeys, docks and pages are unaffected.
+void obs_module_post_load(void) {
+    multisite_obs::register_vendor_api();
 }

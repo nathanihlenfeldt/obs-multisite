@@ -828,6 +828,26 @@ Deck today, without parameters or feedback. Worth wiring up before building
 anything, both because it is free and because it will show which commands
 operators actually reach for.
 
+**Built: sub-phase 1, the vendor API.** Every command of both halves is
+registered as a vendor request under `obs-multisite` — `encoder/go-live`,
+`decoder/hold`, `decoder/jog` and the rest — with vendor events
+(`encoder/state`, `decoder/state`) emitted on change and a `status` request for
+polling. It is an adapter: each request calls the same function the docks, the
+hotkeys and the pages already call, so there is no second code path to keep in
+step. The names live in one list in the portable core (`src/core/control_api.h`)
+that the HTTP routes read too, which is what makes "the same command names" true
+by construction rather than by discipline, and which a core test pins. It
+registers from `obs_module_post_load()` — the header's requirement, and the
+reason a vendor registered in `obs_module_load()` is never seen. With
+obs-websocket absent the plugin logs one line and everything else carries on.
+Still to come: sub-phase 2, the Bitfocus Companion module.
+
+**Two names still differ from the appliance's**, and are worth bringing together:
+the plugin's `decoder/return-to-live` and `decoder/load-event` against the
+appliance's `/api/follow-live` and `/api/load`. The plugin's are already served
+to the v0.1.8 pages, so unifying them is a change to both surfaces at once
+rather than a rename in one place.
+
 ---
 
 ## 8.4 Control pages served from the plugin
@@ -910,8 +930,8 @@ is the better answer for a given church, section 12 says so plainly.
 | Per-channel routing of packed audio at an OBS satellite | out of scope — use [atkAudio's OBS plugins](https://github.com/atkAudio/PluginForObsRelease) (§4.3.1) |
 | Re-encoding an HEVC feed for a streaming site | not built; an SRT destination carries HEVC unchanged instead (§8.2) |
 | Hosted streaming provider (Mux / Cloudflare Stream), persistent player embed, provider-side simulcast | planned (§8.2.1) |
-| External control API (obs-websocket vendor requests, §8.3) | planned |
-| Bitfocus Companion module (buttons, feedbacks, variables) | planned; needs the API first |
+| External control API (obs-websocket vendor requests, §8.3) | built — every command of both halves, with vendor events |
+| Bitfocus Companion module (buttons, feedbacks, variables) | planned; the vendor API it needs is now built |
 | Control from a Stream Deck via OBS hotkey triggers | available now, no parameters or feedback |
 | Web / mobile simulcast from the same files | planned; CMAF makes it feasible |
 | Scheduling / auto-go-live | planned — for the relay as well as the encoder |
@@ -973,11 +993,12 @@ carried an event; phase 8 has not been started.
   served from the bucket, scheduling and auto-go-live, redundancy, and local
   insertion.
 
-- **Phase 8 — External control API.** ⬜ The command surface of both plugins as
-  obs-websocket vendor requests, mirroring the appliance's existing HTTP routes
-  name for name (§8.3), then a Bitfocus Companion module for buttons with
-  feedbacks and variables. Hotkey-based control from Companion already works
-  and needs nothing.
+- **Phase 8 — External control API.** 🟡 The command surface of both plugins is
+  built as obs-websocket vendor requests, mirroring the control pages name for
+  name and driven through one shared command layer (§8.3). Remaining: the
+  Bitfocus Companion module for buttons with feedbacks and variables, a separate
+  deliverable. Hotkey-based control from Companion already works and needs
+  nothing.
 
 - **Phase 9 — Redundant storage.** ⬜ Upload to two independent S3 targets, so a
   provider outage, a regional failure, an account lockout or an accident in one

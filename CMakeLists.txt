@@ -172,6 +172,12 @@ add_executable(test_http_server tests/test_http_server.cpp)
 target_link_libraries(test_http_server PRIVATE multisite_core)
 add_test(NAME http_server COMMAND test_http_server)
 
+# The one list of command names (§8.3). Portable and header-only: the plugin's
+# HTTP routes and its obs-websocket vendor requests are both built from it, so
+# this is what a rename has to get past before it can orphan somebody's button.
+add_executable(test_control_api tests/test_control_api.cpp)
+add_test(NAME control_api COMMAND test_control_api)
+
 # ── Optional: S3 transport (needs libcurl) ────────────────────────────────────
 find_package(CURL QUIET)
 if(CURL_FOUND)
@@ -521,10 +527,16 @@ if(BUILD_OBS_PLUGIN)
         # no docks needed): a build without them still gets remote control,
         # because the machine that most needs it is the one nobody is at.
         src/obs/web/web_ui.cpp
+        src/obs/web/commands.cpp
         src/obs/web/encoder_api.cpp
         src/obs/web/decoder_api.cpp
         src/obs/web/ui_thread.cpp
-        src/obs/web/net_address.cpp)
+        src/obs/web/net_address.cpp
+        # The obs-websocket vendor API: the same commands, reachable from a
+        # Stream Deck or any automation. Header-only and adaptor-shaped, so it
+        # adds no link dependency and no new control logic; absent
+        # obs-websocket turns it off with one log line and nothing else.
+        src/obs/websocket/vendor_api.cpp)
     target_include_directories(obs-multisite PRIVATE src src/core)
     target_compile_definitions(obs-multisite PRIVATE
         PLUGIN_VERSION="${PROJECT_VERSION}")

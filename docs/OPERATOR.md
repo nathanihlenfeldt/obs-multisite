@@ -207,3 +207,51 @@ page and has no decoder routes at all, a satellite the other way round, and a
 machine set to Both serves both and links them. On Windows the first start
 raises the usual firewall prompt — allow it for private networks, or the page
 will not answer from another device.
+
+## Control from a Stream Deck or automation
+
+A volunteer running an event reaches for a physical button, not a window. Two
+ways to give them one, and both are live in the plugin.
+
+**Hotkeys, today.** Play, stop, hold, resume, catch-up, jog and markers are
+registered in Settings → Hotkeys. Companion's OBS module can trigger a hotkey by
+id, so they work on a Stream Deck now — but a hotkey carries no parameters and
+shows no feedback, so "jog back ten seconds" is a whole action rather than a
+choice, and the button cannot light up while an event is live.
+
+**The obs-websocket API.** Every control the pages offer is also an
+obs-websocket **vendor request**, so any obs-websocket client — Companion's
+*Custom Vendor Request* action, a script, another automation system — can call
+them. These are the same commands as the HTTP routes, under the vendor
+`obs-multisite`:
+
+| request | what it does |
+|---|---|
+| `encoder/status`, `decoder/status` | the same document the page polls |
+| `encoder/go-live` | go live, with an optional `event_name` |
+| `encoder/end`, `encoder/marker` | end the broadcast; drop a marker (`label`) |
+| `encoder/settings`, `decoder/settings` | read, and apply a partial document |
+| `decoder/play`, `stop`, `hold`, `continue`, `catch-up` | the transport controls |
+| `decoder/jog` (`seconds`), `decoder/seek` (`ms`), `decoder/delay` (`seconds`) | navigate |
+| `decoder/marker` (`id`), `decoder/load-event` (`event_id`), `decoder/return-to-live` | markers and recordings |
+| `decoder/events`, `decoder/events/refresh` | the recording list |
+
+Each request answers with the new status, so a client never has to guess what its
+own button did, and a refusal says why in an `error` field. Alongside the
+requests, the plugin emits **events** — `encoder/state` and `decoder/state` —
+whenever something an operator cares about changes, which is what lets a
+Companion module light a button or show "12 s behind".
+
+Nothing changes for a church that has not turned obs-websocket on: the plugin
+logs one line and carries on. obs-websocket ships with OBS 28 and later and is
+enabled in Tools → WebSocket Server Settings; there is nothing separate to
+install.
+
+> The decoder requests are these same names with `decoder/` in front, and the
+> appliance's own routes (`/api/play`, `/api/hold` and the rest) are the same
+> actions one machine further out. A control written against one is a small edit
+> away from the other; the two leaf names that still differ — the plugin's
+> `return-to-live` and `load-event` against the appliance's `follow-live` and
+> `load` — are noted in the scope to be brought together.
+
+
