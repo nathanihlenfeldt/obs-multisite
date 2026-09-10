@@ -73,11 +73,22 @@ On **AWS S3, MinIO, Backblaze B2 or Wasabi**: the equivalent lifecycle
 configuration with an Expiration rule per prefix.
 
 You can also delete events by hand, without waiting for the rule: the encoder's
-**Manage storage…** button lists the room's events with their sizes, and lets
-you delete one — or everything older than a chosen number of days — with a
-confirmation and a verification pass afterwards. The event currently on air is
-never deletable. This needs a key that can `s3:ListBucket` and
+**Manage storage…** button lists the room's events and lets you delete one — or
+everything older than a chosen number of days — with a confirmation and a
+verification pass afterwards. This needs a key that can `s3:ListBucket` and
 `s3:DeleteObject`; the dialog says so plainly if it cannot.
+
+The listing is built to be usable on a bucket holding months of events. The
+events appear as soon as the manifests have been read, with no size work in
+front of them, and each event's size is then measured beside it — six at a time,
+each row filling in as it lands. A size that could not be measured is reported
+as unknown rather than as `0 B`, because a zero against an event holding
+gigabytes is worse than no figure at all in a window whose whole purpose is
+deleting things. Closing the window stops the work: an in-flight request is
+aborted rather than left running with nothing watching it. The event on air is
+never offered for deletion, and every listing and sizes pass is logged with its
+counts and elapsed time, which is what to look at if the dialog appears to be
+doing nothing.
 
 **Wanting the storage itself self-hosted, not only self-configured?** Every
 provider above still means somebody else's servers. If that matters to you —

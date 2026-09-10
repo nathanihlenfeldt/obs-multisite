@@ -303,6 +303,10 @@ limited to the manifest window — essential for timeslipping.
   codebase otherwise does not delete as it goes, so a paused or behind-live
   campus can still fetch older segments for the whole retention window. The
   event live.json currently names is never deletable.
+  The listing is a two-part operation by design: the events are read from the
+  manifests first and each one's size measured afterwards, six at a time, so the window is usable on a bucket holding months of events. A size that
+  cannot be measured is reported as unknown rather than as zero, and closing the
+  window cancels the work in flight.
 
 ### 4.7 Write-ordering invariant
 
@@ -817,12 +821,62 @@ control logic, and no second path to keep in step.
    That is a separate deliverable in a separate repository, and it depends on
    phase 1 existing first.
 
-**Available before any of this:** the plugins already register ten named
+**Available before any of this:** the plugins already register thirteen named
 hotkeys, and Companion's OBS module can trigger hotkeys by id. Play, stop, hold,
 resume, catch-up, jog and drop-marker are therefore controllable from a Stream
 Deck today, without parameters or feedback. Worth wiring up before building
 anything, both because it is free and because it will show which commands
 operators actually reach for.
+
+---
+
+## 8.4 Control pages served from the plugin
+
+Both halves of the plugin serve an operator page on the church network, out of
+OBS itself: the same interface the appliance has (§8.1), so somebody who has
+learned one does not have to learn the other. It is the appliance's page on
+purpose, and the words on it are the words of an event rather than of a video
+pipeline.
+
+**What it is for.** The desk is not always where the event is. A marker has to be
+pressable from the back of the room, the sending queue watched from the foyer,
+and the reason nothing is happening read by somebody holding a phone and no
+access to the machine.
+
+**Shape.**
+
+- **Sending side** — Go live and End the broadcast, the editable event name, the
+  four markers, and the reliability readout an operator watches mid-event:
+  confirmed pieces, what is waiting to send, retries, bytes sent, the measured
+  upload rate, the colo serving the bucket, and the last error.
+- **Receiving side** — play, hold picture, catch up to now, jog, stay behind
+  live, a clickable timeline, the recordings list, and how long this campus could
+  keep playing through an outage.
+- **Both** — the log, for somebody who cannot reach Help → Log Files, and a
+  **Lock** that refuses anything which would change what is on air.
+
+**Which pages exist follows the machine's role**, as the docks already do: a main
+site serves the encoder page and has no decoder routes at all, a satellite the
+other way round, and a machine set to Both serves both and links them.
+
+**One server, three users.** The pages run on the core's own HTTP server
+(`src/core/http_server.cpp`), shared with the relay and the appliance rather than
+reimplemented three times. That is why the server is tested on every platform CI
+builds (`tests/test_http_server.cpp`) rather than only where a POSIX socket is
+available, and why a routing mistake is treated as a defect rather than a
+cosmetic one: it is an operator's click doing nothing, or somebody reaching a
+page they should not.
+
+**Trust, stated plainly.** There is no password and no TLS. It binds every
+interface, for the same reason the appliance's page does — a page that answers
+only `localhost` cannot be reached from the tablet it exists for — and the
+building's own network is the guard. It is on by default on port 8080 and can be
+switched off or moved in **Settings → Remote control** in either dock, which also
+shows the address to type into a phone. Editing storage from the page is allowed;
+retyping a secret key is not required, and a stored key is never sent to a
+browser. **Lock** is deliberately not remembered across a restart: a lock that
+survived one would leave a campus unable to broadcast with no obvious reason why,
+and the tablet that set it is long since charged and put away.
 
 ---
 
@@ -841,6 +895,8 @@ is the better answer for a given church, section 12 says so plainly.
 | Per-campus independent DVR position | built |
 | Multi-track production audio (main / ISOs / click), up to 6 tracks | built — one source per track at the satellite (§4.3) |
 | Event browsing with live / recording / interrupted state | built |
+| Storage management from the encoder dock (list a room's events with sizes, delete one or older-than-N) | built (§4.6) |
+| Operator page served from the plugin to a phone or tablet, following the machine's role | built (§8.4) |
 | Video-on-demand playback of past and interrupted events | built |
 | Any OBS machine can originate a broadcast | built |
 | Dedicated receive appliance (Raspberry Pi / mini-PC) | built, not yet run through an event |

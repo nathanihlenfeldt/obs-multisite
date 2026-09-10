@@ -70,6 +70,23 @@ implementation rather than three. It is covered by a new test
 platform CI builds: routing, verbs, the static web root, keep-alive, a handler
 that throws, and the refusal of a path that climbs out of the web root.
 
+### Storage you can actually see and clear
+
+**Manage storage…** in the encoder dock lists a room's events and lets them be
+deleted — one, or everything older than a chosen number of days — with a
+confirmation and a check afterwards. On a full bucket it used to sit on
+"Looking…" for minutes while it walked every object of every event to add up
+bytes, one request after another, and it logged nothing at all while it did.
+
+It is two halves now. The events are listed first, from the manifests and the
+live pointer, so something appears at once. Each event's size is then measured
+beside it, six at a time, each row filling in as it lands — so the wait is the
+largest single event rather than the sum of all of them. A size that cannot be
+measured is reported as unknown rather than as zero, because "0 B" on an event
+holding gigabytes is not cosmetic in a window whose whole purpose is deleting
+things. Closing the window cancels the work in flight, and every listing and
+sizes pass is logged with its counts and elapsed time.
+
 ### The campus player can be reached without a drive to the campus
 
 What makes a wrong setting at a campus so expensive is that fixing it means
@@ -253,6 +270,10 @@ kept.
   second, not to a frame.
 - **The appliance is still missing DeckLink SDI output** and Pi 4
   hardware-decoder selection.
+- **A size in *Manage storage…* can read "unknown".** A measurement that failed
+  is reported that way deliberately rather than as `0 B`. Refresh the listing to
+  try again, and note that nothing is ever offered for deletion on the strength
+  of a size that could not be measured.
 
 ## A note on how this release was made
 

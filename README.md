@@ -188,6 +188,13 @@ but has not yet carried real encoder output.
 - Finished *and interrupted* events play as video-on-demand from the beginning —
   an event whose encoder crashed is still watchable afterwards.
 - Operator docks in plain language, plus hotkeys.
+- **Storage management from the encoder dock.** *Manage storage…* lists the
+  room's events with their sizes, and lets one be deleted — or everything older
+  than a chosen number of days — with a confirmation and a verification pass
+  afterwards. The events appear at once and the sizes fill in beside them, a
+  size that cannot be measured is reported as unknown rather than as zero, and
+  the event on air is never offered for deletion. Closing the window stops the
+  work.
 - **A remote-control page on both sides.** The encoder and decoder docks each
   serve the campus player's own operator interface on the church network — one
   page, polled twice a second, in the plain language of an event — so a marker
@@ -234,16 +241,24 @@ For the full design, see [PROJECT-SCOPE.md](PROJECT-SCOPE.md).
 ```
 src/core/       the portable engine: protocol, reliability, muxing, decoding.
                 No OBS, no Qt. Shared with the appliance.
-src/obs/        the OBS bindings: output, source, hotkeys, settings.
+src/obs/        the OBS bindings: output, source, hotkeys, settings, and the
+                wiring that serves the control pages from OBS itself.
 src/obs/ui/     the Qt docks. The only place Qt appears.
+src/obs/web/    the control pages a phone or tablet uses, and the JSON API
+                behind them — HTTP, not Qt, because the machine that most needs
+                them is the one nobody is sitting at.
 src/appliance/  the headless campus player: DRM/KMS and ALSA output, the
                 splash and idle screens, and the web control surface.
 src/appliance/web/  the operator interface. No framework, no CDN — a campus
                 box often has no internet.
+data/           the locale strings, and the operator pages the plugin serves
+                out of its own process (data/web/encoder, data/web/decoder).
 relay/          the public simulcast relay: a container that pushes the same
                 segments to YouTube, Facebook or any RTMP destination, or over
                 SRT. Uses the core; the core knows nothing about it.
 tests/          every guarantee above has a test.
+cmake/          the driver scripts the muxer round-trip tests run through.
+test-data/      fixtures, and a note on how the CMAF ones are produced.
 scripts/player/ the install script and systemd unit for the appliance.
 scripts/        optional Lua control script, superseded by the encoder dock.
 ```

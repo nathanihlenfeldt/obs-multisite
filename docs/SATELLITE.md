@@ -57,6 +57,13 @@ composite and routed to wherever it needs to go (a DeckLink output, a
 separate program feed, a video wall processor). Nothing here needs a plugin;
 crop and transform are built into OBS.
 
+> **Planned.** Pulling the composite apart is intended to become a property of
+> the decoder rather than a filter chain built by hand: a tile layout declared at
+> the main site would expose each region as its own source, already cropped, so a
+> 2×1 or 2×2 feed could be assigned straight to discrete fullscreen or SDI
+> outputs. That is Phase 10 in [PROJECT-SCOPE.md](../PROJECT-SCOPE.md#10-delivery-phases).
+> Until it exists, the filters below are how to do it.
+
 The cost is bandwidth: a 3840×2160 canvas costs roughly what a single 4K
 stream does, whatever number of cameras are inside it. Worth it for a room
 that needs several angles kept in lock-step; not worth building for a room

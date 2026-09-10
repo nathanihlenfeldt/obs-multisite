@@ -34,7 +34,9 @@ cmake -S . -B build -DBUILD_OBS_PLUGIN=ON -DENABLE_QT=ON
 
 Apple Silicon only, and the core needs no OpenSSL — it uses CommonCrypto from
 libSystem, so a built plugin loads on a Mac that has never had Homebrew.
-`ctest` should pass 13/13 with nothing installed but CMake and FFmpeg.
+`ctest` should pass **17/17** with nothing installed but CMake and FFmpeg: the
+thirteen always-built suites, plus `core_portable` and the three `cmaf*` ones.
+(`s3_url` and `s3_cancel` need libcurl, and are skipped without it.)
 
 For the **plugin**, the only real difficulty is ABI matching. OBS.app carries
 its own FFmpeg, Qt and libobs, and a plugin has to use those exact copies. A
@@ -118,22 +120,29 @@ path outside `/System` and `/usr/lib`.
 
 ## What the tests cover
 
-Thirteen suites, all runnable without OBS (the `cmaf*` ones need FFmpeg and
-`s3_url` needs libcurl; the rest need neither):
+Nineteen suites, all runnable without OBS. Thirteen are built unconditionally
+wherever the core builds; the `cmaf*` three need FFmpeg, `s3_url` and
+`s3_cancel` need libcurl, and `s3_cancel` and `core_portable` need a POSIX host:
 
 | suite | what it proves |
 |---|---|
 | `reliability` | durability across a crash, ordered drain through an outage, checksum rejection, permanent-failure handling |
 | `session` | the write-ordering invariant holds continuously, including across a crash and resume; packed multi-channel audio round-trips, channel order intact |
 | `decoder` | timeslipping: the cache fills while paused, resume continues exactly where it stopped, markers, seek-by-time, VOD playback, and that a gap stalls rather than silently skipping |
+| `timebase` | `Manifest::stream_duration_hint()` maps sequence numbers onto clock times for every segment outside the rolling window, so it decides the timeline axis, "behind live" and a recording's total length — and a finished recording's last segment is the partial fragment the broadcast ended on, which must not be taken as typical |
+| `storage_health` | the colo and the throughput figure an operator is shown when a campus stutters, kept out of the transport so they can be tested with no network, no bucket and no libcurl |
+| `link_health` | the three-state link readout every operator surface shows, with the arithmetic in the core so it needs no network |
 | `responsive` | UI queries stay fast while downloading — the property that keeps OBS usable during an event |
 | `snapshot` | the figures the dock reads agree with the session they are built from |
+| `http_server` | the shared HTTP server spoken to over a real loopback socket: routing, verbs, the static web root, keep-alive, a handler that throws, and the refusal of a path that climbs out of the web root |
 | `s3_list` | a ListObjectsV2 response is read correctly, including pagination and an access-denied body; a signed query string is canonicalised the way S3 does it |
 | `event_catalog` | events are classified as live / recording / interrupted, rooms stay separate, a listing failure is not shown as "no recordings", an event that recorded nothing is not offered, and an event with no room-index entry still lists alongside those that have one |
+| `storage_manager` | encoder-side storage management: the listing and the per-event size tally are separable, a tally that fails is reported as unknown rather than as `0 B`, cancellation returns early and is not counted as a store failure, and a prefix that will not finish paging gives up with a reason |
 | `crypto` | SHA-256 and HMAC-SHA256 match the NIST and RFC 4231 vectors on whichever backend was compiled in — OpenSSL, Windows bcrypt or Apple CommonCrypto. Each CI platform runs its own, so all three are held to the same published answers and a signed request cannot differ by platform |
 | `cmaf`, `cmaf_hevc` | the muxer produces decodable fragments for H.264 and HEVC, with multi-track audio |
 | `cmaf_decode` | the round trip: what the muxer wrote, the decoder plays back |
 | `s3_url` | endpoint and bucket values survive being pasted with schemes, slashes and whitespace |
+| `s3_cancel` | `cancel_pending()` actually aborts a stalled request quickly, rather than trusting that wiring curl's progress callback was enough |
 | `core_portable` | the core has not acquired an OBS or Qt dependency |
 
 Building with `-DMULTISITE_BUILD_RELAY=ON` adds three more, which the container
