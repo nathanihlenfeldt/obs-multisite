@@ -12,6 +12,7 @@ void register_ui();
 void unregister_ui();
 void start_web_ui();
 void stop_web_ui();
+void shut_down_web_ui();
 #ifdef MULTISITE_HAVE_QT
 void register_docks();
 #endif
@@ -49,7 +50,7 @@ bool obs_module_load(void) {
 void obs_module_unload(void) {
     // Stopped first: while it is running, a request can arrive at any moment,
     // and it must not arrive after the things it controls have gone.
-    multisite_obs::stop_web_ui();
+    multisite_obs::shut_down_web_ui();
     multisite_obs::unregister_ui();
     mlog_info("obs-multisite unloaded");
 }

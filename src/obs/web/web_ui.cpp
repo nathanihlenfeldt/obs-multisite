@@ -40,8 +40,11 @@ std::string g_problem;
 // away.
 std::atomic<bool> g_locked{false};
 
-// Set the moment a stop begins, never cleared while the process lives: once
-// this module is on its way out, no request may touch anything it owns again.
+// Set the moment a stop begins, and cleared again when a start follows: a
+// restart is not a shutdown. The dock applies its remote-control settings by
+// stopping and starting the server, and leaving this set would refuse every
+// control on both pages afterwards with "OBS is closing" — a real bug, and the
+// reason this is cleared in start_web_ui() rather than only set here.
 std::atomic<bool> g_stopping{false};
 
 WebUiSettings& settings_storage() {
@@ -187,6 +190,13 @@ std::string web_ui_address() {
 void start_web_ui() {
     std::lock_guard<std::mutex> lk(g_mutex);
     g_problem.clear();
+
+    // Starting means not stopping. Without this, changing the port (or anything
+    // else in the dock's Remote control group) stopped the server, started it
+    // again, and left every control answering "OBS is closing" for the rest of
+    // the session.
+    g_stopping = false;
+
     if (g_server) return;
 
     const WebUiSettings cfg = web_ui_settings();
@@ -283,8 +293,6 @@ void start_web_ui() {
 }
 
 void stop_web_ui() {
-    g_stopping = true;   // before anything else: see web_ui_stopping()
-
     std::unique_ptr<HttpServer> server;
     {
         std::lock_guard<std::mutex> lk(g_mutex);
@@ -299,6 +307,15 @@ void stop_web_ui() {
         mlog_info("remote control stopped");
     }
     multisite::http_server_set_log_sink(nullptr);
+}
+
+void shut_down_web_ui() {
+    // Set before the server goes, and never cleared while this process lives:
+    // a request already inside a handler must not start touching OBS while the
+    // module is being unloaded around it. A later start_web_ui() (OBS reloading
+    // the module) clears it again, because serving is exactly what it means.
+    g_stopping = true;
+    stop_web_ui();
 }
 
 } // namespace multisite_obs

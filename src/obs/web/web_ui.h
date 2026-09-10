@@ -43,7 +43,17 @@ void set_web_ui_settings(const WebUiSettings& s);
 // that is already taken means no remote control, which is worth saying loudly
 // in the log and on the dock, and nothing more.
 void start_web_ui();
+
+// Stops the server so it can be started again — what the dock asks for when the
+// port or the on/off switch changes. Deliberately NOT the same thing as shutting
+// down: restarting must leave the controls working.
 void stop_web_ui();
+
+// Stops the server because this module is going away, and refuses anything that
+// arrives afterwards. Only obs_module_unload calls this: a control accepted
+// while OBS is tearing the module down would be applied to something already
+// gone.
+void shut_down_web_ui();
 
 bool web_ui_running();
 

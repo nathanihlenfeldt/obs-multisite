@@ -55,8 +55,20 @@ QGroupBox* make_remote_control_box(QWidget* parent) {
     // whether it worked.
     auto apply = [on, port, address, show_address]() {
         WebUiSettings s = web_ui_settings();
+        const bool was_on   = s.enabled;
+        const int  was_port = s.port;
         s.enabled = on->isChecked();
         s.port    = port->value();
+
+        // Nothing actually changed, so leave the server alone. The port field
+        // reports editingFinished the moment it loses focus — which is a click
+        // on any other control — and restarting the server on that would drop
+        // the page somebody is holding, for no reason at all.
+        if (s.enabled == was_on && s.port == was_port) {
+            show_address();
+            return;
+        }
+
         set_web_ui_settings(s);
 
         stop_web_ui();
