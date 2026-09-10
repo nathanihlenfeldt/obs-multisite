@@ -30,6 +30,46 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.8-alpha
+
+### The encoder and the decoder can be run from a phone
+
+Both halves of the plugin now serve an operator page on the church network: the
+same interface the Raspberry Pi appliance has, out of OBS itself. One page,
+polled twice a second, in the plain language of an event rather than of a video
+pipeline.
+
+- **Sending side** — Go live and End the broadcast, the editable event name, the
+  four marker buttons, and the reliability readout an operator watches
+  mid-event: confirmed pieces, what is waiting to send, retries, bytes sent, the
+  measured upload rate, the Cloudflare edge serving the bucket, and the last
+  error.
+- **Receiving side** — play, hold picture, catch up to now, jog, stay behind
+  live, a timeline that can be clicked, the recordings list, and the readout
+  that says how long this campus could keep playing through an outage.
+- **Both** — the log, so somebody with a phone and no access to the desk can see
+  why nothing is happening, and a Lock, so a tablet left on a music stand cannot
+  stop a broadcast by being leant on.
+
+It is the appliance's page on purpose: somebody who has learned one should not
+have to learn the other, and the words on it are the words of an event. There is
+no password and no TLS, exactly as for the appliance — the building's own network
+is the guard — and it is on by default on port **8080**. It can be switched off
+or moved to another port in **Settings → Remote control** in either dock, which
+also shows the address to type into a phone.
+
+Which pages exist follows the machine's role, as the docks already do: a main
+site has no decoder routes at all, and a satellite none of the encoder's.
+
+### One HTTP server, three users
+
+The appliance's small HTTP server moved into the shared core and learned to
+speak Winsock, so the plugin, the relay and the player now run one
+implementation rather than three. It is covered by a new test
+(`tests/test_http_server.cpp`) that speaks real HTTP over loopback, on every
+platform CI builds: routing, verbs, the static web root, keep-alive, a handler
+that throws, and the refusal of a path that climbs out of the web root.
+
 ## Fixed since v0.1.6-alpha
 
 **The campus player leaked memory on every idle-screen redraw.** The new

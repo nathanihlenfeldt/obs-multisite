@@ -13,14 +13,12 @@ on:
     paths:
       - 'relay/**'
       - 'src/core/**'
-      - 'src/appliance/http_server.*'
       - 'CMakeLists.txt'
       - '.github/workflows/relay-container.yml'
   pull_request:
     paths:
       - 'relay/**'
       - 'src/core/**'
-      - 'src/appliance/http_server.*'
       - 'CMakeLists.txt'
       - '.github/workflows/relay-container.yml'
   workflow_dispatch:

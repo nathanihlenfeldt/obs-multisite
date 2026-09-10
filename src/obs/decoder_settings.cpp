@@ -24,6 +24,12 @@ DecoderSettings& decoder_settings() {
     return storage();
 }
 
+DecoderSettings decoder_settings_copy() {
+    (void)decoder_settings();            // ensure the initial load happened
+    std::lock_guard<std::mutex> lk(g_mtx);
+    return storage();
+}
+
 void set_decoder_settings(const DecoderSettings& in) {
     (void)decoder_settings();            // ensure the initial load happened
     {

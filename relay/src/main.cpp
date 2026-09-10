@@ -134,7 +134,16 @@ int main(int argc, char** argv) {
     // deliberate act — put a TLS-terminating proxy in front of it and point
     // that at this, rather than opening the port.
     const std::string bind = env("RELAY_BIND", "127.0.0.1");
-    multisite_player::HttpServer server(bind, port);
+    // The HTTP server lives in the shared core now, and the core has no log of
+    // its own: point it at this container's.
+    multisite::http_server_set_log_sink(
+        [](multisite::HttpLogLevel level, const std::string& text) {
+            if (level == multisite::HttpLogLevel::Error)
+                rlog_error("%s", text.c_str());
+            else
+                rlog_warn("%s", text.c_str());
+        });
+    multisite::HttpServer server(bind, port);
     server.set_static_root(web_root);
     register_routes(server, service, auth);
 

@@ -95,6 +95,12 @@ segment.
   [`relay/`](relay/README.md) reads the same files and pushes to YouTube,
   Facebook or any RTMP destination.
 - **Download a finished event** as one MP4, with every audio track.
+- **Control either side from a phone.** The encoder and decoder docks serve the
+  campus player's own operator page on your church network — Go live and the
+  markers on the sending side, play, hold, jog and the recordings list on the
+  receiving side. The address is in the dock under **Settings → Remote
+  control**; port 8080 unless you change it. No password: the building's
+  network is the guard.
 - **Run a campus without a PC** — a Raspberry Pi 5 appliance with HDMI output
   and a browser control panel:
   ```sh

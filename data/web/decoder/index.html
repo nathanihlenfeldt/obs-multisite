@@ -1,0 +1,189 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#12151a">
+<title>Campus — receiving</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header id="banner">
+  <div class="state" id="state">Connecting…</div>
+  <div class="net" id="net" hidden></div>
+  <div class="room" id="room">&nbsp;</div>
+  <button class="lock" id="lock" title="Stop anything being changed by accident">Lock</button>
+</header>
+
+<nav id="tabs">
+  <button class="tab is-on" data-tab="play">Play</button>
+  <button class="tab" data-tab="events">Events</button>
+  <button class="tab" data-tab="settings">Settings</button>
+  <button class="tab" data-tab="log">Log</button>
+  <a class="tab" id="other-side" href="/encoder/" hidden>Sending side</a>
+</nav>
+
+<main>
+
+<!-- ── Play ────────────────────────────────────────────────────────────────── -->
+<section id="tab-play" class="panel is-on">
+
+  <div class="now">
+    <div class="clock" id="clock">--:--:--</div>
+    <div class="sub" id="position">&nbsp;</div>
+  </div>
+
+  <div class="timeline-wrap">
+    <div class="timeline" id="timeline" title="Click to go to a moment">
+      <div class="stored" id="tl-stored"></div>
+      <div class="downloaded" id="tl-downloaded"></div>
+      <div class="markers" id="tl-markers"></div>
+      <div class="head" id="tl-head"></div>
+    </div>
+    <div class="timeline-labels">
+      <span id="tl-left">&nbsp;</span>
+      <span id="tl-hover"></span>
+      <span id="tl-right">&nbsp;</span>
+    </div>
+  </div>
+
+  <div class="transport">
+    <button class="big go"   id="btn-play">Play</button>
+    <button class="big hold" id="btn-hold">Hold picture</button>
+    <button class="big"      id="btn-live">Catch up to now</button>
+    <button class="big off"  id="btn-stop">Stop</button>
+  </div>
+
+  <div class="jog">
+    <span class="jog-label">Go back</span>
+    <button data-jog="-60">1 min</button>
+    <button data-jog="-10">10 s</button>
+    <button data-jog="-1">1 s</button>
+    <span class="jog-label">Go forward</span>
+    <button data-jog="1">1 s</button>
+    <button data-jog="10">10 s</button>
+    <button data-jog="60">1 min</button>
+  </div>
+
+  <div class="row delay">
+    <label for="delay-min">Stay behind live by</label>
+    <input type="number" id="delay-min" min="0" max="120" step="1" value="0">
+    <span>minutes</span>
+    <button id="btn-delay">Set</button>
+  </div>
+
+  <div class="cues" id="cues"></div>
+
+  <div class="readout" id="readout"></div>
+
+  <div class="alert" id="alert" hidden></div>
+</section>
+
+<!-- ── Events ──────────────────────────────────────────────────────────────── -->
+<section id="tab-events" class="panel">
+  <div class="row">
+    <button id="btn-events-refresh">Refresh the list</button>
+    <span class="hint" id="events-note"></span>
+  </div>
+
+  <p class="hint" id="live-elsewhere" hidden></p>
+
+  <ul class="events" id="events"></ul>
+
+  <div class="row">
+    <button id="btn-load">Play the one selected</button>
+    <button id="btn-return-live">Back to what is live now</button>
+  </div>
+</section>
+
+<!-- ── Settings ────────────────────────────────────────────────────────────── -->
+<section id="tab-settings" class="panel">
+  <form id="settings-form">
+
+    <h2>Where the event is stored</h2>
+    <p class="hint">
+      Set once on this machine and shared by everything that plays here.
+    </p>
+    <div class="field">
+      <label for="s-account">Cloudflare R2 account id</label>
+      <input id="s-account" name="r2_account_id" type="text" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="s-endpoint">Endpoint host</label>
+      <input id="s-endpoint" name="endpoint_host" type="text" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="s-bucket">Bucket</label>
+      <input id="s-bucket" name="bucket" type="text" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="s-keyid">Access key id</label>
+      <input id="s-keyid" name="access_key_id" type="text" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="s-secret">Secret access key</label>
+      <input id="s-secret" name="secret_access_key" type="password" spellcheck="false">
+      <p class="hint">Left as the dots, it is not changed.</p>
+    </div>
+    <div class="field">
+      <label for="s-region">Region</label>
+      <input id="s-region" name="region" type="text" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="s-room">Room</label>
+      <input id="s-room" name="room_id" type="text" spellcheck="false">
+      <p class="hint">Which building to receive. The main site names it when it sends.</p>
+    </div>
+
+    <h2>How far ahead to keep</h2>
+    <div class="field">
+      <label for="s-startbuffer">Bank this many seconds before going to air</label>
+      <input id="s-startbuffer" name="start_buffer_seconds" type="number" min="0" max="600">
+      <p class="hint">
+        The picture never chases the live edge. 0 starts immediately.
+      </p>
+    </div>
+    <div class="field">
+      <label for="s-buffermins">Download this many minutes ahead</label>
+      <input id="s-buffermins" name="buffer_minutes" type="number" min="1" max="240">
+      <p class="hint">
+        This is how long this campus could keep playing if the connection
+        dropped, so set it as high as the link allows.
+      </p>
+    </div>
+    <div class="field">
+      <label for="s-prebuffer">Segments held above the playhead</label>
+      <input id="s-prebuffer" name="prebuffer_segments" type="number" min="0" max="60">
+      <p class="hint">Kept above zero on purpose, so a hold has something to resume into.</p>
+    </div>
+    <div class="field">
+      <label for="s-keepbehind">Segments kept behind the playhead</label>
+      <input id="s-keepbehind" name="keep_behind_segments" type="number" min="10" max="2000">
+      <p class="hint">What can still be rewound into.</p>
+    </div>
+
+    <div class="row sticky-save">
+      <button type="submit" class="big go">Save settings</button>
+      <span class="muted" id="settings-note"></span>
+    </div>
+  </form>
+
+  <h2>This page</h2>
+  <dl class="facts" id="facts"></dl>
+</section>
+
+<!-- ── Log ─────────────────────────────────────────────────────────────────── -->
+<section id="tab-log" class="panel">
+  <div class="row">
+    <button id="btn-log-refresh">Refresh</button>
+    <label><input type="checkbox" id="log-follow" checked> Keep up to date</label>
+  </div>
+  <pre class="log" id="log"></pre>
+</section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

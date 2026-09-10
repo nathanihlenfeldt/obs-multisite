@@ -17,10 +17,10 @@
 #include <string>
 
 using json = nlohmann::json;
-using multisite_player::HttpHandler;
-using multisite_player::HttpRequest;
-using multisite_player::HttpResponse;
-using multisite_player::HttpServer;
+using multisite::HttpHandler;
+using multisite::HttpRequest;
+using multisite::HttpResponse;
+using multisite::HttpServer;
 
 namespace multisite_relay {
 
@@ -476,7 +476,7 @@ void register_routes(HttpServer& server, Service& service, Auth& auth) {
             "attachment; filename=\"" + name + ".mp4\"";
         if (size > 0) res.headers["Content-Length"] = std::to_string(size);
 
-        res.stream = [feeder, id, parts](multisite_player::HttpStream& out) {
+        res.stream = [feeder, id, parts](multisite::HttpStream& out) {
             std::string error;
             feeder->stream_parts(parts, [&out](const uint8_t* p, size_t n) {
                 return out.write(p, n);     // false once the browser goes away

@@ -1,11 +1,43 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 #include <obs-module.h>
+
+#include <string>
+#include <vector>
+
 #define PLOG "[multisite] "
-#define mlog_info(f, ...)  blog(LOG_INFO,    PLOG f, ##__VA_ARGS__)
-#define mlog_warn(f, ...)  blog(LOG_WARNING, PLOG f, ##__VA_ARGS__)
-#define mlog_error(f, ...) blog(LOG_ERROR,   PLOG f, ##__VA_ARGS__)
-#define mlog_debug(f, ...) blog(LOG_DEBUG,   PLOG f, ##__VA_ARGS__)
+
+namespace multisite_obs {
+
+// Every line this plugin writes to OBS's log is also kept here, newest last.
+//
+// The remote-control pages need it: an operator standing at the back of the
+// room with a tablet cannot open the log file on a machine they are not sitting
+// at, and "why is nothing happening" is exactly the question they are asking.
+// The appliance and the relay keep the same ring for the same reason.
+struct PluginLogEntry {
+    long long   at_ms = 0;
+    int         level = LOG_INFO;
+    std::string text;
+};
+
+// Writes to OBS's log AND keeps the line. Called through the mlog_* macros, so
+// nothing else in the plugin has to know this exists.
+void plugin_log_line(int level, const char* fmt, ...)
+#ifdef __GNUC__
+    __attribute__((format(printf, 2, 3)))
+#endif
+    ;
+
+std::vector<PluginLogEntry> plugin_log_recent(size_t max_lines = 200);
+const char* plugin_log_level_name(int level);
+
+} // namespace multisite_obs
+
+#define mlog_info(f, ...)  ::multisite_obs::plugin_log_line(LOG_INFO,    PLOG f, ##__VA_ARGS__)
+#define mlog_warn(f, ...)  ::multisite_obs::plugin_log_line(LOG_WARNING, PLOG f, ##__VA_ARGS__)
+#define mlog_error(f, ...) ::multisite_obs::plugin_log_line(LOG_ERROR,   PLOG f, ##__VA_ARGS__)
+#define mlog_debug(f, ...) ::multisite_obs::plugin_log_line(LOG_DEBUG,   PLOG f, ##__VA_ARGS__)
 
 #include <media-io/audio-io.h>
 

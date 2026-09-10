@@ -18,7 +18,7 @@
 //     stop the player by being leant on.
 //
 #include "player.h"
-#include "http_server.h"
+#include "core/http_server.h"
 
 #include <string>
 
@@ -26,6 +26,7 @@ namespace multisite_player {
 
 // Registers every route on `server`. `config_path` is where edited settings
 // are written back to.
-void register_api(HttpServer& server, Player& player, std::string config_path);
+void register_api(multisite::HttpServer& server, Player& player,
+                  std::string config_path);
 
 } // namespace multisite_player

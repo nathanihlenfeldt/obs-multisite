@@ -33,10 +33,9 @@ add_executable(multisite-relay
     src/room_feeder.cpp
     src/ffmpeg_process.cpp
     src/log.cpp
-    # The appliance's HTTP server, reused rather than reimplemented. It is
-    # already a dependency-free server with a static-file root, which is
-    # exactly what this needs.
-    ../src/appliance/http_server.cpp
+    # The shared HTTP server, from the core: dependency-free, with a
+    # static-file root, which is exactly what this needs.
+    ../src/core/http_server.cpp
     ../src/appliance/log.cpp)
 target_include_directories(multisite-relay PRIVATE
     src ../src ../src/core ../src/appliance ../src/vendor)

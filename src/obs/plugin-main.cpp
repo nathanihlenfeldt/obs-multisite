@@ -10,6 +10,8 @@ void register_output();
 void register_source();
 void register_ui();
 void unregister_ui();
+void start_web_ui();
+void stop_web_ui();
 #ifdef MULTISITE_HAVE_QT
 void register_docks();
 #endif
@@ -38,9 +40,16 @@ bool obs_module_load(void) {
 #ifdef MULTISITE_HAVE_QT
     multisite_obs::register_docks();    // encoder + decoder operator panels
 #endif
+    // The phone-and-tablet interface, served from this process. No Qt either:
+    // a build without docks still gets remote control, because the machine that
+    // most needs it is the one nobody is sitting at.
+    multisite_obs::start_web_ui();
     return true;
 }
 void obs_module_unload(void) {
+    // Stopped first: while it is running, a request can arrive at any moment,
+    // and it must not arrive after the things it controls have gone.
+    multisite_obs::stop_web_ui();
     multisite_obs::unregister_ui();
     mlog_info("obs-multisite unloaded");
 }

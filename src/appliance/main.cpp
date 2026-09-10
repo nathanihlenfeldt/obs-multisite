@@ -9,7 +9,7 @@
 //
 #include "api.h"
 #include "config.h"
-#include "http_server.h"
+#include "core/http_server.h"
 #include "log.h"
 #include "player.h"
 #include "sysinfo.h"
@@ -29,6 +29,10 @@
 namespace {
 
 std::atomic<bool> g_stop{false};
+
+// The HTTP server is shared with the relay and the OBS plugin, so it lives in
+// the core and its names arrive qualified.
+using multisite::HttpServer;
 
 void on_signal(int sig) {
     // Async-signal-safe: set a flag, nothing more. The main loop does the work.
@@ -114,6 +118,16 @@ int main(int argc, char** argv) {
 
     plog_info("multisite player %s starting on %s", player_version(),
               hostname().c_str());
+
+    // The server has no log of its own — the core does not decide where
+    // anybody's messages go — so point it at this process's.
+    multisite::http_server_set_log_sink(
+        [](multisite::HttpLogLevel level, const std::string& text) {
+            if (level == multisite::HttpLogLevel::Error)
+                plog_error("%s", text.c_str());
+            else
+                plog_warn("%s", text.c_str());
+        });
 
     Config cfg;
     {

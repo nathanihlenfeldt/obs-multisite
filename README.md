@@ -188,6 +188,12 @@ but has not yet carried real encoder output.
 - Finished *and interrupted* events play as video-on-demand from the beginning —
   an event whose encoder crashed is still watchable afterwards.
 - Operator docks in plain language, plus hotkeys.
+- **A remote-control page on both sides.** The encoder and decoder docks each
+  serve the campus player's own operator interface on the church network — one
+  page, polled twice a second, in the plain language of an event — so a marker
+  can be pressed from the back of the room and the buffer depth checked from a
+  phone. No password and no TLS: the building's network is the guard, exactly as
+  it is for the appliance. What exists follows the machine's role.
 - **Public simulcast.** A separate container reads the same segments and pushes
   them to YouTube, Facebook or any RTMP destination — or over SRT, to a
   broadcast partner, a hardware decoder or a contribution CDN — a few minutes

@@ -218,9 +218,17 @@ void BroadcastSettings::save() const {
     obs_data_release(d);
 }
 
+BroadcastSettings BroadcastController::settings_copy() const {
+    std::lock_guard<std::mutex> lk(m_cfg_mtx);
+    return m_cfg;
+}
+
 void BroadcastController::set_settings(const BroadcastSettings& s) {
-    m_cfg = s;
-    m_cfg.save();
+    {
+        std::lock_guard<std::mutex> lk(m_cfg_mtx);
+        m_cfg = s;
+        m_cfg.save();
+    }
     // Idle monitor follows the settings: any change to credentials or room
     // rebuilds the transport and re-probes.
     start_idle_monitor();

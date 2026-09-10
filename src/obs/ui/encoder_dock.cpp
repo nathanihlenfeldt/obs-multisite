@@ -5,6 +5,7 @@
 #include "../multisite_ui.h"
 #include "../plugin_log.h"
 #include "role_selector.h"
+#include "web_box.h"
 #include "storage_dialog.h"
 
 #include "../../core/s3_transport.h"
@@ -232,6 +233,9 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     // In both dialogs on purpose: choosing a role hides the other dock, so a
     // control in only one of them could hide the way back.
     dlgRoot->addWidget(make_role_selector(m_settings));
+    // The phone-and-tablet page, and the address to type into one. In both
+    // docks for the same reason the role selector is.
+    dlgRoot->addWidget(make_remote_control_box(m_settings));
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, m_settings);
     dlgRoot->addWidget(buttons);

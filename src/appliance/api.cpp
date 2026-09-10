@@ -12,6 +12,13 @@
 
 using json = nlohmann::json;
 
+// The HTTP server lives in the shared core now — the relay and the OBS plugin's
+// remote-control pages use the same one — so its names arrive qualified.
+using multisite::HttpHandler;
+using multisite::HttpRequest;
+using multisite::HttpResponse;
+using multisite::HttpServer;
+
 namespace multisite_player {
 
 namespace {

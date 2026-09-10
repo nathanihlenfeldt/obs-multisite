@@ -47,6 +47,9 @@ struct DecoderSettings {
 
 // The machine-wide settings, shared by every multisite source and the dock.
 DecoderSettings& decoder_settings();
+// A snapshot, for a reader that is not on OBS's UI thread — the remote-control
+// page polls from a network thread while the dock edits here.
+DecoderSettings decoder_settings_copy();
 void set_decoder_settings(const DecoderSettings& s);
 
 } // namespace multisite_obs

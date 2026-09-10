@@ -1,0 +1,174 @@
+<!doctype html>
+<html lang="en-GB">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<meta name="theme-color" content="#12151a">
+<title>Main site — sending</title>
+<link rel="stylesheet" href="style.css">
+</head>
+<body>
+
+<header id="banner">
+  <div class="state" id="state">Connecting…</div>
+  <div class="net" id="net" hidden></div>
+  <div class="room" id="room">&nbsp;</div>
+  <button class="lock" id="lock" title="Stop anything being changed by accident">Lock</button>
+</header>
+
+<nav id="tabs">
+  <button class="tab is-on" data-tab="live">Go live</button>
+  <button class="tab" data-tab="settings">Settings</button>
+  <button class="tab" data-tab="log">Log</button>
+  <a class="tab" id="other-side" href="/decoder/" hidden>Receiving side</a>
+</nav>
+
+<main>
+
+<!-- ── Go live ─────────────────────────────────────────────────────────────── -->
+<section id="tab-live" class="panel is-on">
+
+  <div class="now">
+    <div class="clock" id="clock">--:--:--</div>
+    <div class="sub" id="on-air">&nbsp;</div>
+  </div>
+
+  <div class="field">
+    <label for="event-name">This event is called</label>
+    <input type="text" id="event-name" autocomplete="off" spellcheck="false">
+    <p class="hint">
+      What campuses see in their list of recordings. Left alone, it is named
+      after the time it started.
+    </p>
+  </div>
+
+  <div class="transport">
+    <button class="big go"  id="btn-go">Go live</button>
+    <button class="big off" id="btn-end">End the broadcast</button>
+  </div>
+
+  <h2>Mark the moment</h2>
+  <p class="hint">
+    Dropped into the event as it is recorded, so a campus can jump straight to
+    the sermon later without hunting for it.
+  </p>
+  <div class="cues" id="markers"></div>
+
+  <div class="readout" id="readout"></div>
+
+  <div class="alert" id="alert" hidden></div>
+</section>
+
+<!-- ── Settings ────────────────────────────────────────────────────────────── -->
+<section id="tab-settings" class="panel">
+  <form id="settings-form">
+
+    <h2>Where the event is stored</h2>
+    <div class="field">
+      <label for="s-account">Cloudflare R2 account id</label>
+      <input id="s-account" name="r2_account_id" type="text" spellcheck="false">
+      <p class="hint">Either this, or an endpoint host below.</p>
+    </div>
+    <div class="field">
+      <label for="s-endpoint">Endpoint host</label>
+      <input id="s-endpoint" name="endpoint_host" type="text" spellcheck="false">
+      <p class="hint">For S3, Backblaze, Wasabi, or a MinIO box in the building.</p>
+    </div>
+    <div class="field">
+      <label for="s-bucket">Bucket</label>
+      <input id="s-bucket" name="bucket" type="text" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="s-keyid">Access key id</label>
+      <input id="s-keyid" name="access_key_id" type="text" spellcheck="false">
+    </div>
+    <div class="field">
+      <label for="s-secret">Secret access key</label>
+      <input id="s-secret" name="secret_access_key" type="password" spellcheck="false">
+      <p class="hint">
+        Left as the dots, it is not changed. The stored key is never shown here:
+        a phone on a church network is not somewhere to read a secret out.
+      </p>
+    </div>
+    <div class="field">
+      <label for="s-region">Region</label>
+      <input id="s-region" name="region" type="text" spellcheck="false">
+      <p class="hint">auto unless the store insists on one.</p>
+    </div>
+    <div class="field">
+      <label for="s-room">Room</label>
+      <input id="s-room" name="room_id" type="text" spellcheck="false">
+      <p class="hint">Which building is sending. Campuses look for this name.</p>
+    </div>
+    <div class="field">
+      <label for="s-tags">Tag objects with an expiry date</label>
+      <select id="s-tags" name="send_expiry_tag">
+        <option value="false">No — R2 refuses tags, and a tag deletes nothing</option>
+        <option value="true">Yes — the store has a lifecycle rule that reads them</option>
+      </select>
+    </div>
+
+    <h2>What is sent</h2>
+    <div class="field">
+      <label for="s-encoder">Video encoder</label>
+      <select id="s-encoder" name="video_encoder_id"></select>
+      <p class="hint">A hardware encoder leaves the CPU free for everything else this machine is doing.</p>
+    </div>
+    <div class="field">
+      <label for="s-seg">Segment length (seconds)</label>
+      <input id="s-seg" name="segment_duration_s" type="number" min="1" max="30" step="0.5">
+      <p class="hint">Shorter starts sooner at the campus; longer carries a wobbly link better.</p>
+    </div>
+    <div class="field">
+      <label for="s-vbit">Video bitrate (kbps)</label>
+      <input id="s-vbit" name="video_bitrate_kbps" type="number" min="200" max="100000" step="100">
+    </div>
+    <div class="field">
+      <label for="s-abit">Audio bitrate per track (kbps)</label>
+      <input id="s-abit" name="audio_bitrate_kbps" type="number" min="32" max="320" step="8">
+    </div>
+    <div class="field">
+      <label for="s-tracks">Mixer tracks to send</label>
+      <input id="s-tracks" name="audio_tracks" type="number" min="1" max="6">
+      <p class="hint">One per OBS mixer track, so a campus can take the mix it needs.</p>
+    </div>
+    <div class="field">
+      <label for="s-tracklabels">Track names</label>
+      <input id="s-tracklabels" name="track_labels" type="text">
+      <p class="hint">Comma-separated, in track order: Main mix,Sermon ISO,Click</p>
+    </div>
+    <div class="field">
+      <label for="s-chanlabels">Channel names</label>
+      <input id="s-chanlabels" name="channel_labels" type="text">
+      <p class="hint">Comma-separated, eight at most, for a packed multi-channel feed.</p>
+    </div>
+    <div class="field">
+      <label for="s-markerlabels">Marker buttons</label>
+      <input id="s-markerlabels" name="marker_labels" type="text">
+      <p class="hint">Comma-separated, four at most. These are the buttons above.</p>
+    </div>
+
+    <div class="row sticky-save">
+      <button type="submit" class="big go">Save settings</button>
+      <span class="muted" id="settings-note"></span>
+    </div>
+  </form>
+
+  <h2>This page</h2>
+  <dl class="facts" id="facts"></dl>
+</section>
+
+<!-- ── Log ─────────────────────────────────────────────────────────────────── -->
+<section id="tab-log" class="panel">
+  <div class="row">
+    <button id="btn-log-refresh">Refresh</button>
+    <label><input type="checkbox" id="log-follow" checked> Keep up to date</label>
+  </div>
+  <pre class="log" id="log"></pre>
+</section>
+
+</main>
+
+<script src="app.js"></script>
+</body>
+</html>

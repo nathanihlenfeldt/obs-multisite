@@ -13,6 +13,7 @@
 #include <obs.h>
 
 #include <memory>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -97,6 +98,10 @@ public:
     static BroadcastController& instance();
 
     const BroadcastSettings& settings() const { return m_cfg; }
+    // A snapshot, for a reader that is not on the UI thread: the remote-control
+    // pages poll from a network thread while the dock edits here on OBS's. The
+    // reference above stays for callers that are already on that thread.
+    BroadcastSettings settings_copy() const;
     void set_settings(const BroadcastSettings& s);
 
     // Creates the output plus a video encoder and one audio encoder per
@@ -124,6 +129,11 @@ private:
     void idle_probe_loop();
 
     BroadcastSettings m_cfg;
+    // Guards m_cfg for readers on other threads. Writes happen on OBS's UI
+    // thread — the dock directly, the remote-control pages through that same
+    // queue — so this is what makes a snapshot consistent rather than a
+    // half-copied string.
+    mutable std::mutex m_cfg_mtx;
     obs_output_t*  m_output = nullptr;
     obs_encoder_t* m_venc = nullptr;
     std::vector<obs_encoder_t*> m_aencs;

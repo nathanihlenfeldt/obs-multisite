@@ -1,25 +1,174 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "http_server.h"
-#include "log.h"
 
 #include <algorithm>
 #include <cctype>
 #include <cerrno>
+#include <chrono>
 #include <cstring>
 #include <fstream>
+#include <mutex>
 #include <sstream>
 
-#include <arpa/inet.h>
-#include <fcntl.h>
-#include <netinet/in.h>
-#include <netinet/tcp.h>
-#include <sys/socket.h>
 #include <sys/stat.h>
-#include <unistd.h>
+#include <sys/types.h>
 
-namespace multisite_player {
+#ifdef _WIN32
+#  include <winsock2.h>
+#  include <ws2tcpip.h>
+#else
+#  include <arpa/inet.h>
+#  include <netinet/in.h>
+#  include <netinet/tcp.h>
+#  include <sys/socket.h>
+#  include <unistd.h>
+#endif
+
+namespace multisite {
 
 namespace {
+
+// ── The platform's sockets, behind one small set of names ────────────────────
+//
+// The appliance this server came from only ever ran on a Raspberry Pi, so it
+// used POSIX sockets directly. An OBS plugin does not have that luxury: the
+// same file has to compile on Windows too, where a socket handle is a UINT_PTR
+// rather than a file descriptor, `close` is `closesocket`, there is no
+// MSG_NOSIGNAL, and SO_REUSEADDR means something closer to the opposite of what
+// it means here.
+
+#ifdef _WIN32
+using sock_t = SOCKET;
+constexpr sock_t kBadSocket    = INVALID_SOCKET;
+constexpr int    kNoSignalFlag = 0;            // Winsock has no MSG_NOSIGNAL
+constexpr int    kShutBoth     = SD_BOTH;
+#elif defined(__APPLE__)
+using sock_t = int;
+constexpr sock_t kBadSocket    = -1;
+constexpr int    kNoSignalFlag = 0;            // macOS: SO_NOSIGPIPE instead
+constexpr int    kShutBoth     = SHUT_RDWR;
+#else
+using sock_t = int;
+constexpr sock_t kBadSocket    = -1;
+constexpr int    kNoSignalFlag = MSG_NOSIGNAL;
+constexpr int    kShutBoth     = SHUT_RDWR;
+#endif
+
+// A socket handle crosses the public header as a plain number, which is what
+// keeps platform socket types out of it. SOCKET is a UINT_PTR on 64-bit
+// Windows and INVALID_SOCKET is all-ones — exactly the -1 that means "none".
+sock_t    to_sock(long long fd) { return (sock_t)fd; }
+long long from_sock(sock_t fd)  { return (long long)fd; }
+
+void close_socket(sock_t fd) {
+    if (fd == kBadSocket) return;
+#ifdef _WIN32
+    ::closesocket(fd);
+#else
+    ::close(fd);
+#endif
+}
+
+// Writing to a socket whose peer has gone raises SIGPIPE on POSIX, which kills
+// the process. The appliance ignores that signal for the whole process; a
+// plugin loaded into OBS cannot do that to somebody else's application, so the
+// socket is told not to raise it instead.
+void suppress_sigpipe(sock_t fd) {
+#ifdef __APPLE__
+    int on = 1;
+    ::setsockopt(fd, SOL_SOCKET, SO_NOSIGPIPE, (const char*)&on, sizeof(on));
+#else
+    (void)fd;
+#endif
+}
+
+int last_socket_error() {
+#ifdef _WIN32
+    return ::WSAGetLastError();
+#else
+    return errno;
+#endif
+}
+
+bool interrupted(int e) {
+#ifdef _WIN32
+    return e == WSAEINTR;
+#else
+    return e == EINTR;
+#endif
+}
+
+// Plain language rather than strerror(): these strings end up in an operator's
+// log or on a web page, where "error 10048" means nothing and "the port is
+// already in use" tells somebody what to do about it.
+std::string socket_error_text(int e) {
+#ifdef _WIN32
+    switch (e) {
+    case WSAEADDRINUSE:     return "the port is already in use";
+    case WSAEACCES:         return "permission denied";
+    case WSAENETDOWN:       return "the network is down";
+    case WSAEHOSTUNREACH:   return "the host cannot be reached";
+    case WSAECONNRESET:     return "the connection was reset";
+    case WSAETIMEDOUT:      return "the connection timed out";
+    case WSANOTINITIALISED: return "winsock is not ready yet";
+    default: return "socket error " + std::to_string(e);
+    }
+#else
+    switch (e) {
+    case EADDRINUSE: return "the port is already in use";
+    case EACCES:     return "permission denied";
+    default: {
+        const char* s = strerror(e);
+        return s ? std::string(s) : ("socket error " + std::to_string(e));
+    }
+    }
+#endif
+}
+
+#ifdef _WIN32
+// WSAStartup is per-process and Windows refcounts it, but OBS loads and unloads
+// modules, so this keeps its own count and lets the last server to stop be the
+// one that cleans up. Deliberately leaked: a detached connection thread must
+// never touch a destroyed mutex.
+struct WsaState { std::mutex mtx; int refs = 0; };
+WsaState& wsa_state() { static WsaState* s = new WsaState(); return *s; }
+
+bool sockets_init(std::string& error) {
+    std::lock_guard<std::mutex> lk(wsa_state().mtx);
+    WSADATA data{};
+    const int rc = ::WSAStartup(MAKEWORD(2, 2), &data);
+    if (rc != 0) {
+        error = "winsock could not start (code " + std::to_string(rc) + ")";
+        return false;
+    }
+    ++wsa_state().refs;
+    return true;
+}
+
+void sockets_done() {
+    std::lock_guard<std::mutex> lk(wsa_state().mtx);
+    if (--wsa_state().refs <= 0) { wsa_state().refs = 0; ::WSACleanup(); }
+}
+#else
+bool sockets_init(std::string&) { return true; }
+void sockets_done() {}
+#endif
+
+// ── Logging ──────────────────────────────────────────────────────────────────
+//
+// The core has no log of its own: an appliance writes to the journal, the relay
+// to `docker logs`, a plugin to OBS's log. Each installs its own sink, and with
+// none installed the server stays quiet rather than writing to stderr behind
+// somebody's back. Leaked for the same reason as above.
+struct LogState { std::mutex mtx; HttpLogSink sink; };
+LogState& log_state() { static LogState* s = new LogState(); return *s; }
+
+void http_log(HttpLogLevel level, const std::string& text) {
+    std::lock_guard<std::mutex> lk(log_state().mtx);
+    if (log_state().sink) log_state().sink(level, text);
+}
+
+// ── Small shared helpers ─────────────────────────────────────────────────────
 
 std::string lower(std::string s) {
     std::transform(s.begin(), s.end(), s.begin(),
@@ -63,22 +212,30 @@ const char* content_type_for(const std::string& path) {
 }
 
 // A request body is a settings form, never an upload. Anything larger is a
-// mistake or an attack, and reading it would only waste the box's memory.
+// mistake or an attack, and reading it would only waste the machine's memory.
 constexpr size_t kMaxBody = 256 * 1024;
 constexpr size_t kMaxHeaderBytes = 32 * 1024;
 
-bool write_all(int fd, const void* data, size_t len) {
+bool write_all(sock_t fd, const void* data, size_t len) {
     const char* p = static_cast<const char*>(data);
     while (len > 0) {
-        const ssize_t n = ::send(fd, p, len, MSG_NOSIGNAL);
+        const int chunk = (int)std::min<size_t>(len, 0x7fffffff);
+        const long long n = ::send(fd, p, chunk, kNoSignalFlag);
         if (n > 0) { p += n; len -= (size_t)n; continue; }
-        if (n < 0 && (errno == EINTR)) continue;
+        if (n < 0 && interrupted(last_socket_error())) continue;
         return false;
     }
     return true;
 }
 
 } // namespace
+
+// ── Public entry points ──────────────────────────────────────────────────────
+
+void http_server_set_log_sink(HttpLogSink sink) {
+    std::lock_guard<std::mutex> lk(log_state().mtx);
+    log_state().sink = std::move(sink);
+}
 
 // ── URL helpers ──────────────────────────────────────────────────────────────
 
@@ -121,7 +278,7 @@ std::map<std::string, std::string> parse_query(const std::string& in) {
 
 bool HttpStream::write(const void* data, size_t len) {
     if (!m_alive) return false;
-    if (!write_all(m_fd, data, len)) m_alive = false;
+    if (!write_all(to_sock(m_fd), data, len)) m_alive = false;
     return m_alive;
 }
 
@@ -139,11 +296,25 @@ void HttpServer::route(const std::string& method, const std::string& path,
 
 bool HttpServer::start(std::string& error) {
     error.clear();
-    m_listen_fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    if (m_listen_fd < 0) { error = "socket: " + std::string(strerror(errno)); return false; }
+    if (!sockets_init(error)) return false;
+
+    const sock_t fd = ::socket(AF_INET, SOCK_STREAM, 0);
+    if (fd == kBadSocket) {
+        error = "socket: " + socket_error_text(last_socket_error());
+        sockets_done();
+        return false;
+    }
+    suppress_sigpipe(fd);
 
     int on = 1;
-    ::setsockopt(m_listen_fd, SOL_SOCKET, SO_REUSEADDR, &on, sizeof(on));
+#ifdef _WIN32
+    // SO_REUSEADDR on Windows does the opposite of what it does on POSIX: it
+    // lets a second process take a port that is already bound. This is the
+    // option that means "the port is mine, and nobody else may have it".
+    ::setsockopt(fd, SOL_SOCKET, SO_EXCLUSIVEADDRUSE, (const char*)&on, sizeof(on));
+#else
+    ::setsockopt(fd, SOL_SOCKET, SO_REUSEADDR, (const char*)&on, sizeof(on));
+#endif
 
     sockaddr_in addr{};
     addr.sin_family = AF_INET;
@@ -152,23 +323,32 @@ bool HttpServer::start(std::string& error) {
         addr.sin_addr.s_addr = INADDR_ANY;
     } else if (::inet_pton(AF_INET, m_bind.c_str(), &addr.sin_addr) != 1) {
         error = "not a valid bind address: " + m_bind;
-        ::close(m_listen_fd); m_listen_fd = -1;
+        close_socket(fd);
+        sockets_done();
         return false;
     }
 
-    if (::bind(m_listen_fd, (sockaddr*)&addr, sizeof(addr)) != 0) {
+    if (::bind(fd, (sockaddr*)&addr, sizeof(addr)) != 0) {
+        const int e = last_socket_error();
         error = "cannot listen on port " + std::to_string(m_port) + ": " +
-                strerror(errno) +
-                (errno == EADDRINUSE ? " (is the player already running?)" : "");
-        ::close(m_listen_fd); m_listen_fd = -1;
+                socket_error_text(e) +
+#ifdef _WIN32
+                (e == WSAEADDRINUSE ? " (is something already listening on it?)" : "");
+#else
+                (e == EADDRINUSE ? " (is something already listening on it?)" : "");
+#endif
+        close_socket(fd);
+        sockets_done();
         return false;
     }
-    if (::listen(m_listen_fd, 16) != 0) {
-        error = "listen: " + std::string(strerror(errno));
-        ::close(m_listen_fd); m_listen_fd = -1;
+    if (::listen(fd, 16) != 0) {
+        error = "listen: " + socket_error_text(last_socket_error());
+        close_socket(fd);
+        sockets_done();
         return false;
     }
 
+    m_listen_fd = from_sock(fd);
     m_running = true;
     m_accept_thread = std::thread([this] { accept_loop(); });
     return true;
@@ -178,22 +358,24 @@ void HttpServer::stop() {
     if (!m_running.exchange(false)) return;
     // Shutting the listening socket down releases accept() immediately, which
     // is what lets a stop finish promptly rather than after a timeout.
-    if (m_listen_fd >= 0) {
-        ::shutdown(m_listen_fd, SHUT_RDWR);
-        ::close(m_listen_fd);
+    if (m_listen_fd != -1) {
+        const sock_t fd = to_sock(m_listen_fd);
+        ::shutdown(fd, kShutBoth);
+        close_socket(fd);
         m_listen_fd = -1;
     }
     if (m_accept_thread.joinable()) m_accept_thread.join();
+    sockets_done();
 }
 
 void HttpServer::accept_loop() {
     while (m_running.load()) {
         sockaddr_in peer{};
         socklen_t len = sizeof(peer);
-        const int fd = ::accept(m_listen_fd, (sockaddr*)&peer, &len);
-        if (fd < 0) {
+        const sock_t fd = ::accept(to_sock(m_listen_fd), (sockaddr*)&peer, &len);
+        if (fd == kBadSocket) {
             if (!m_running.load()) break;
-            if (errno == EINTR) continue;
+            if (interrupted(last_socket_error())) continue;
             std::this_thread::sleep_for(std::chrono::milliseconds(50));
             continue;
         }
@@ -202,27 +384,38 @@ void HttpServer::accept_loop() {
                 "HTTP/1.1 503 Service Unavailable\r\nConnection: close\r\n"
                 "Content-Length: 0\r\n\r\n";
             write_all(fd, busy, sizeof(busy) - 1);
-            ::close(fd);
+            close_socket(fd);
             continue;
         }
+
+        suppress_sigpipe(fd);
         m_connections++;
-        std::thread([this, fd] {
-            serve_connection(fd);
-            ::close(fd);
+        const long long handle = from_sock(fd);
+        std::thread([this, handle] {
+            serve_connection(handle);
+            close_socket(to_sock(handle));
             m_connections--;
         }).detach();
     }
 }
 
-void HttpServer::serve_connection(int fd) {
+void HttpServer::serve_connection(long long handle) {
+    const sock_t fd = to_sock(handle);
+
     int on = 1;
-    ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, &on, sizeof(on));
+    ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&on, sizeof(on));
     // A client that opens a connection and says nothing must not hold a thread
-    // for ever.
+    // for ever. Windows wants milliseconds, POSIX a timeval.
+#ifdef _WIN32
+    const DWORD timeout_ms = 30000;
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
+#else
     timeval tv{};
     tv.tv_sec = 30;
-    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+#endif
 
     std::string buf;
     for (;;) {
@@ -230,7 +423,7 @@ void HttpServer::serve_connection(int fd) {
         size_t header_end = buf.find("\r\n\r\n");
         while (header_end == std::string::npos) {
             char chunk[4096];
-            const ssize_t n = ::recv(fd, chunk, sizeof(chunk), 0);
+            const long long n = ::recv(fd, chunk, sizeof(chunk), 0);
             if (n <= 0) return;
             buf.append(chunk, (size_t)n);
             if (buf.size() > kMaxHeaderBytes) return;
@@ -287,21 +480,22 @@ void HttpServer::serve_connection(int fd) {
         const size_t body_start = header_end + 4;
         while (buf.size() < body_start + body_len) {
             char chunk[4096];
-            const ssize_t n = ::recv(fd, chunk, sizeof(chunk), 0);
+            const long long n = ::recv(fd, chunk, sizeof(chunk), 0);
             if (n <= 0) return;
             buf.append(chunk, (size_t)n);
         }
         req.body = buf.substr(body_start, body_len);
         buf.erase(0, body_start + body_len);
 
-        if (!handle_request(fd, req)) return;
+        if (!handle_request(handle, req)) return;
 
         auto conn = req.headers.find("connection");
         if (conn != req.headers.end() && lower(conn->second) == "close") return;
     }
 }
 
-bool HttpServer::handle_request(int fd, const HttpRequest& req) {
+bool HttpServer::handle_request(long long handle, const HttpRequest& req) {
+    const sock_t fd = to_sock(handle);
     HttpResponse res;
 
     auto it = m_routes.find(req.method + " " + req.path);
@@ -310,9 +504,9 @@ bool HttpServer::handle_request(int fd, const HttpRequest& req) {
             it->second(req, res);
         } catch (const std::exception& e) {
             // A handler throwing must produce an error page, not kill the
-            // control surface on a box nobody can reach.
-            plog_error("request %s %s failed: %s", req.method.c_str(),
-                       req.path.c_str(), e.what());
+            // control surface on a machine nobody can reach.
+            http_log(HttpLogLevel::Error, "request " + req.method + " " +
+                     req.path + " failed: " + e.what());
             res = HttpResponse{};
             res.text(500, std::string("internal error: ") + e.what());
         }
@@ -336,11 +530,11 @@ bool HttpServer::handle_request(int fd, const HttpRequest& req) {
     if (res.stream) {
         head += "Connection: close\r\n\r\n";
         if (!write_all(fd, head.data(), head.size())) return false;
-        HttpStream stream(fd);
+        HttpStream stream(handle);
         try {
             res.stream(stream);
         } catch (const std::exception& e) {
-            plog_warn("stream %s ended: %s", req.path.c_str(), e.what());
+            http_log(HttpLogLevel::Warn, "stream " + req.path + " ended: " + e.what());
         }
         return false;               // streamed responses always close
     }
@@ -356,15 +550,18 @@ bool HttpServer::serve_static(const HttpRequest& req, HttpResponse& res) {
     if (m_static_root.empty()) return false;
 
     std::string rel = req.path == "/" ? "/index.html" : req.path;
-    // No traversal out of the web root. The box is on a church network, not
-    // behind a hardened proxy, so this check is the only thing standing
-    // between a stray request and /etc/multisite-player/config.json.
+    // No traversal out of the web root. A church network is not behind a
+    // hardened proxy, so this check is the only thing standing between a stray
+    // request and the storage credentials sitting beside the module.
     if (rel.find("..") != std::string::npos) return false;
     if (rel.empty() || rel[0] != '/') return false;
 
     const std::string path = m_static_root + rel;
     struct stat st{};
-    if (::stat(path.c_str(), &st) != 0 || !S_ISREG(st.st_mode)) return false;
+    // S_ISREG is not in the C runtime on Windows, so the mode bits are tested
+    // the long way round, which means the same thing everywhere.
+    if (::stat(path.c_str(), &st) != 0 || (st.st_mode & S_IFMT) != S_IFREG)
+        return false;
 
     std::ifstream in(path, std::ios::binary);
     if (!in) return false;
@@ -377,4 +574,4 @@ bool HttpServer::serve_static(const HttpRequest& req, HttpResponse& res) {
     return true;
 }
 
-} // namespace multisite_player
+} // namespace multisite

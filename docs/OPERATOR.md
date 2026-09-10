@@ -157,3 +157,42 @@ Settings → Hotkeys.
 > The event list needs the **`s3:ListBucket`** permission. Cloudflare's "Object
 > Read & Write" token has it; an object-scoped or read-only token often does
 > not, and the dock will say so rather than showing an empty list.
+
+## Remote control from a phone
+
+Both docks have a **Remote control** group in their settings. It serves the same
+operator interface as the campus player's own — one page, polled twice a second,
+in the plain language of an event — on the church network, so the markers can be
+pressed from the back of the room and the queue watched from the foyer. The
+address to type into a phone is shown in that group, and is selectable.
+
+It is on by default on port **8080**, and it binds every interface exactly as the
+appliance's page does, for the same reason: a page that only answers `localhost`
+cannot be reached from the tablet it exists for. **There is no password and no
+TLS** — the building's own network is the guard. If that is not the trust you
+want, switch it off in the same group.
+
+What the encoder's page offers:
+
+- **Go live** and **End the broadcast**, with the same editable event name the
+  dock has, pre-filled with the current date and time.
+- The four **marker** buttons, named in Settings.
+- A live readout: confirmed pieces, what is waiting to send, retries, bytes
+  sent, the measured upload rate, the Cloudflare edge serving the bucket, and
+  the last error if there is one.
+- **Settings** — the same storage and media fields as the dock, with the secret
+  key never shown. Editing storage from a phone is allowed; retyping the key is
+  not required, and the field is left as dots to mean "unchanged".
+- **Log** — the last few hundred `[multisite]` lines, which is what Help → Log
+  Files shows, for somebody who is not sitting at the machine.
+
+**Lock**, in the top bar, stops anything that would change what is on air while
+it is on. It is deliberately not remembered across a restart: a lock that
+survived one would leave a campus unable to broadcast with no obvious reason
+why, and the tablet that set it is long since charged and put away.
+
+Which pages exist follows the machine's **role**: a main site serves the encoder
+page and has no decoder routes at all, a satellite the other way round, and a
+machine set to Both serves both and links them. On Windows the first start
+raises the usual firewall prompt — allow it for private networks, or the page
+will not answer from another device.

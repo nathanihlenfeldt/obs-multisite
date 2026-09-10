@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(obs_multisite VERSION 0.1.7 LANGUAGES CXX)
+project(obs_multisite VERSION 0.1.8 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -41,7 +41,12 @@ add_library(multisite_core STATIC
     src/core/storage_health.cpp
     src/core/link_health.cpp
     src/core/event_catalog.cpp
-    src/core/storage_manager.cpp)
+    src/core/storage_manager.cpp
+    # The small HTTP server every consumer of the core shares: the appliance's
+    # operator interface, the relay's browser, and the OBS plugin's
+    # remote-control pages. Portable rather than POSIX-only, because a plugin
+    # has to build on Windows.
+    src/core/http_server.cpp)
 target_include_directories(multisite_core PUBLIC src src/core)
 # Must be position-independent: this static lib gets linked into the shared
 # OBS plugin module.
@@ -67,6 +72,12 @@ endif()
 
 find_package(Threads REQUIRED)
 target_link_libraries(multisite_core PUBLIC Threads::Threads)
+
+# Winsock, for the shared HTTP server. Nothing else in the core opens a socket
+# of its own: every request it makes goes out through libcurl.
+if(WIN32)
+    target_link_libraries(multisite_core PUBLIC ws2_32)
+endif()
 
 enable_testing()
 add_executable(test_reliability tests/test_reliability.cpp)
@@ -152,6 +163,14 @@ add_test(NAME event_catalog COMMAND test_event_catalog)
 add_executable(test_storage_manager tests/test_storage_manager.cpp)
 target_link_libraries(test_storage_manager PRIVATE multisite_core)
 add_test(NAME storage_manager COMMAND test_storage_manager)
+
+# The shared HTTP server, spoken to over a real loopback socket: routing,
+# verbs, the static web root, keep-alive, and the refusal of a path that climbs
+# out of it. Runs on every platform rather than POSIX only, because the OBS
+# plugin serves its remote-control pages from this on Windows too.
+add_executable(test_http_server tests/test_http_server.cpp)
+target_link_libraries(test_http_server PRIVATE multisite_core)
+add_test(NAME http_server COMMAND test_http_server)
 
 # ── Optional: S3 transport (needs libcurl) ────────────────────────────────────
 find_package(CURL QUIET)
@@ -300,12 +319,13 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         src/appliance/config.cpp
         src/appliance/log.cpp
         src/appliance/player.cpp
-        src/appliance/http_server.cpp
         src/appliance/api.cpp
         src/appliance/sysinfo.cpp
         src/appliance/preview.cpp
         src/appliance/splash.cpp
         src/appliance/outputs.cpp)
+    # The HTTP server arrives through multisite_core: it is shared with the
+    # relay and the OBS plugin's remote-control pages, so there is one copy.
 
     target_link_libraries(multisite-player PRIVATE
         multisite_core multisite_s3 multisite_cmaf)

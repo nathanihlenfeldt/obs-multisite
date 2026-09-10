@@ -1,31 +1,35 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #pragma once
 //
-// http_server.h — the appliance's control surface, in about as little code as
-// an HTTP server can be written in.
+// http_server.h — a control surface, in about as little code as an HTTP server
+// can be written in.
 //
-// The operator's interface is a phone or tablet on the church network, so the
-// box has to serve a web page and answer requests. It deliberately does NOT
-// pull in a web framework: this thing has to build with one command on a
-// stock Raspberry Pi OS and keep working for years without anyone updating a
-// dependency tree, so it speaks the small part of HTTP/1.1 it actually needs
-// and nothing else.
+// An operator's interface is a phone or a tablet on the church network, so
+// something has to serve a web page and answer requests. It deliberately does
+// NOT pull in a web framework: this has to build with one command on a stock
+// Raspberry Pi OS, inside the relay's container, and inside an OBS plugin on
+// Windows, and keep working for years without anyone updating a dependency
+// tree — so it speaks the small part of HTTP/1.1 it actually needs and nothing
+// else.
+//
+// It lives in the core because three consumers need exactly this and none of
+// them wants a third copy: the campus player appliance, the relay, and the OBS
+// plugin's remote-control pages. That is also why it is portable — POSIX
+// sockets everywhere except Windows, where it is Winsock — while the appliance
+// it came from never had to be.
 //
 // What it supports: GET/POST/PUT, query strings, a request body, keep-alive,
-// static files, and streamed responses. The preview itself is one JPEG per
-// request; HttpStream is available for anything that must produce a response
-// over time.
+// static files, and streamed responses.
 // What it does not: TLS, chunked request bodies, compression, or anything
-// facing the public internet. This is a LAN appliance, not a web server.
+// facing the public internet. This is a LAN control surface, not a web server.
 //
-#include <atomic>
 #include <functional>
 #include <map>
 #include <string>
 #include <thread>
-#include <vector>
+#include <atomic>
 
-namespace multisite_player {
+namespace multisite {
 
 struct HttpRequest {
     std::string method;
@@ -42,11 +46,13 @@ struct HttpRequest {
 };
 
 // A live connection, for responses that are produced over time rather than
-// all at once. The preview does not currently use it — it returns one JPEG per
+// all at once. The player's preview does not use it — it returns one JPEG per
 // request — but any streamed response can.
 class HttpStream {
 public:
-    explicit HttpStream(int fd) : m_fd(fd) {}
+    // The socket handle, kept as a number so this header stays free of
+    // platform socket types: SOCKET on Windows, int everywhere else.
+    explicit HttpStream(long long fd) : m_fd(fd) {}
     // Returns false once the client has gone away, which is the signal to stop
     // producing. A browser closing a preview tab must not leave a thread
     // encoding frames forever.
@@ -55,7 +61,7 @@ public:
     bool alive() const { return m_alive; }
 
 private:
-    int  m_fd;
+    long long m_fd;
     bool m_alive = true;
 };
 
@@ -82,6 +88,14 @@ struct HttpResponse {
 
 using HttpHandler = std::function<void(const HttpRequest&, HttpResponse&)>;
 
+// The core has no logging facility of its own — an appliance logs to the
+// journal, the relay to `docker logs`, the plugin to OBS's log — so each
+// consumer installs its own sink once at startup. With none installed, the
+// server stays quiet rather than writing to stderr behind somebody's back.
+enum class HttpLogLevel { Warn, Error };
+using HttpLogSink = std::function<void(HttpLogLevel, const std::string&)>;
+void http_server_set_log_sink(HttpLogSink sink);
+
 class HttpServer {
 public:
     HttpServer(std::string bind_address, int port);
@@ -98,7 +112,7 @@ public:
 
     // Binds and starts accepting. Returns false (with `error` set) if the port
     // is taken — worth reporting plainly, because the usual cause is a second
-    // copy of the player already running.
+    // copy already running.
     bool start(std::string& error);
     void stop();
 
@@ -106,13 +120,13 @@ public:
 
 private:
     void accept_loop();
-    void serve_connection(int fd);
-    bool handle_request(int fd, const HttpRequest& req);
+    void serve_connection(long long fd);
+    bool handle_request(long long fd, const HttpRequest& req);
     bool serve_static(const HttpRequest& req, HttpResponse& res);
 
     std::string m_bind;
     int         m_port;
-    int         m_listen_fd = -1;
+    long long   m_listen_fd = -1;
     std::string m_static_root;
 
     std::map<std::string, HttpHandler> m_routes;   // "GET /api/status"
@@ -126,9 +140,9 @@ private:
     static constexpr int kMaxConnections = 24;
 };
 
-// Percent-decoding and query parsing, exposed because the API layer needs the
+// Percent-decoding and query parsing, exposed because an API layer needs the
 // same rules for form bodies.
 std::string url_decode(const std::string& in);
 std::map<std::string, std::string> parse_query(const std::string& in);
 
-} // namespace multisite_player
+} // namespace multisite

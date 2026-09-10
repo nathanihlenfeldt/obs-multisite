@@ -183,3 +183,22 @@ sudo multisite-player --config /etc/multisite-player/config.json --verbose
 `journalctl -u multisite-player -f` is the whole diagnostic story; the last few
 hundred lines are also in the interface, under Log, for an operator with a
 phone and no SSH.
+
+## Remote control from a phone
+
+The decoder in OBS serves the same page the appliance does — play, hold, catch
+up, jog, stay behind live, the recordings list, and the readout that says how
+long this campus could keep playing through an outage. It is configured in
+**Settings → Remote control** in the dock, which shows the address to type into
+a phone, and is on by default on port **8080**.
+
+The page reaches the same controls the hotkeys use, so a page and a keypress
+cannot disagree about what they did. **Lock** in the top bar refuses anything
+that would change what is on air, for the tablet left on a music stand; the
+dock's own Lock is shown as well, because "why will this not respond" has two
+different answers.
+
+There is no password and no TLS — the building's network is the guard, exactly
+as for the appliance's page. Switch it off in the same group if that is not the
+trust you want, and allow it through the Windows firewall on private networks
+the first time, or nothing else on the LAN will reach it.
