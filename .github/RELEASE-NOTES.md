@@ -30,6 +30,35 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.9-alpha
+
+For v0.1.8's users: the Manage storage tool arrived in the previous
+release; this one is what makes it usable on a full bucket.
+
+### Storage you can actually see and clear
+
+**Manage storage…** in the encoder dock lists a room's events and lets them be
+deleted — one, or everything older than a chosen number of days — with a
+confirmation and a check afterwards. On a full bucket it used to sit on
+"Looking…" for minutes while it walked every object of every event to add up
+bytes, one request after another, and it logged nothing at all while it did.
+
+It is two halves now. The events are listed first, from the manifests and the
+live pointer, so something appears at once. Each event's size is then measured
+beside it, six at a time, each row filling in as it lands — so the wait is the
+largest single event rather than the sum of all of them. A size that cannot be
+measured is reported as unknown rather than as zero, because "0 B" on an event
+holding gigabytes is not cosmetic in a window whose whole purpose is deleting
+things. Closing the window cancels the work in flight, and every listing and
+sizes pass is logged with its counts and elapsed time.
+
+### The documentation
+
+The storage-management description, the layout notes and the counts in the
+guides had drifted from the code; they are corrected. PROJECT-SCOPE.md now
+carries a roadmap for the next milestones: storage redundancy, output
+routing, headless appliances, ABR and low latency.
+
 ## What's new in v0.1.8-alpha
 
 ### The encoder and the decoder can be run from a phone
@@ -69,23 +98,6 @@ implementation rather than three. It is covered by a new test
 (`tests/test_http_server.cpp`) that speaks real HTTP over loopback, on every
 platform CI builds: routing, verbs, the static web root, keep-alive, a handler
 that throws, and the refusal of a path that climbs out of the web root.
-
-### Storage you can actually see and clear
-
-**Manage storage…** in the encoder dock lists a room's events and lets them be
-deleted — one, or everything older than a chosen number of days — with a
-confirmation and a check afterwards. On a full bucket it used to sit on
-"Looking…" for minutes while it walked every object of every event to add up
-bytes, one request after another, and it logged nothing at all while it did.
-
-It is two halves now. The events are listed first, from the manifests and the
-live pointer, so something appears at once. Each event's size is then measured
-beside it, six at a time, each row filling in as it lands — so the wait is the
-largest single event rather than the sum of all of them. A size that cannot be
-measured is reported as unknown rather than as zero, because "0 B" on an event
-holding gigabytes is not cosmetic in a window whose whole purpose is deleting
-things. Closing the window cancels the work in flight, and every listing and
-sizes pass is logged with its counts and elapsed time.
 
 ### The campus player can be reached without a drive to the campus
 
