@@ -72,20 +72,42 @@ bool send_all(sock_t s, const std::string& text) {
     return true;
 }
 
-// Reads exactly one response: the headers, then the body the headers promised.
-// Reading "until the socket closes" would not work for the keep-alive case,
-// which is the one that matters most — a phone polls this server twice a
-// second over one connection.
-std::string read_response(sock_t s) {
+// A client connection that remembers what it has read past the end of the last
+// response.
+//
+// Without this, a server that answers two pipelined requests in one TCP segment
+// loses the second answer: the reading side consumed both and threw one away.
+// That is exactly the case the keep-alive check exists to cover, and it failed
+// on macOS for this reason rather than because the server was wrong.
+struct Conn {
+    sock_t      fd = kBadSocket;
     std::string buf;
+
+    Conn() = default;
+    Conn(const Conn&) = delete;
+    Conn& operator=(const Conn&) = delete;
+    ~Conn() { if (fd != kBadSocket) close_socket(fd); }
+};
+
+bool open_conn(Conn& c, int port) {
+    c.fd = connect_local(port);
+    return c.fd != kBadSocket;
+}
+
+// Reads exactly one response: the headers, then the body the headers promised.
+// Reading "until the socket closes" would not do for the keep-alive case, which
+// is the one that matters most — a phone polls this server twice a second over
+// one connection.
+std::string read_response(Conn& c) {
+    std::string& buf = c.buf;
     char chunk[4096];
 
     size_t head_end = std::string::npos;
     while ((head_end = buf.find("\r\n\r\n")) == std::string::npos) {
-        const long long n = ::recv(s, chunk, sizeof(chunk), 0);
-        if (n <= 0) return buf;
+        const long long n = ::recv(c.fd, chunk, sizeof(chunk), 0);
+        if (n <= 0) return "";
         buf.append(chunk, (size_t)n);
-        if (buf.size() > 1u << 20) return buf;
+        if (buf.size() > 1u << 20) return "";
     }
 
     size_t want = 0;
@@ -112,28 +134,32 @@ std::string read_response(sock_t s) {
     // returns.
     if (!have_length) {
         for (;;) {
-            const long long n = ::recv(s, chunk, sizeof(chunk), 0);
+            const long long n = ::recv(c.fd, chunk, sizeof(chunk), 0);
             if (n <= 0) break;
             buf.append(chunk, (size_t)n);
         }
-        return buf;
+        std::string out = std::move(buf);
+        buf.clear();
+        return out;
     }
 
-    while (buf.size() < head_end + 4 + want) {
-        const long long n = ::recv(s, chunk, sizeof(chunk), 0);
+    const size_t total = head_end + 4 + want;
+    while (buf.size() < total) {
+        const long long n = ::recv(c.fd, chunk, sizeof(chunk), 0);
         if (n <= 0) break;
         buf.append(chunk, (size_t)n);
     }
-    return buf;
+
+    std::string out = buf.substr(0, total);
+    buf.erase(0, total);
+    return out;
 }
 
 std::string round_trip(int port, const std::string& request_text) {
-    const sock_t s = connect_local(port);
-    if (s == kBadSocket) return "";
-    send_all(s, request_text);
-    const std::string r = read_response(s);
-    close_socket(s);
-    return r;
+    Conn c;
+    if (!open_conn(c, port)) return "";
+    send_all(c.fd, request_text);
+    return read_response(c);
 }
 
 int status_of(const std::string& r) {
@@ -301,15 +327,14 @@ int main() {
         // What a phone polling this twice a second actually does. A server that
         // answered only the first request per connection would still pass every
         // check above and would feel broken to an operator.
-        const sock_t s = connect_local(port);
+        Conn c;
         std::string first, second;
-        if (s != kBadSocket) {
-            send_all(s, "GET /api/ping HTTP/1.1\r\n\r\n"
-                        "GET /api/echo?label=two HTTP/1.1\r\n"
-                        "Connection: close\r\n\r\n");
-            first  = read_response(s);
-            second = read_response(s);
-            close_socket(s);
+        if (open_conn(c, port)) {
+            send_all(c.fd, "GET /api/ping HTTP/1.1\r\n\r\n"
+                           "GET /api/echo?label=two HTTP/1.1\r\n"
+                           "Connection: close\r\n\r\n");
+            first  = read_response(c);
+            second = read_response(c);
         }
         CHECK(status_of(first) == 200 && contains(first, "Connection: keep-alive"),
               "the first response keeps the connection open");
@@ -353,11 +378,11 @@ int main() {
         // somebody's browser: the server has to take the connection down with
         // it rather than leave a thread running in a module that is being
         // unloaded around it.
-        const sock_t s = connect_local(port);
-        CHECK(s != kBadSocket, "a connection is open");
-        if (s != kBadSocket) {
-            send_all(s, "GET /api/ping HTTP/1.1\r\n\r\n");   // kept alive
-            const std::string first = read_response(s);
+        Conn c;
+        CHECK(open_conn(c, port), "a connection is open");
+        if (c.fd != kBadSocket) {
+            send_all(c.fd, "GET /api/ping HTTP/1.1\r\n\r\n");   // kept alive
+            const std::string first = read_response(c);
             CHECK(contains(first, "Connection: keep-alive"),
                   "and the browser is holding it open for its next poll");
 
@@ -370,9 +395,8 @@ int main() {
                   "stop() waits for it and returns, rather than hanging");
 
             char buf[64];
-            const long long n = ::recv(s, buf, sizeof(buf), 0);
+            const long long n = ::recv(c.fd, buf, sizeof(buf), 0);
             CHECK(n <= 0, "and the connection is closed, not left dangling");
-            close_socket(s);
         }
     }
 

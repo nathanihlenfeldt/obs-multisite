@@ -41,7 +41,11 @@ bool run_on_ui_thread(const std::function<void()>& fn, int timeout_ms) {
     task->fn = fn;
     std::future<void> done = task->done.get_future();
 
-    obs_queue_task(OBS_TASK_UI, run_ui_task, task.release());
+    // `false` for obs_queue_task's own `wait` argument: the wait below is the
+    // one that matters, because it has a timeout and obs_queue_task's does not.
+    // An OBS that never gets to the task must leave the page saying so rather
+    // than leaving a request thread parked for ever.
+    obs_queue_task(OBS_TASK_UI, run_ui_task, task.release(), false);
 
     return done.wait_for(std::chrono::milliseconds(timeout_ms)) ==
            std::future_status::ready;
