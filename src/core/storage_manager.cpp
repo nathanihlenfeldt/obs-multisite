@@ -2,22 +2,68 @@
 #include "storage_manager.h"
 
 #include <algorithm>
+#include <chrono>
 #include <utility>
 
 namespace multisite {
+
+namespace {
+
+// A page is not a page: a store may cap results well below max_keys, and a
+// prefix that never finishes paging would otherwise hold a worker for ever —
+// there is a test for "truncated with no token", but a store that repeated a
+// token would still spin. 400 pages is 400,000 objects under one event: far
+// past any real event, and the point where continuing is a fault, not work.
+constexpr int kMaxPagesPerPrefix = 400;
+
+void count_request(ListStats* stats) {
+    if (stats) ++stats->requests;
+}
+
+bool cancelled(const std::atomic<bool>* cancel) {
+    return cancel && cancel->load();
+}
+
+int64_t ms_since(const std::chrono::steady_clock::time_point& t0) {
+    return (int64_t)std::chrono::duration_cast<std::chrono::milliseconds>(
+               std::chrono::steady_clock::now() - t0)
+        .count();
+}
+
+} // namespace
 
 StorageManager::StorageManager(std::string room_id, Transport& transport)
     : m_room_id(std::move(room_id)), m_tx(transport),
       m_catalog(CatalogConfig{m_room_id, 600000}, transport) {}
 
-bool StorageManager::list(std::vector<ManagedEvent>& out, std::string& error) {
+// ── The fast half: which events exist ────────────────────────────────────────
+// One listing of the room index, one read of each event's manifest, and one
+// read of the live pointer. Nothing here walks an event's objects, which is the
+// expensive part and the reason this is separable at all: an operator should see
+// the events — names, dates, which one is on air — while the sizes are still
+// being counted.
+bool StorageManager::list_events(std::vector<ManagedEvent>& out, std::string& error,
+                                 ListStats* stats,
+                                 const std::atomic<bool>* cancel) {
+    const auto t0 = std::chrono::steady_clock::now();
+    if (stats) *stats = ListStats{};
+
     if (!m_catalog.refresh()) {
         error = m_catalog.last_error();
+        if (stats) stats->elapsed_ms = ms_since(t0);
+        return false;
+    }
+    if (cancelled(cancel)) {
+        error = "cancelled";
+        if (stats) { stats->cancelled = true; stats->elapsed_ms = ms_since(t0); }
         return false;
     }
 
+    count_request(stats);                       // the live pointer
     const std::string live = live_event_id();
+
     out.clear();
+    out.reserve(m_catalog.events().size());
     for (const auto& s : m_catalog.events()) {
         ManagedEvent e;
         e.event_id      = s.event_id;
@@ -25,15 +71,7 @@ bool StorageManager::list(std::vector<ManagedEvent>& out, std::string& error) {
         e.started_at_ms = s.started_at_ms;
         e.state         = s.state;
         e.is_live       = (!live.empty() && live == s.event_id);
-
-        std::vector<std::string> keys;
-        uint64_t bytes = 0;
-        std::string err;
-        if (list_prefix(event_prefix_for(s.event_id), keys, bytes, err)) {
-            e.objects = keys.size();
-            e.bytes   = bytes;
-        }
-        // A failed size tally must not hide the event; it lists with no size.
+        // Sizes are deliberately left unmeasured: tally_size() fills them in.
         out.push_back(std::move(e));
     }
 
@@ -44,16 +82,74 @@ bool StorageManager::list(std::vector<ManagedEvent>& out, std::string& error) {
             return a.started_at_ms > b.started_at_ms;
         return a.event_id > b.event_id;
     });
+
+    if (stats) {
+        stats->events = (int)out.size();
+        stats->elapsed_ms = ms_since(t0);
+    }
+    return true;
+}
+
+// ── The expensive half: how much one event holds ────────────────────────────
+bool StorageManager::tally_size(ManagedEvent& e, std::string& error,
+                                ListStats* stats,
+                                const std::atomic<bool>* cancel) {
+    std::vector<std::string> keys;
+    uint64_t bytes = 0;
+    if (!list_prefix(event_prefix_for(e.event_id), keys, bytes, error, stats,
+                     cancel)) {
+        e.size_known = false;
+        e.size_error = error;
+        if (stats && error != "cancelled") ++stats->tallies_failed;
+        return false;
+    }
+    e.objects    = keys.size();
+    e.bytes      = bytes;
+    e.size_known = true;
+    e.size_error.clear();
+    return true;
+}
+
+// Both, in sequence: the cleanup path wants the whole answer at once, where the
+// window wants it progressively and calls the two halves itself.
+bool StorageManager::list(std::vector<ManagedEvent>& out, std::string& error,
+                          ListStats* stats, const std::atomic<bool>* cancel) {
+    const auto t0 = std::chrono::steady_clock::now();
+    if (!list_events(out, error, stats, cancel)) return false;
+
+    for (auto& e : out) {
+        if (cancelled(cancel)) {
+            error = "cancelled";
+            if (stats) { stats->cancelled = true; stats->elapsed_ms = ms_since(t0); }
+            return false;
+        }
+        std::string err;
+        tally_size(e, err, stats, cancel);
+        // A failed tally is reported on the event itself, through size_known and
+        // size_error; the event still lists.
+    }
+
+    if (stats) stats->elapsed_ms = ms_since(t0);
     return true;
 }
 
 bool StorageManager::list_prefix(const std::string& prefix,
                                  std::vector<std::string>& keys,
-                                 uint64_t& bytes, std::string& error) {
+                                 uint64_t& bytes, std::string& error,
+                                 ListStats* stats,
+                                 const std::atomic<bool>* cancel) {
     keys.clear();
     bytes = 0;
     std::string token;
+    int pages = 0;
     do {
+        if (cancelled(cancel)) { error = "cancelled"; return false; }
+        if (++pages > kMaxPagesPerPrefix) {
+            error = "listing " + prefix + " did not finish after " +
+                    std::to_string(kMaxPagesPerPrefix) + " pages";
+            return false;
+        }
+        count_request(stats);
         ListResult r = m_tx.list(prefix, "", token, 1000);
         if (!r.success) {
             error = r.error;
@@ -147,9 +243,12 @@ DeleteReport StorageManager::delete_older_than(
     const std::function<bool(uint64_t, uint64_t)>& progress) {
     DeleteReport rep;
 
+    // No sizes needed here: the cutoff is the event's start time, and the bytes
+    // freed come back from each delete. Using the full listing would spend
+    // minutes counting objects to decide something that counting cannot change.
     std::vector<ManagedEvent> events;
     std::string err;
-    if (!list(events, err)) {
+    if (!list_events(events, err)) {
         rep.error = err;
         return rep;
     }
