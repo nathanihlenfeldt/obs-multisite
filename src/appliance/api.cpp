@@ -505,42 +505,58 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
     // sleep stops asking without leaving anything encoding on the box.
     //
     // The encoder is shared and serialised: several browsers looking at once
-    // must not each start their own.
+    // must not each start their own. The last frame that encoded successfully
+    // is kept so a transient failure — nothing decoded yet, or an encode that
+    // hiccuped — serves the last good picture instead of blanking the preview.
     {
         auto encoder = std::make_shared<JpegEncoder>();
         auto encoder_mtx = std::make_shared<std::mutex>();
-        server.route("GET", "/preview.jpg", [&player, encoder, encoder_mtx](
-                                                const HttpRequest& req,
-                                                HttpResponse& res) {
+        auto last_jpeg = std::make_shared<std::vector<uint8_t>>();
+        auto last_version = std::make_shared<uint64_t>(0);
+        auto have_jpeg = std::make_shared<bool>(false);
+        auto logged_fail = std::make_shared<bool>(false);
+        server.route("GET", "/preview.jpg",
+                     [&player, encoder, encoder_mtx, last_jpeg, last_version,
+                      have_jpeg, logged_fail](const HttpRequest& req,
+                                              HttpResponse& res) {
             multisite::DecodedVideoFrame frame;
             uint64_t version = 0;
-            if (!player.latest_frame(frame, version)) {
-                res.status = 503;
-                res.content_type = "text/plain; charset=utf-8";
-                res.body = "nothing decoded yet";
-                return;
-            }
-            int width = (int)num_param(req, "width", 640);
-            width = std::max(160, std::min(1920, width));
-            int quality = (int)num_param(req, "quality", 70);
-            quality = std::max(10, std::min(95, quality));
+            const int width = std::max(
+                160, std::min(1920, (int)num_param(req, "width", 640)));
+            const int quality = std::max(
+                10, std::min(95, (int)num_param(req, "quality", 70)));
 
-            std::vector<uint8_t> jpeg;
+            bool ok = false;
             std::string err;
-            bool ok;
-            {
+            if (player.latest_frame(frame, version)) {
+                std::vector<uint8_t> jpeg;
                 std::lock_guard<std::mutex> lk(*encoder_mtx);
                 ok = encoder->encode(frame, width, quality, jpeg, err);
+                if (ok) {
+                    *last_jpeg = jpeg;
+                    *last_version = version;
+                    *have_jpeg = true;
+                } else if (!*logged_fail) {
+                    *logged_fail = true;
+                    plog_warn("preview: %s", err.c_str());
+                }
             }
-            if (!ok) {
+
+            if (ok) {
+                res.content_type = "image/jpeg";
+                res.headers["X-Frame-Version"] = std::to_string(version);
+                res.body.assign(last_jpeg->begin(), last_jpeg->end());
+            } else if (*have_jpeg) {
+                // Serve the last good frame rather than a bare error page, so
+                // the preview never blanks.
+                res.content_type = "image/jpeg";
+                res.headers["X-Frame-Version"] = std::to_string(*last_version);
+                res.body.assign(last_jpeg->begin(), last_jpeg->end());
+            } else {
                 res.status = 503;
                 res.content_type = "text/plain; charset=utf-8";
-                res.body = err;
-                return;
+                res.body = err.empty() ? "nothing decoded yet" : err;
             }
-            res.content_type = "image/jpeg";
-            res.headers["X-Frame-Version"] = std::to_string(version);
-            res.body.assign(jpeg.begin(), jpeg.end());
         });
     }
 

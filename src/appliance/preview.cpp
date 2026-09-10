@@ -20,6 +20,8 @@ struct JpegEncoder::Impl {
     AVPacket*       pkt = nullptr;
     int  width = 0, height = 0, quality = 0;
     int  src_w = 0, src_h = 0;
+    int64_t pts = 0;    // monotonically increasing, so the MJPEG encoder
+                        // accepts every frame rather than only the first
 
     ~Impl() { reset(); }
 
@@ -29,6 +31,7 @@ struct JpegEncoder::Impl {
         if (pkt)   { av_packet_free(&pkt); }
         if (ctx)   { avcodec_free_context(&ctx); }
         width = height = src_w = src_h = 0;
+        pts = 0;
     }
 
     // The encoder is rebuilt only when the shape of the job changes — a new
@@ -120,7 +123,7 @@ bool JpegEncoder::encode(const multisite::DecodedVideoFrame& f, int max_width,
     sws_scale(d->sws, src, src_stride, 0, f.height, d->frame->data,
               d->frame->linesize);
 
-    d->frame->pts = 0;
+    d->frame->pts = d->pts++;
     if (avcodec_send_frame(d->ctx, d->frame) < 0) {
         error = "the JPEG encoder refused the picture";
         return false;

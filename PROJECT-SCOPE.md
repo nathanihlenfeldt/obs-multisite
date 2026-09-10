@@ -560,11 +560,12 @@ HTML with a WebSocket for live updates. It should carry the same plain language
   enables it. It works from day one with no release infrastructure, updates
   are the same command again, and it does not tie the project to particular
   hardware. A prebuilt package can follow once the player has settled.
-- **The preview is decoupled from the output on purpose.** An operator lining
-  up a cue needs to see what is coming while the screen in the room holds the
-  last picture. If the preview were the output there would be no way to look
-  ahead without putting it to air — the thing a satellite campus most needs to
-  avoid.
+- **The preview is a copy of the output, not a second head.** The web UI shows
+  the picture going out, refreshed a few times a second, so an operator can
+  watch from a phone without changing what is on the screen in the room. There
+  is one playhead, so the preview mirrors it rather than looking ahead; a
+  genuinely decoupled look-ahead preview would need a second decode path and is
+  deliberately out of scope for the single-box appliance.
 
 ## 8.2 Public simulcast relay
 

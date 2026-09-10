@@ -12,7 +12,9 @@
 // and nothing else.
 //
 // What it supports: GET/POST/PUT, query strings, a request body, keep-alive,
-// static files, and streamed responses (which is how the preview works).
+// static files, and streamed responses. The preview itself is one JPEG per
+// request; HttpStream is available for anything that must produce a response
+// over time.
 // What it does not: TLS, chunked request bodies, compression, or anything
 // facing the public internet. This is a LAN appliance, not a web server.
 //
@@ -40,7 +42,8 @@ struct HttpRequest {
 };
 
 // A live connection, for responses that are produced over time rather than
-// all at once — the MJPEG preview being the reason this exists.
+// all at once. The preview does not currently use it — it returns one JPEG per
+// request — but any streamed response can.
 class HttpStream {
 public:
     explicit HttpStream(int fd) : m_fd(fd) {}
@@ -116,9 +119,9 @@ private:
     std::thread m_accept_thread;
     std::atomic<bool> m_running{false};
 
-    // Connections are handled on their own detached threads. A preview stream
-    // occupies one for as long as it is open, so the cap is what stops a
-    // browser that keeps reconnecting from exhausting the box.
+    // Connections are handled on their own detached threads. A long-lived
+    // streamed response occupies one for as long as it is open, so the cap is
+    // what stops a browser that keeps reconnecting from exhausting the box.
     std::atomic<int> m_connections{0};
     static constexpr int kMaxConnections = 24;
 };

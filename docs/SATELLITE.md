@@ -165,9 +165,11 @@ transport controls during a service.
   with a picker in Settings; combining several tracks onto output channels
   there is not built, and packed is the answer for a campus that needs more
   than one.
-- **The preview is not the output.** The web UI shows the incoming picture at
-  a rate the browser chooses, independently of what is on the screen in the
-  room — so a cue can be lined up while the picture is held.
+- **The preview is a copy, not a second output.** The web UI shows the picture
+  going out, refreshed at a rate the browser chooses. Watching it does not
+  change or interrupt what is on the screen in the room — it is the same moment,
+  sampled a few times a second. There is one playhead, so the preview cannot
+  look ahead of the picture it mirrors.
 - **The cache belongs on a USB SSD.** It writes roughly 3 GB an hour, which
   will wear an SD card out. The installer looks for a USB drive and uses it;
   if there is none, both it and the interface say so.

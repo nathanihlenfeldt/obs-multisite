@@ -306,6 +306,14 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         MULTISITE_PLAYER_VERSION="${MULTISITE_PLAYER_VERSION}"
         MULTISITE_PLAYER_WEB_ROOT="${MULTISITE_PLAYER_WEB_ROOT}")
 
+    # The preview re-encodes the same decoded frame to JPEG on every request,
+    # so the encoder must be reusable across calls — otherwise the first frame
+    # is the only one that ever arrives.
+    add_executable(test_preview tests/test_preview.cpp src/appliance/preview.cpp)
+    target_include_directories(test_preview PRIVATE src/appliance src/core)
+    target_link_libraries(test_preview PRIVATE ffmpeg_iface)
+    add_test(NAME preview COMMAND test_preview)
+
     # DRM/KMS: the appliance drives the HDMI output itself, with no desktop.
     find_package(PkgConfig QUIET)
     if(PkgConfig_FOUND)

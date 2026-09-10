@@ -704,31 +704,58 @@ $('#btn-log-refresh').onclick = refreshLog;
 
 /* ── Preview ─────────────────────────────────────────────────────────────── */
 //
-// Deliberately decoupled from the output: it may lag, it may be one frame a
-// second, and it can be watched while the picture is held. Lining up a cue is
-// exactly when those must not be the same thing.
+// A low-rate copy of the picture going out, refreshed in the browser. Watching
+// it does not change what is on the screen in the room — it is the same moment,
+// sampled a few times a second. Each frame is fetched off-screen and only
+// swapped in once it has arrived, so a slow box or a dropped request never
+// blanks a picture that is already showing on the tablet.
 
-let previewTimer = null;
+let previewTimer = null;     // the setTimeout that schedules the next fetch
+let previewRate = 0;         // frames per second, from the selector
+let previewInFlight = false; // one request at a time, never overlapping
+let previewEverHad = false;  // at least one frame has actually arrived
 
 function stopPreview() {
-  if (previewTimer) { clearInterval(previewTimer); previewTimer = null; }
-  $('#preview-img').removeAttribute('src');
+  if (previewTimer) { clearTimeout(previewTimer); previewTimer = null; }
+  previewInFlight = false;
+  // Keep whatever frame is already on screen rather than blanking it.
 }
 
 function startPreview() {
   stopPreview();
-  const rate = Number($('#preview-rate').value || 0);
-  if (!rate || !$('#preview-box').open) return;
-  const img = $('#preview-img');
-  const tick = () => {
-    // A cache-busting parameter rather than a stream, so a dropped connection
-    // costs one frame instead of the whole preview.
-    img.src = '/preview.jpg?t=' + Date.now();
-  };
-  img.onload = () => { $('#preview-none').hidden = true; };
-  img.onerror = () => { $('#preview-none').hidden = false; };
-  tick();
-  previewTimer = setInterval(tick, 1000 / rate);
+  previewRate = Number($('#preview-rate').value || 0);
+  if (!previewRate || !$('#preview-box').open) return;
+  schedulePreview(0);
+}
+
+function schedulePreview(delay) {
+  if (!previewRate || !$('#preview-box').open) return;
+  previewTimer = setTimeout(fetchPreview, delay);
+}
+
+async function fetchPreview() {
+  previewTimer = null;
+  if (!previewRate || !$('#preview-box').open || previewInFlight) return;
+  previewInFlight = true;
+  try {
+    const res = await fetch('/preview.jpg?t=' + Date.now());
+    if (!res.ok) throw new Error('HTTP ' + res.status);
+    const blob = await res.blob();
+    const url = URL.createObjectURL(blob);
+    const img = $('#preview-img');
+    const prev = img.dataset.url;
+    img.src = url;                          // swap only after the frame arrived
+    $('#preview-none').hidden = true;
+    previewEverHad = true;
+    if (prev) URL.revokeObjectURL(prev);    // free the one we just replaced
+    img.dataset.url = url;
+  } catch (e) {
+    // A failed fetch must not blank a picture that is already showing.
+    if (!previewEverHad) $('#preview-none').hidden = false;
+  } finally {
+    previewInFlight = false;
+    schedulePreview(1000 / previewRate);
+  }
 }
 
 $('#preview-rate').addEventListener('change', startPreview);
