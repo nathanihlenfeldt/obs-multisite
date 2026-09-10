@@ -297,9 +297,12 @@ limited to the manifest window — essential for timeslipping.
   whose segments have gone. The catalog handles it — such an event is counted
   as skipped rather than offered — but the list degrades over time for no
   reason. Same age on both prefixes.
-- Nothing in the codebase issues a DELETE. This is a deployment step, not a
-  feature, and it is easy to forget: the README makes it the first thing under
-  Using it, because without it storage grows without limit.
+- Retention is the set-and-forget default. The encoder UI can additionally
+  delete specific events on demand — one at a time, or everything older than a
+  chosen number of days — with a confirmation and a verification pass, but the
+  codebase otherwise does not delete as it goes, so a paused or behind-live
+  campus can still fetch older segments for the whole retention window. The
+  event live.json currently names is never deletable.
 
 ### 4.7 Write-ordering invariant
 

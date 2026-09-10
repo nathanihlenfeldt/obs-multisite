@@ -32,6 +32,7 @@ private slots:
     void onEnd();
     void onSaveSettings();
     void onMarker(int index);
+    void onManageStorage();
     void updateAudioFields();
     void refresh();
 
@@ -78,6 +79,7 @@ private:
     // controls + status
     QLineEdit*   m_eventName = nullptr;   // editable title, pre-filled with now
     QString      m_eventNameDefault;
+    QPushButton* m_manageStorage = nullptr;
     QPushButton* m_goLive = nullptr;
     QPushButton* m_end = nullptr;
     QPushButton* m_markers[4] = { nullptr, nullptr, nullptr, nullptr };

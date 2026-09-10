@@ -64,6 +64,9 @@ public:
                     const std::string& continuation_token = "",
                     int max_keys = 1000) override;
 
+    // Signed DELETE. Encoder-side storage management: remove one object.
+    DeleteResult remove(const std::string& key) override;
+
     // Simple connectivity/credential check: PUT then GET a tiny probe object.
     // Returns an empty string on success, or a human-readable error.
     // Encoder-side only — it writes, so a read-only key fails it by design.

@@ -47,11 +47,10 @@ says so rather than showing an empty list.
 
 ### First, a retention rule on the bucket
 
-**Do this once, before your first broadcast.** Nothing in this project deletes
-anything — the plugins only write and read. Expiry is a **bucket lifecycle
-rule** you configure in your storage provider's console, and without one every
-event you ever broadcast stays in the bucket and the bill grows without
-limit. At 6 Mbps that is roughly **2.7 GB per hour** of event.
+**Do this once, before your first broadcast.** Automatic expiry is a **bucket
+lifecycle rule** you configure in your storage provider's console, and without
+one every event you ever broadcast stays in the bucket and the bill grows
+without limit. At 6 Mbps that is roughly **2.7 GB per hour** of event.
 
 Two prefixes need a rule, both with the same age:
 
@@ -72,6 +71,13 @@ harmless — the next Go Live recreates it.)
 
 On **AWS S3, MinIO, Backblaze B2 or Wasabi**: the equivalent lifecycle
 configuration with an Expiration rule per prefix.
+
+You can also delete events by hand, without waiting for the rule: the encoder's
+**Manage storage…** button lists the room's events with their sizes, and lets
+you delete one — or everything older than a chosen number of days — with a
+confirmation and a verification pass afterwards. The event currently on air is
+never deletable. This needs a key that can `s3:ListBucket` and
+`s3:DeleteObject`; the dialog says so plainly if it cannot.
 
 **Wanting the storage itself self-hosted, not only self-configured?** Every
 provider above still means somebody else's servers. If that matters to you —

@@ -40,7 +40,8 @@ add_library(multisite_core STATIC
     src/core/s3_list_xml.cpp
     src/core/storage_health.cpp
     src/core/link_health.cpp
-    src/core/event_catalog.cpp)
+    src/core/event_catalog.cpp
+    src/core/storage_manager.cpp)
 target_include_directories(multisite_core PUBLIC src src/core)
 # Must be position-independent: this static lib gets linked into the shared
 # OBS plugin module.
@@ -145,6 +146,12 @@ add_test(NAME s3_list COMMAND test_s3_list)
 add_executable(test_event_catalog tests/test_event_catalog.cpp)
 target_link_libraries(test_event_catalog PRIVATE multisite_core)
 add_test(NAME event_catalog COMMAND test_event_catalog)
+
+# Encoder-side storage management: listing the room's events with sizes and
+# deleting them (one or older-than-N) without touching the live event.
+add_executable(test_storage_manager tests/test_storage_manager.cpp)
+target_link_libraries(test_storage_manager PRIVATE multisite_core)
+add_test(NAME storage_manager COMMAND test_storage_manager)
 
 # ── Optional: S3 transport (needs libcurl) ────────────────────────────────────
 find_package(CURL QUIET)
@@ -527,6 +534,7 @@ if(BUILD_OBS_PLUGIN)
         target_sources(obs-multisite PRIVATE
             src/obs/ui/encoder_dock.cpp
             src/obs/ui/decoder_dock.cpp
+            src/obs/ui/storage_dialog.cpp
             src/obs/ui/role_selector.cpp
             src/obs/ui/dock_register.cpp)
         set_target_properties(obs-multisite PROPERTIES AUTOMOC ON)

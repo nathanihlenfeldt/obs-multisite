@@ -293,6 +293,53 @@ struct S3Transport::Impl {
         curl_easy_cleanup(curl);
         return res;
     }
+
+    // Delete one object. A signed DELETE with no body; a 204 (any 2xx) means
+    // gone, and a 404 is treated as success because the caller wanted it gone
+    // either way.
+    DeleteResult do_remove(const std::string& key) {
+        ensure_curl();
+        DeleteResult res;
+        CURL* curl = curl_easy_init();
+        if (!curl) { res.error = "curl_easy_init failed"; return res; }
+
+        std::string url = url_for(key);
+        SigV4Signer signer(cfg.access_key_id, cfg.secret_access_key,
+                           cfg.region, "s3");
+        auto sr = signer.sign("DELETE", url, {}, {});
+        struct curl_slist* h = nullptr;
+        for (const auto& l : sr.header_lines()) h = curl_slist_append(h, l.c_str());
+
+        curl_easy_setopt(curl, CURLOPT_URL, url.c_str());
+        curl_easy_setopt(curl, CURLOPT_HTTPHEADER, h);
+        curl_easy_setopt(curl, CURLOPT_CUSTOMREQUEST, "DELETE");
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, write_to_vec);
+        curl_easy_setopt(curl, CURLOPT_CONNECTTIMEOUT_MS, (long)cfg.connect_timeout_ms);
+        curl_easy_setopt(curl, CURLOPT_TIMEOUT_MS, (long)cfg.request_timeout_ms);
+        curl_easy_setopt(curl, CURLOPT_NOSIGNAL, 1L);
+        arm_cancel(curl, &cancel);
+
+        CURLcode cc = curl_easy_perform(curl);
+        if (cc == CURLE_OK) {
+            long code = 0;
+            curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &code);
+            res.http_status = code;
+            // 204 No Content is the normal answer; any 2xx works, and 404 is
+            // already-gone, which is the outcome the caller asked for.
+            res.success = (code >= 200 && code < 300) || code == 404;
+            res.retryable = code == 500 || code == 503 || code == 502 ||
+                            code == 408 || code == 429;
+            if (!res.success)
+                res.error = "HTTP " + std::to_string(code);
+        } else {
+            res.retryable = true;
+            res.error = curl_easy_strerror(cc);
+        }
+
+        curl_slist_free_all(h);
+        curl_easy_cleanup(curl);
+        return res;
+    }
 };
 
 S3Transport::S3Transport(S3Config cfg) : d(std::make_unique<Impl>()) {
@@ -397,6 +444,10 @@ GetResult S3Transport::get(const std::string& key) {
                       r.http_status == 408 || r.http_status == 429;
     out.body        = std::move(body);
     return out;
+}
+
+DeleteResult S3Transport::remove(const std::string& key) {
+    return d->do_remove(key);
 }
 
 ListResult S3Transport::list(const std::string& prefix,

@@ -52,6 +52,15 @@ struct ListResult {
     std::string next_continuation_token;
 };
 
+// Result of deleting one object. A 404 is still success: the caller wanted the
+// object gone, and it already is.
+struct DeleteResult {
+    bool        success = false;
+    long        http_status = 0;
+    bool        retryable = true;
+    std::string error;
+};
+
 // Abstract object-store transport.
 class Transport {
 public:
@@ -88,6 +97,15 @@ public:
                             const std::string& /*continuation_token*/ = "",
                             int /*max_keys*/ = 1000) {
         ListResult r; r.error = "list() not implemented by this transport";
+        r.retryable = false;
+        return r;
+    }
+
+    // Delete one object. Encoder-side storage management. A 404 is success
+    // (already gone), so callers can treat this as idempotent.
+    virtual DeleteResult remove(const std::string& /*key*/) {
+        DeleteResult r;
+        r.error = "remove() not implemented by this transport";
         r.retryable = false;
         return r;
     }

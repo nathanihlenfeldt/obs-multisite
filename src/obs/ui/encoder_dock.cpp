@@ -5,6 +5,9 @@
 #include "../multisite_ui.h"
 #include "../plugin_log.h"
 #include "role_selector.h"
+#include "storage_dialog.h"
+
+#include "../../core/s3_transport.h"
 
 #include <obs-module.h>
 
@@ -138,6 +141,12 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     root->addWidget(m_settingsBtn);
     connect(m_settingsBtn, &QPushButton::clicked,
             this, &EncoderDock::onOpenSettings);
+
+    // Storage management — list the bucket's events and delete them.
+    m_manageStorage = new QPushButton(tr_("Dock.ManageStorage"), this);
+    root->addWidget(m_manageStorage);
+    connect(m_manageStorage, &QPushButton::clicked,
+            this, &EncoderDock::onManageStorage);
 
     root->addStretch(1);
 
@@ -428,6 +437,28 @@ void EncoderDock::onGoLive() {
 void EncoderDock::onEnd() {
     BroadcastController::instance().end_broadcast();
     setLiveState(false);
+}
+
+void EncoderDock::onManageStorage() {
+    const BroadcastSettings& cfg = BroadcastController::instance().settings();
+    if (cfg.bucket.empty() ||
+        (cfg.endpoint_host.empty() && cfg.r2_account_id.empty())) {
+        QMessageBox::information(this, tr_("Dock.ManageStorage"),
+                                 tr_("Storage.NotConfigured"));
+        return;
+    }
+
+    multisite::S3Config s3;
+    s3.endpoint_host    = cfg.endpoint_host;
+    s3.r2_account_id    = cfg.r2_account_id;
+    s3.bucket           = cfg.bucket;
+    s3.access_key_id    = cfg.access_key_id;
+    s3.secret_access_key = cfg.secret_access_key;
+    s3.region           = cfg.region;
+    auto tx = std::make_shared<multisite::S3Transport>(s3);
+
+    StorageDialog dlg(this, cfg.room_id, tx);
+    dlg.exec();
 }
 
 void EncoderDock::onMarker(int index) {
