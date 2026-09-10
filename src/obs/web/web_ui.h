@@ -47,6 +47,11 @@ void stop_web_ui();
 
 bool web_ui_running();
 
+// True once a stop has begun. A handler checks this before touching anything
+// OBS owns: while the module is unloading, a control that is accepted now would
+// be a control applied to an object that is going away.
+bool web_ui_stopping();
+
 // "http://192.168.1.20:8080" — an address somebody can type from another
 // device. Falls back to the port alone when no LAN address can be found, which
 // is better than showing an address that does not work.

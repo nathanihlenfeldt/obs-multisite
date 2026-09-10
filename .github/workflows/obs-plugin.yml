@@ -60,8 +60,14 @@ jobs:
         run: |
           set -e
           test -f build/obs-multisite.so
+          # start_web_ui/stop_web_ui are in the list on purpose. A MODULE
+          # library on ELF links happily with symbols missing, so a source file
+          # left out of CMakeLists.txt produces a .so that loads and then fails
+          # at the first request (or at unload). Naming a remote-control symbol
+          # here is what makes that a build failure instead.
           for sym in obs_module_load obs_module_unload obs_module_set_pointer \
-                     obs_module_ver obs_module_description; do
+                     obs_module_ver obs_module_description \
+                     start_web_ui stop_web_ui; do
             nm -D --defined-only build/obs-multisite.so | grep -q " $sym$" \
               || { echo "MISSING SYMBOL: $sym"; exit 1; }
             echo "ok: $sym"

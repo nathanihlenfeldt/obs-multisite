@@ -180,6 +180,12 @@ using ControlAction = std::function<void(const multisite::HttpRequest&)>;
 multisite::HttpHandler decoder_control(ControlAction act) {
     return [act](const multisite::HttpRequest& req,
                  multisite::HttpResponse& res) {
+        // Checked before anything else: while OBS is closing, a control
+        // accepted now would be applied to something already going away.
+        if (web_ui_stopping()) {
+            fail(res, 503, "OBS is closing");
+            return;
+        }
         if (web_ui_locked()) {
             res.status = 409;
             res.json(json{{"error", "the controls are locked"},

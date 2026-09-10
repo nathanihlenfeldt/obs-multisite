@@ -515,7 +515,16 @@ if(BUILD_OBS_PLUGIN)
         src/obs/multisite_ui.cpp
         src/obs/broadcast_controller.cpp
         src/obs/decoder_settings.cpp
-        src/obs/plugin_role.cpp)
+        src/obs/plugin_role.cpp
+        src/obs/plugin_log.cpp
+        # The remote-control pages, served on the church network. No Qt (and so
+        # no docks needed): a build without them still gets remote control,
+        # because the machine that most needs it is the one nobody is at.
+        src/obs/web/web_ui.cpp
+        src/obs/web/encoder_api.cpp
+        src/obs/web/decoder_api.cpp
+        src/obs/web/ui_thread.cpp
+        src/obs/web/net_address.cpp)
     target_include_directories(obs-multisite PRIVATE src src/core)
     target_compile_definitions(obs-multisite PRIVATE
         PLUGIN_VERSION="${PROJECT_VERSION}")
@@ -556,6 +565,7 @@ if(BUILD_OBS_PLUGIN)
             src/obs/ui/decoder_dock.cpp
             src/obs/ui/storage_dialog.cpp
             src/obs/ui/role_selector.cpp
+            src/obs/ui/web_box.cpp
             src/obs/ui/dock_register.cpp)
         set_target_properties(obs-multisite PROPERTIES AUTOMOC ON)
         target_link_libraries(obs-multisite PRIVATE Qt6::Widgets)

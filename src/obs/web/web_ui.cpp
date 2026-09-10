@@ -40,6 +40,10 @@ std::string g_problem;
 // away.
 std::atomic<bool> g_locked{false};
 
+// Set the moment a stop begins, never cleared while the process lives: once
+// this module is on its way out, no request may touch anything it owns again.
+std::atomic<bool> g_stopping{false};
+
 WebUiSettings& settings_storage() {
     static WebUiSettings s;
     return s;
@@ -156,6 +160,8 @@ bool web_ui_running() {
     std::lock_guard<std::mutex> lk(g_mutex);
     return g_server != nullptr;
 }
+
+bool web_ui_stopping() { return g_stopping.load(); }
 
 std::string web_ui_problem() {
     std::lock_guard<std::mutex> lk(g_mutex);
@@ -277,6 +283,8 @@ void start_web_ui() {
 }
 
 void stop_web_ui() {
+    g_stopping = true;   // before anything else: see web_ui_stopping()
+
     std::unique_ptr<HttpServer> server;
     {
         std::lock_guard<std::mutex> lk(g_mutex);

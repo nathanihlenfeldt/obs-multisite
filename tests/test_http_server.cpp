@@ -9,6 +9,7 @@
 // Windows as well as POSIX, because a plugin has to work on both.
 #include "../src/core/http_server.h"
 
+#include <chrono>
 #include <cstdint>
 #include <cstdio>
 #include <cstring>
@@ -346,7 +347,35 @@ int main() {
               "and the reason names the port, not just \"bind failed\"");
     }
 
-    server->stop();
+    std::printf("Stopping while a phone is still connected\n");
+    {
+        // What happens when OBS is closed with the operator page still open in
+        // somebody's browser: the server has to take the connection down with
+        // it rather than leave a thread running in a module that is being
+        // unloaded around it.
+        const sock_t s = connect_local(port);
+        CHECK(s != kBadSocket, "a connection is open");
+        if (s != kBadSocket) {
+            send_all(s, "GET /api/ping HTTP/1.1\r\n\r\n");   // kept alive
+            const std::string first = read_response(s);
+            CHECK(contains(first, "Connection: keep-alive"),
+                  "and the browser is holding it open for its next poll");
+
+            const auto started = std::chrono::steady_clock::now();
+            server->stop();
+            const double waited_ms = std::chrono::duration<double, std::milli>(
+                std::chrono::steady_clock::now() - started).count();
+            std::printf("  (waiting took %.0f ms)\n", waited_ms);
+            CHECK(waited_ms < 1000.0,
+                  "stop() waits for it and returns, rather than hanging");
+
+            char buf[64];
+            const long long n = ::recv(s, buf, sizeof(buf), 0);
+            CHECK(n <= 0, "and the connection is closed, not left dangling");
+            close_socket(s);
+        }
+    }
+
     server.reset();
     // The sink captures a local, so it must not outlive it: a detached
     // connection thread logging after main() returns would be writing into

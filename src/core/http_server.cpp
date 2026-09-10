@@ -98,6 +98,15 @@ bool interrupted(int e) {
 #endif
 }
 
+// A read that simply ran out of time, rather than one that failed.
+bool would_block(int e) {
+#ifdef _WIN32
+    return e == WSAETIMEDOUT || e == WSAEWOULDBLOCK;
+#else
+    return e == EAGAIN || e == EWOULDBLOCK || e == ETIMEDOUT;
+#endif
+}
+
 // Plain language rather than strerror(): these strings end up in an operator's
 // log or on a web page, where "error 10048" means nothing and "the port is
 // already in use" tells somebody what to do about it.
@@ -226,6 +235,37 @@ bool write_all(sock_t fd, const void* data, size_t len) {
         return false;
     }
     return true;
+}
+
+// How long a read waits before giving the thread a chance to look around.
+constexpr int kRecvTimeoutMs = 500;
+// And how long a connection may sit with nobody saying anything before it is
+// closed, which is what stops a client that connects and goes quiet from
+// holding a slot for ever.
+constexpr int kIdleLimitMs = 30000;
+
+// Reads once into `buf`, reporting whether the connection is still worth
+// keeping.
+//
+// A read timeout is not a closed connection: it is the only moment this thread
+// gets to notice that the server is being stopped. Closing or shutting down a
+// socket does NOT reliably wake a recv that is already blocked on it — the
+// first version of this relied on that and left a thread running inside a
+// plugin being unloaded, which is the crash this exists to prevent.
+bool read_more(sock_t fd, std::string& buf, int& idle_ms, bool stopping) {
+    char chunk[4096];
+    const long long n = ::recv(fd, chunk, sizeof(chunk), 0);
+    if (n > 0) {
+        buf.append(chunk, (size_t)n);
+        idle_ms = 0;
+        return true;
+    }
+    if (n < 0 && would_block(last_socket_error())) {
+        idle_ms += kRecvTimeoutMs;
+        if (stopping || idle_ms >= kIdleLimitMs) return false;
+        return true;                       // nothing yet; wait again
+    }
+    return false;                          // the client has gone
 }
 
 } // namespace
@@ -365,7 +405,27 @@ void HttpServer::stop() {
         m_listen_fd = -1;
     }
     if (m_accept_thread.joinable()) m_accept_thread.join();
+    // Then the connections that are still open, and not merely asked to go
+    // away: a phone left polling this page must not be holding a thread inside
+    // a module that is being unloaded around it.
+    drop_connections();
     sockets_done();
+}
+
+void HttpServer::drop_connections() {
+    {
+        std::lock_guard<std::mutex> lk(m_conn_mutex);
+        for (long long handle : m_conn_fds)
+            ::shutdown(to_sock(handle), kShutBoth);
+        if (m_conn_fds.empty()) return;
+    }
+
+    // A fresh lock for the wait, deliberately: a connection thread has to be
+    // able to take this mutex to report that it has finished, so holding it
+    // across the wait would be the very deadlock this exists to avoid.
+    std::unique_lock<std::mutex> lk(m_conn_mutex);
+    m_conn_done.wait_for(lk, std::chrono::seconds(5),
+                         [this] { return m_conn_fds.empty(); });
 }
 
 void HttpServer::accept_loop() {
@@ -391,9 +451,22 @@ void HttpServer::accept_loop() {
         suppress_sigpipe(fd);
         m_connections++;
         const long long handle = from_sock(fd);
+        {
+            std::lock_guard<std::mutex> lk(m_conn_mutex);
+            m_conn_fds.insert(handle);
+        }
         std::thread([this, handle] {
             serve_connection(handle);
+            {
+                // Erased BEFORE the socket is closed, and both under the mutex
+                // stop() takes: a handle stop() can still see is therefore one
+                // that is still open, so it can never shut down a handle the
+                // operating system has already handed to somebody else.
+                std::lock_guard<std::mutex> lk(m_conn_mutex);
+                m_conn_fds.erase(handle);
+            }
             close_socket(to_sock(handle));
+            m_conn_done.notify_all();
             m_connections--;
         }).detach();
     }
@@ -404,28 +477,32 @@ void HttpServer::serve_connection(long long handle) {
 
     int on = 1;
     ::setsockopt(fd, IPPROTO_TCP, TCP_NODELAY, (const char*)&on, sizeof(on));
-    // A client that opens a connection and says nothing must not hold a thread
-    // for ever. Windows wants milliseconds, POSIX a timeval.
+    // Reads time out quickly on purpose: that is how this thread notices that
+    // the server is being stopped (see read_more). Writes keep a generous
+    // timeout, because a slow phone must not have its status document cut off
+    // mid-sentence. Windows wants milliseconds, POSIX a timeval.
 #ifdef _WIN32
-    const DWORD timeout_ms = 30000;
-    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
-    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&timeout_ms, sizeof(timeout_ms));
+    const DWORD recv_ms = kRecvTimeoutMs;
+    const DWORD send_ms = 30000;
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&recv_ms, sizeof(recv_ms));
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&send_ms, sizeof(send_ms));
 #else
-    timeval tv{};
-    tv.tv_sec = 30;
-    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&tv, sizeof(tv));
-    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&tv, sizeof(tv));
+    timeval rtv{};
+    rtv.tv_sec  = kRecvTimeoutMs / 1000;
+    rtv.tv_usec = (kRecvTimeoutMs % 1000) * 1000;
+    timeval stv{};
+    stv.tv_sec = 30;
+    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, (const char*)&rtv, sizeof(rtv));
+    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, (const char*)&stv, sizeof(stv));
 #endif
 
+    int idle_ms = 0;
     std::string buf;
     for (;;) {
         // Read up to the end of the headers.
         size_t header_end = buf.find("\r\n\r\n");
         while (header_end == std::string::npos) {
-            char chunk[4096];
-            const long long n = ::recv(fd, chunk, sizeof(chunk), 0);
-            if (n <= 0) return;
-            buf.append(chunk, (size_t)n);
+            if (!read_more(fd, buf, idle_ms, !m_running.load())) return;
             if (buf.size() > kMaxHeaderBytes) return;
             header_end = buf.find("\r\n\r\n");
         }
@@ -479,10 +556,7 @@ void HttpServer::serve_connection(long long handle) {
 
         const size_t body_start = header_end + 4;
         while (buf.size() < body_start + body_len) {
-            char chunk[4096];
-            const long long n = ::recv(fd, chunk, sizeof(chunk), 0);
-            if (n <= 0) return;
-            buf.append(chunk, (size_t)n);
+            if (!read_more(fd, buf, idle_ms, !m_running.load())) return;
         }
         req.body = buf.substr(body_start, body_len);
         buf.erase(0, body_start + body_len);

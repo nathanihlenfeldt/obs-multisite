@@ -23,11 +23,14 @@
 // What it does not: TLS, chunked request bodies, compression, or anything
 // facing the public internet. This is a LAN control surface, not a web server.
 //
+#include <atomic>
+#include <condition_variable>
 #include <functional>
 #include <map>
+#include <mutex>
+#include <set>
 #include <string>
 #include <thread>
-#include <atomic>
 
 namespace multisite {
 
@@ -123,6 +126,7 @@ private:
     void serve_connection(long long fd);
     bool handle_request(long long fd, const HttpRequest& req);
     bool serve_static(const HttpRequest& req, HttpResponse& res);
+    void drop_connections();
 
     std::string m_bind;
     int         m_port;
@@ -138,6 +142,18 @@ private:
     // what stops a browser that keeps reconnecting from exhausting the box.
     std::atomic<int> m_connections{0};
     static constexpr int kMaxConnections = 24;
+
+    // The live ones, by handle, so stop() can close them and wait. That is what
+    // makes it safe to stop a server out from under a browser that is still
+    // polling — inside a plugin being unloaded, a thread left running in this
+    // code is a crash waiting for the next request.
+    //
+    // Both the close and the shutdown happen under this mutex: otherwise stop()
+    // could shut down a handle that a finishing thread had just closed and the
+    // operating system had already handed to somebody else.
+    std::mutex              m_conn_mutex;
+    std::condition_variable m_conn_done;
+    std::set<long long>     m_conn_fds;
 };
 
 // Percent-decoding and query parsing, exposed because an API layer needs the
