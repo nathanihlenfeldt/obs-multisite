@@ -266,23 +266,18 @@ so the whole thing can be run without a terminal.
   same conversion one layer down. The driver gives the card no id, so ALSA
   truncates its name to fifteen characters (`Digisyn_vSndCar`); the script reads
   the real name back from `/proc/asound/cards` rather than guessing.
-- **The player keeps a queue of its own in front of the card, and that is why
-  the 8 ms buffer no longer matters.** The vendor driver fixes the card's buffer
-  at one millisecond per period and only as many periods as `bufMs` — eight, by
-  default — so the card itself holds 8 ms while a single decoded frame is about
-  21 ms. Asking the card for a bigger buffer does not help: the driver clamps it,
-  silently, and the player now says so as it opens:
-  `gave a 8 ms buffer, not the 500 ms asked for`. So the player buffers the audio
-  itself and feeds the card a period at a time from its own thread, which also
-  takes the blocking write off the thread that presents the picture. The depth is
-  `audio_buffer_ms` in `/etc/multisite-player/config.json` (60 ms by default) and
-  is the one number to change if sound still gaps — deeper buys continuity and
-  costs lip sync, since nothing yet compensates for the delay it adds. It is only
-  used when the card's buffer is smaller than a frame, so HDMI installs are
-  untouched. Written up as
-  [BUGS.md point 5](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event).
-  If you still see "sound has broken up" lines after this, it is *not* the power
-  supply, the SD card or the network, though the message suggests all three.
+- **Expect "sound has broken up" lines, and know why.** The vendor driver fixes
+  the card's buffer at one millisecond per period and only as many periods as
+  `bufMs` — eight, by default — so the queue behind the picture is 8 ms while a
+  single decoded frame is about 21 ms. The log will report under-runs several
+  times a second, and it is not the power supply, the SD card or the network,
+  though the message suggests all three. It is the one real defect left in this
+  path and it is known and written up as
+  [BUGS.md point 5](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event);
+  the player now also prints the buffer the card actually granted, next to the
+  one it asked for, so the line reads `gave a 8 ms buffer, not the 500 ms asked
+  for`. It is untuned rather than unfixable, and needs the feeder thread
+  described there.
 - **The order of two processes decides whether there is sound at all.** The card
   has no rate and no channel count of its own; both are read out of a page of
   shared memory that the *daemon* fills in. A player that starts first opens a
@@ -311,14 +306,12 @@ so the whole thing can be run without a terminal.
   specified before trusting an install that only reports the card appeared.
 - **What is verified, and what is not.** On a bench Pi the module built, the
   daemon came up, the card appeared, the player opened it, and eight channels of
-  audio arrived — continuously broken up, for the buffer reason above, which the
-  player's own queue now works around. Not yet verified: that the picture and the
-  sound stay together across a two-hour service. Timing is done entirely by
-  scheduling each frame for a moment and holding it until then; nothing reads how
-  far behind the card actually is, so the sound sits later than the picture by
-  however much audio is queued, and ten seconds of test tone cannot settle
-  whether that is acceptable — a queue that empties every frame was not a fair test
-  of it either. Also unverified: how accurate PTP becomes, since a Pi's network
+  audio arrived — continuously broken up, for the buffer reason above. Not yet
+  verified: that the picture and the sound stay together across a two-hour
+  service — the card reports its playback position from the daemon's
+  millisecond counter and the player corrects from `snd_pcm_delay()`, which ten
+  seconds of test tone cannot settle, and a queue that empties every frame is
+  not a fair test of it — and how accurate PTP becomes, since a Pi's network
   interface does no hardware timestamping, so it is whatever the software
   manages. Measure that at the receiver, not on the Pi. The detail is in
   [BUGS.md entry 3](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event).

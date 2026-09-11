@@ -9,64 +9,26 @@
 //
 // On the low-cost tier the device is HDMI, which carries up to eight channels
 // of LPCM; a de-embedder at the campus recovers them. On the AES67 tier the
-// device is a vendor sound card that takes 32-bit integers and cannot hold more
-// than eight milliseconds of audio, which is where both halves of this file
-// come from — see `pcm_convert.h` for the format, `open()` for the buffer, and
-// the feeder thread below for why the writing cannot happen on the delivery
-// thread.
+// device is a vendor sound card that takes 32-bit integers and five-millisecond
+// periods, which is where both halves of the format negotiation below come
+// from — see `pcm_convert.h` for the first and `open()` for the second.
 //
 #include "audio_output.h"
 #include "log.h"
 #include "sysinfo.h"   // to report why sound broke up, rather than guess
 #include "pcm_convert.h"
-#include "audio_ring.h"
 
 #include <alsa/asoundlib.h>
 
 #include <algorithm>
-#include <atomic>
-#include <condition_variable>
 #include <cstring>
 #include <mutex>
 #include <string>
-#include <thread>
 #include <vector>
 
 namespace multisite_player {
 
 namespace {
-
-// ── Why the writing does not happen on the delivery thread ───────────────────
-//
-// It used to: `Player`'s delivery thread called write() for each audio frame,
-// and write() called snd_pcm_writei(). There are three things wrong with that,
-// and the bench found all of them at once.
-//
-// A decoded frame is one AAC frame — 21 ms at 48 kHz, 32 ms for AC-3 — while
-// the AES67 driver fixes the card's buffer at 8 ms and will not be told
-// otherwise (BUGS.md point 5). So the write cannot return until 13 ms of that
-// frame has drained, which means the delivery thread spends most of an audio
-// frame inside a sound card. That thread also presents the picture, so every
-// video present — up to a vblank away, and 100 ms if a flip never arrives —
-// leaves the card with nothing to play. The bench logged an under-run on
-// almost every video frame, roughly thirty a second, forever:
-//
-//     sound has broken up 8060 times — the board reports neither under-voltage
-//     nor throttling, so this is most likely the feed or a burst of seeking
-//
-// It was not the feed and it was not seeking. It was a 21 ms producer writing
-// to an 8 ms consumer on the same thread that drives the screen.
-//
-// So the writing moved off that thread. write() now converts and copies into a
-// ring (audio_ring.h) and returns — it never touches ALSA, so it can never
-// block the picture. A feeder thread drains the ring a period at a time, which
-// is the size the card is happiest with and small enough that its own blocking
-// is bounded by one millisecond.
-//
-// The cost is latency: the sound is delivered `audio_buffer_ms` behind the
-// picture rather than as soon as it is decoded. That is the trade this makes —
-// continuity for a known, adjustable delay — and it is why the ring depth is a
-// setting rather than a constant.
 
 class AlsaOutput : public AudioOutput {
 public:
@@ -75,7 +37,7 @@ public:
     bool open(const Config& cfg, int sample_rate, int channels,
               std::string& error) override;
     void close() override;
-    bool ok() const override { return m_ok.load(); }
+    bool ok() const override { return m_pcm != nullptr; }
 
     std::string description() const override {
         std::lock_guard<std::mutex> lk(m_mtx);
@@ -90,35 +52,8 @@ public:
 private:
     bool recover(int err);
     // Hands `frames` of already-formatted samples to the card, recovering from
-    // an under-run without losing the rest of the buffer. Only the feeder
-    // thread calls this.
+    // an under-run without losing the rest of the buffer.
     bool write_frames(const uint8_t* data, snd_pcm_uframes_t frames);
-
-    // The feeder: drains m_ring into the card until asked to stop. Reads the
-    // ALSA handle and m_period_frames, which open() sets before this starts and
-    // close() stops this before clearing.
-    void feed();
-
-    // The body of close(), without taking m_lifecycle_mtx — so open() can call
-    // it while already holding that lock instead of deadlocking on a
-    // non-recursive mutex.
-    void close_locked();
-
-    // Where m_feed_thread is. Read from the player's status path without taking
-    // the lock the feeder holds while it writes.
-    std::atomic<bool> m_ok{false};
-
-    // Serialises open() and close() against EACH OTHER. They are not called from
-    // one thread: the delivery loop opens and closes the output, and the control
-    // API's reconfigure() also closes it — to silence a box the moment audio is
-    // switched off — on the HTTP thread. Without this, two closers could each
-    // find the feeder joinable and both call join() on it, which is undefined
-    // behaviour, and it is one tap away in the web interface's audio switch.
-    //
-    // Held for the whole of open() and close(). Never taken by write(),
-    // delay_s(), flush() or the feeder, so it cannot put the picture behind the
-    // sound card.
-    std::mutex m_lifecycle_mtx;
 
     mutable std::mutex m_mtx;
     snd_pcm_t*  m_pcm = nullptr;
@@ -132,61 +67,16 @@ private:
     // the log faster than it fills its buffer.
     long long   m_xruns = 0;
     long long   m_logged_xruns = 0;
+    // Channels the feed carries, when the device would not take them all.
+    int         m_source_channels = 0;
     // Scratch for the converted samples, kept between writes so the thread that
     // presents the picture is not also reallocating a buffer every frame.
     std::vector<uint8_t> m_bytes;
-
-    // ── The ring and the thread that drains it ───────────────────────────────
-    // Written by the delivery thread in write(), read by the feeder. Its own
-    // mutex, never held while calling into ALSA, so a write never waits on the
-    // sound card.
-    AudioRing            m_ring;
-    // Mutable because delay_s() is const and needs to read the queue's depth.
-    mutable std::mutex   m_ring_mtx;
-    // Woken when there is something to play or when close() wants the feeder
-    // to stop. Its wait uses m_ring_mtx, which is also what protects the queue
-    // it is waiting on, so there is no separate mutex for it.
-    std::condition_variable m_cv;
-    std::thread          m_feed_thread;
-    std::atomic<bool>    m_stop{false};
-    // Set by flush() to make the feeder fill the queue to its target again
-    // before it resumes writing. Without it, a seek would leave the queue empty
-    // while the feeder still believed playback had started, so it would hand the
-    // card one millisecond and then starve it until the next frame arrived — a
-    // gap on every jump, and a fresh batch of the under-run counts this whole
-    // arrangement exists to remove. A seek is already a break; it should not
-    // also be one you can hear.
-    std::atomic<bool>    m_reprime{false};
-    // Bytes in one frame at the card's format and channel count: what turns
-    // milliseconds into ring bytes and a period into a frame count.
-    size_t               m_frame_bytes = 0;
-    // One period's worth of frames — a millisecond on the AES67 card, whatever
-    // the driver agreed to elsewhere. The feeder writes this much at a time.
-    snd_pcm_uframes_t    m_period_frames = 0;
-    // Where a fresh write starts playing from, in ring bytes. Set once by
-    // open(); it is the depth that decides the trade described above the class.
-    size_t               m_target_bytes = 0;
-    // Whether the ring is in use at all. It is engaged only when the card's
-    // buffer is smaller than a decoded frame, which is the one case that needs
-    // it; see the decision in open(). False means write() goes straight to the
-    // card, exactly as it always did.
-    //
-    // Atomic because close() writes it from the HTTP thread (reconfigure(),
-    // switching audio off in the interface) while the delivery thread is
-    // reading it in write(). The value can only flip false, and a write that
-    // sees a stale `true` only pushes into a ring nobody drains — the samples
-    // are dropped when it next opens, which is what should happen to audio from
-    // before the change anyway. Reading it unlocked is the point: taking m_mtx
-    // here would put this thread back behind the feeder's blocking write, which
-    // is the whole fault being fixed.
-    std::atomic<bool>    m_use_ring{false};
 };
 
 bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
                       std::string& error) {
-    // Against close() from the control API's HTTP thread, not just this one.
-    std::lock_guard<std::mutex> life(m_lifecycle_mtx);
-    close_locked();
+    close();
     std::lock_guard<std::mutex> lk(m_mtx);
     error.clear();
 
@@ -249,6 +139,7 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
         plog_info("%s takes no floating-point audio — sending %s instead",
                   device.c_str(), pcm_format_name(m_format));
 
+    m_source_channels = channels;
     unsigned want = (unsigned)std::max(1, channels);
     rc = snd_pcm_hw_params_set_channels(m_pcm, hw, want);
     if (rc < 0) {
@@ -319,8 +210,10 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
     // is free to clamp both — the AES67 driver pins period_bytes_min and
     // period_bytes_max to one millisecond, and periods_min and periods_max to
     // its own bufMs, so the half-second requested below becomes 8 ms and cannot
-    // be made larger. Nothing said so, and that silence cost a bench afternoon:
-    // this line is now the one place it gets reported.
+    // be made larger. Nothing said so, and the consequence is not obvious: the
+    // delivery thread also presents the picture, so any stall longer than the
+    // buffer under-runs the card. A box that reports "broken up" thousands of
+    // times is usually being told this, not that its power supply is weak.
     {
         const unsigned rate = (unsigned)(m_rate > 0 ? m_rate : 1);
         const double granted_ms = (double)buffer_size * 1000.0 / (double)rate;
@@ -333,22 +226,12 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
                         pcm_format_name(m_format);
         if (granted_ms < asked_ms / 2.0) {
             plog_warn("%s gave a %.0f ms buffer, not the %.0f ms asked for "
-                      "(%.0f ms of it per period, %d periods). A decoded frame "
-                      "is longer than that, so the player holds its own queue "
-                      "in front of this one; audio_buffer_ms sets how much.",
+                      "(%.0f ms of it per period, %d periods). The thread that "
+                      "writes audio also presents the picture, so anything that "
+                      "stalls it longer than that gaps the sound.",
                       device.c_str(), granted_ms, asked_ms, period_ms,
                       (int)(buffer_size / (period_size ? period_size : 1)));
         }
-
-        // ── Does this card need a queue in front of it? ──────────────────────
-        // Only if its buffer cannot hold a whole decoded frame. HDMI grants
-        // half a second, so a write never has to wait and there is nothing to
-        // decouple — putting 60 ms of queue in front of it would buy jitter
-        // absorption that card does not need, and pay for it in lip sync. The
-        // AES67 card grants 8 ms against a 21 ms frame, and that is the case
-        // this exists for. The threshold is two typical AAC frames: a card that
-        // can hold more than one frame is not the problem being solved.
-        m_use_ring = granted_ms < 40.0;
     }
 
     // Start once there is a period banked, so the first write does not play
@@ -369,88 +252,11 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
                      " ms buffer";
     m_xruns = m_logged_xruns = 0;
     m_bytes.clear();
-
-    // Bytes in one frame at the card's format and channel count: what turns
-    // milliseconds into queue bytes and a period into a frame count.
-    m_frame_bytes = (size_t)m_channels *
-                    (size_t)pcm_bytes_per_sample(m_format);
-    if (m_frame_bytes == 0) {
-        error = "the sound card agreed to no channels";
-        snd_pcm_close(m_pcm);
-        m_pcm = nullptr;
-        return false;
-    }
-    m_period_frames = period_size ? period_size : 48;
-
-    // ── The queue in front of the card, when the card needs one ──────────────
-    //
-    // Everything above this line is the card. Everything below is the ring the
-    // delivery thread writes into and the feeder drains; see the block comment
-    // above the class for why the two are separate. On a card whose buffer
-    // already holds a frame (m_use_ring false) none of this is set up, write()
-    // goes straight to the card, and delay_s() reports the card alone — the
-    // behaviour every existing install already had.
-    if (m_use_ring) {
-        // One period at a time is what the feeder writes. It is also the card's
-        // own period, so each call into ALSA has a millisecond of work to do
-        // and returns; the ring is what absorbs the difference between that and
-        // a frame's worth of audio arriving at once.
-        //
-        // The queue is four times the target so that reaching the target starts
-        // playback and the rest is headroom for the delivery thread falling
-        // behind — a seek, a decoder restart, a stall. Beyond that the oldest
-        // audio is dropped, because holding it would only put the sound further
-        // behind the picture, and late audio is worse than absent audio.
-        int want_ms = cfg.audio_buffer_ms > 0 ? cfg.audio_buffer_ms : 60;
-        if (want_ms > 2000) want_ms = 2000;
-        m_target_bytes = (size_t)m_rate * m_frame_bytes * (size_t)want_ms / 1000;
-        // At least two periods, so the feeder always has a whole period to take
-        // and cannot spin on a target smaller than one write.
-        const size_t floor_bytes = (size_t)m_period_frames * m_frame_bytes * 2;
-        if (m_target_bytes < floor_bytes) m_target_bytes = floor_bytes;
-        m_ring.reset(m_target_bytes * 4);
-
-        m_description += ", " + std::to_string(want_ms) + " ms queue";
-        plog_info("audio queue: %d ms in %zu bytes, fed one %u-frame period at "
-                  "a time", want_ms, m_ring.capacity(), (unsigned)m_period_frames);
-
-        m_stop.store(false);
-        m_feed_thread = std::thread([this] { feed(); });
-    }
-
-    m_ok.store(true);
     return true;
 }
 
 void AlsaOutput::close() {
-    // Against open(), and against a second close().
-    //
-    // Both really happen from different threads: the delivery loop closes the
-    // output when the device or the channel count changes, and reconfigure()
-    // closes it from the HTTP thread to silence the box the instant audio is
-    // switched off in the interface. Two threads that both find the feeder
-    // joinable would both call join() on the same std::thread, which is
-    // undefined behaviour — and this is one tap away in the web interface.
-    // Serialised here, the second caller finds nothing to join.
-    std::lock_guard<std::mutex> life(m_lifecycle_mtx);
-    close_locked();
-}
-
-void AlsaOutput::close_locked() {
-    // Stop the feeder before the card goes, so it cannot be half-way through a
-    // write when the handle it is holding is closed underneath it.
-    if (m_feed_thread.joinable()) {
-        m_stop.store(true);
-        m_cv.notify_all();
-        m_feed_thread.join();
-    }
-
     std::lock_guard<std::mutex> lk(m_mtx);
-    m_use_ring = false;
-    if (m_ring.capacity()) {
-        std::lock_guard<std::mutex> rl(m_ring_mtx);
-        m_ring.clear();
-    }
     if (!m_pcm) return;
     snd_pcm_drop(m_pcm);
     snd_pcm_close(m_pcm);
@@ -459,12 +265,9 @@ void AlsaOutput::close_locked() {
 }
 
 bool AlsaOutput::recover(int err) {
-    // An under-run means the card ran out of samples — worth counting, because
-    // it is audible. It does NOT mean the box is struggling: the most common
-    // cause found so far is a card whose buffer is smaller than one decoded
-    // frame, which is a property of the driver rather than of the load. A
-    // thermally throttled machine is the other cause, and the only one the
-    // message used to consider. Recovery is silent; the count is not.
+    // An under-run means the box did not keep up — worth counting, because it
+    // is the audible symptom of a machine that is thermally throttled or doing
+    // too much. Recovery is silent; the count is not.
     if (err == -EPIPE) ++m_xruns;
     const int rc = snd_pcm_recover(m_pcm, err, 1 /* silent */);
     if (rc < 0) {
@@ -489,122 +292,38 @@ bool AlsaOutput::recover(int err) {
             : sys.throttled
                   ? " — the board is throttling, so suspect cooling"
             : " — the board reports neither under-voltage nor throttling, so "
-              "this is not the hardware. If the card's buffer is smaller than a "
-              "decoded frame (the log says so as it opens), suspect that first; "
-              "otherwise it is the feed or a burst of seeking";
+              "this is not the hardware. If the card's buffer is smaller than "
+              "a decoded frame (the log says so as it opens), suspect that "
+              "first; otherwise it is the feed or a burst of seeking";
         plog_warn("sound has broken up %lld times%s", m_xruns, why);
     }
     return true;
 }
 
 void AlsaOutput::write(const multisite::DecodedAudioFrame& frame) {
-    if (frame.frames == 0 || frame.interleaved.empty()) return;
-
-    // The card's format, channel count and whether there is a queue at all are
-    // fixed by open() and cannot change while it is open, so they are read here
-    // without the lock deliberately: taking m_mtx would put this thread back
-    // behind the feeder's blocking write, which is the very thing the queue
-    // exists to stop. open() and close() run on this same thread.
-    const PcmOutFormat fmt      = m_format;
-    const int           channels = m_channels;
-    const bool          via_ring = m_use_ring;
-    const size_t frame_bytes = (size_t)channels *
-                               (size_t)pcm_bytes_per_sample(fmt);
-    if (frame_bytes == 0) return;
+    std::lock_guard<std::mutex> lk(m_mtx);
+    if (!m_pcm || frame.frames == 0 || frame.interleaved.empty()) return;
 
     // Straight through only when the card took float *and* the feed's channel
     // count already matches the device: the decoder's own buffer is then
     // exactly what ALSA is waiting for, and copying every sample on the thread
-    // that also presents the picture is worth avoiding. Otherwise convert: to
-    // integers, or to the channel count the card will take, or both. The policy
-    // is the one this always used — play what the card will take rather than
-    // nothing at all, having said so in the log when whole channels are dropped.
-    const uint8_t* data;
-    size_t bytes;
-    if (fmt == PcmOutFormat::Float32 && frame.channels == channels) {
-        data  = reinterpret_cast<const uint8_t*>(frame.interleaved.data());
-        bytes = (size_t)frame.frames * frame_bytes;
-    } else {
-        pcm_convert(frame.interleaved.data(), frame.frames, frame.channels,
-                    channels, fmt, m_bytes);
-        data  = m_bytes.data();
-        bytes = m_bytes.size();
-    }
-    if (bytes == 0) return;
-
-    if (!via_ring) {
-        // A card whose own buffer holds a whole frame — HDMI. Unchanged.
-        std::lock_guard<std::mutex> lk(m_mtx);
-        if (!m_pcm) return;
-        if (!write_frames(data, bytes / frame_bytes)) m_ok.store(false);
+    // that also presents the picture is worth avoiding.
+    if (m_format == PcmOutFormat::Float32 && frame.channels == m_channels) {
+        write_frames(reinterpret_cast<const uint8_t*>(frame.interleaved.data()),
+                     frame.frames);
         return;
     }
 
-    // The queue. Nothing below touches ALSA, so nothing below can block the
-    // thread that presents the picture — it copies and returns, and the feeder
-    // takes it out a period at a time.
-    size_t pushed = 0;
-    {
-        std::lock_guard<std::mutex> rl(m_ring_mtx);
-        pushed = m_ring.push(data, bytes);
-        if (pushed < bytes) {
-            // Full. Losing the OLDEST audio is the deliberate choice: the
-            // alternative is to block here, which makes the stall that filled
-            // the queue worse, and the audio that goes is the audio already
-            // furthest behind the picture.
-            const size_t overflow = bytes - pushed;
-            m_ring.drop_oldest(overflow);
-            pushed += m_ring.push(data + pushed, overflow);
-        }
-    }
-    if (pushed) m_cv.notify_one();
-}
-
-// The feeder thread. Takes the queue out a period at a time — the card's own
-// period, so each call into ALSA has a millisecond of work and returns — which
-// is what turns a 21 ms frame arriving in bursts into an even supply for an
-// 8 ms card. It is the ONLY caller of write_frames() while the queue is in use.
-void AlsaOutput::feed() {
-    const size_t frame_bytes = m_frame_bytes;
-    if (frame_bytes == 0 || m_period_frames == 0) return;
-    const size_t period_bytes = (size_t)m_period_frames * frame_bytes;
-
-    std::vector<uint8_t> chunk(period_bytes);
-    // Whether playback has started. Before it has, the queue is filled to its
-    // target first: the first write otherwise plays into a nearly empty card
-    // and under-runs immediately, which is the fault being fixed. After that a
-    // single period is enough — the feeder's job is to keep the card fed, not
-    // to hold the queue at the target for its own sake.
-    bool primed = false;
-
-    while (!m_stop.load()) {
-        // A seek empties the queue behind our back; fill it again before
-        // resuming, rather than trickling into a card about to run dry.
-        if (m_reprime.exchange(false)) primed = false;
-
-        size_t got = 0;
-        {
-            std::unique_lock<std::mutex> rl(m_ring_mtx);
-            const size_t need = primed ? period_bytes : m_target_bytes;
-            m_cv.wait_for(rl, std::chrono::milliseconds(200), [&] {
-                return m_stop.load() || m_ring.used() >= need;
-            });
-            if (m_stop.load()) return;
-            if (m_ring.used() < need) continue;
-            got = m_ring.pop(chunk.data(), period_bytes);
-            if (got >= period_bytes) primed = true;
-        }
-        if (got == 0) continue;
-
-        std::lock_guard<std::mutex> lk(m_mtx);
-        if (!m_pcm) return;
-        if (!write_frames(chunk.data(), (snd_pcm_uframes_t)(got / frame_bytes))) {
-            // The card stopped and could not be recovered. Say so through ok()
-            // rather than spinning: the status line and the interface read it.
-            m_ok.store(false);
-            return;
-        }
-    }
+    // Otherwise convert: to integers, or to the channel count the card would
+    // take, or both. The policy is the one the float path already used — play
+    // what the card will take rather than nothing at all, having said so in the
+    // log when whole channels are being dropped.
+    pcm_convert(frame.interleaved.data(), frame.frames, frame.channels,
+                m_channels, m_format, m_bytes);
+    const size_t frame_bytes = (size_t)m_channels *
+                               (size_t)pcm_bytes_per_sample(m_format);
+    if (frame_bytes > 0)
+        write_frames(m_bytes.data(), m_bytes.size() / frame_bytes);
 }
 
 bool AlsaOutput::write_frames(const uint8_t* data, snd_pcm_uframes_t frames) {
@@ -631,43 +350,17 @@ bool AlsaOutput::write_frames(const uint8_t* data, snd_pcm_uframes_t frames) {
 }
 
 double AlsaOutput::delay_s() const {
-    // Everything written but not yet heard, which is now two things: what the
-    // card is still to play, and what is sitting in the queue in front of it.
-    // Reporting only the card would understate the latency by the whole queue
-    // depth, which is exactly the number any lip-sync correction depends on.
-    //
-    // The queue is read under its own lock and released before m_mtx is taken,
-    // in the same order the feeder uses, so nothing here can deadlock with it.
-    double queued_s = 0.0;
-    if (m_use_ring && m_frame_bytes > 0 && m_rate > 0) {
-        std::lock_guard<std::mutex> rl(m_ring_mtx);
-        queued_s = (double)m_ring.used() /
-                   ((double)m_frame_bytes * (double)m_rate);
-    }
-
     std::lock_guard<std::mutex> lk(m_mtx);
-    if (!m_pcm) return queued_s;
+    if (!m_pcm) return 0.0;
     snd_pcm_sframes_t frames = 0;
-    if (snd_pcm_delay(m_pcm, &frames) < 0 || frames < 0) return queued_s;
-    return queued_s + (double)frames / (double)m_rate;
+    if (snd_pcm_delay(m_pcm, &frames) < 0 || frames < 0) return 0.0;
+    return (double)frames / (double)m_rate;
 }
 
 void AlsaOutput::flush() {
-    // After a jump, whatever is buffered belongs to where playback used to be —
-    // in the card and in the queue in front of it. The queue is cleared under
-    // its own lock and the card under m_mtx; the feeder takes them in that same
-    // order, so the two cannot deadlock.
-    //
-    // The feeder is also told to fill the queue again before it resumes: it is
-    // about to be handed an empty card, and one millisecond written into that
-    // would under-run before the next frame could arrive.
-    if (m_use_ring) {
-        m_reprime.store(true);
-        std::lock_guard<std::mutex> rl(m_ring_mtx);
-        m_ring.clear();
-    }
     std::lock_guard<std::mutex> lk(m_mtx);
     if (!m_pcm) return;
+    // After a jump, whatever is buffered belongs to where playback used to be.
     snd_pcm_drop(m_pcm);
     snd_pcm_prepare(m_pcm);
 }

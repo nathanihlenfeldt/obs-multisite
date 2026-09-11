@@ -338,16 +338,6 @@ add_executable(test_pcm_convert tests/test_pcm_convert.cpp)
 target_include_directories(test_pcm_convert PRIVATE src/appliance)
 add_test(NAME pcm_convert COMMAND test_pcm_convert)
 
-# The queue that sits in front of a card too small to hold a decoded frame,
-# which is the fix for a bench box whose sound broke up thousands of times. A
-# circular buffer's wraparound is arithmetic that is wrong silently and only
-# after a while, so it is checked here rather than on the hardware — the header
-# has no ALSA in it for exactly that reason. The feeder thread around it is not
-# covered by this, and is where the remaining risk lives.
-add_executable(test_audio_ring tests/test_audio_ring.cpp)
-target_include_directories(test_audio_ring PRIVATE src/appliance)
-add_test(NAME audio_ring COMMAND test_audio_ring)
-
 # ── Optional: the satellite appliance (headless player) ───────────────────────
 # The Raspberry Pi / mini-PC receive box: the same core, with its own video and
 # audio output and a browser-based operator interface instead of OBS.
