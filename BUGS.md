@@ -42,6 +42,18 @@ Two commits do:
   `en-GB.ini`, and the Hold button's label — "Hold picture (keeps recording)" —
   finally means what it implies by contrast.
 
+- `d3cb13a` **Split the state chip** — operator-visible, and the second half of
+  the Stop change above: the decode dock's header was one label multiplexing the
+  main site's state, this decoder's playback state and the venue's link health
+  behind a precedence chain, so only one could show. Playing a finished
+  recording read "BROADCAST ENDED" with nothing to say it was playing, and
+  **Hold on a finished recording showed no indication at all** — `paused` was
+  only tested inside the room-state switch's Live branch, which an ended event
+  never reaches. Now two labels: playback (`STOPPED`/`LOADING…`/`BUFFERING…`/
+  `HELD`/`PLAYING`/`READY`) and source (`LIVE`/`BROADCAST ENDED`/…). `READY` is
+  new and names what Load leaves behind. New strings in both locale files; the
+  web remote already had the split and needed only `stopped` in the status JSON.
+
 One wording collision to settle while writing that up: the hold-fix note says
 "**Stop** and waiting are unchanged", which is true of the *screen rule* it is
 discussing and reads as a claim about Stop. Shipping both in one release without
