@@ -1,0 +1,130 @@
+// SPDX-License-Identifier: GPL-3.0-or-later
+#pragma once
+//
+// playout_timeline.h — what a decoded frame is allowed to do, and in what order.
+//
+// Between popping a frame and putting it to air, the delivery loop asks three
+// questions about it, and the ORDER is the whole point:
+//
+//   1. Does this frame still belong to the timeline we are on? A seek may have
+//      happened while it was in hand.
+//   2. Is it before the moment a sub-segment seek asked for? If so it is
+//      dropped, and it must not be used for anything else either.
+//   3. Only then: it defines the media clock, the displayed position, and the
+//      picture.
+//
+// Those lived as three separate blocks in the loop, and every bug in this area
+// came from their order or their shared state rather than from their logic:
+//
+//   b786129  the old decoder kept feeding frames across a seek
+//   97598d4  the skip's per-fragment base was removed, so the skip never
+//            completed and every frame was dropped — seeks stopped working
+//   eea902c  the media-clock pin shared the skip's base, so it paired one
+//            fragment's wall time with another fragment's pts
+//   281cf6e  frames were stamped with a timeline epoch…
+//   db028a2  …but the check ran below the pin, so it guarded nothing
+//
+// Each of those was a correct-looking change to one block. Putting the order
+// inside one tested function is what stops the next one: a caller cannot get
+// the sequence wrong because it no longer chooses the sequence.
+//
+// STATUS: this is the specification, extracted from deliver_loop() and pinned
+// by test_playout_timeline. deliver_loop does NOT yet call it — the state it
+// replaces is spread across six atomics written by four threads, and rewiring
+// that is a concurrency change to code that took five attempts to get working
+// and can only be verified by running a real event. Until that is done, the two
+// can drift, which is the known cost of shipping it this way rather than a
+// thing to discover later. Wiring it is the next change here; a diff of the
+// rules below against deliver_loop is how to check they still agree.
+//
+// Deliberately free of OBS and FFmpeg so it can be driven directly by a test.
+//
+#include <cstdint>
+
+namespace multisite {
+
+class PlayoutTimeline {
+public:
+    static constexpr int64_t kNoClock = INT64_MIN;
+
+    // A seek, a jump, or a decoder restart. Frames already in flight belong to
+    // the position being left and must not be believed about anything.
+    void restart() {
+        ++m_epoch;
+        m_skip_base_pts = kUnset;
+        m_pin_base_pts  = kUnset;
+        m_restart_wall_ms = 0;
+        m_offset_ms = kNoClock;
+        m_skip_ns = -1;
+    }
+
+    // Stamp for frames leaving the queue now. Compare with what comes back.
+    uint64_t epoch() const { return m_epoch; }
+
+    // A fragment has been handed to the decoder. `skip_ns` is how far into it
+    // the seek asked to land, or negative for none.
+    //
+    // The skip's base is reset PER FRAGMENT: it measures from the start of the
+    // fragment it was armed for, which is what bounds how far one skip can run.
+    // Removing this reset once stopped seeks dead.
+    void begin_fragment(int64_t skip_ns) {
+        m_skip_base_pts = kUnset;
+        if (skip_ns > 0) m_skip_ns = skip_ns;
+    }
+
+    // Wall-clock start of the first fragment after a restart. The pin's base is
+    // NOT reset here — it is reset only in restart(), alongside this — so the
+    // wall time and the pts it is paired with always describe the same fragment.
+    void set_restart_wall_ms(int64_t wall_ms) {
+        if (m_restart_wall_ms == 0) m_restart_wall_ms = wall_ms;
+    }
+
+    enum class Action {
+        Discard,      // from a timeline already left; believe nothing about it
+        DropForSkip,  // before the moment asked for; drop it, change nothing
+        Play,         // good: it may define the clock and go to air
+    };
+
+    // The ordered decision. Call once per frame, and act on what it returns.
+    Action consider(uint64_t frame_epoch, int64_t pts_ns) {
+        // 1. Staleness, before anything reads the frame.
+        if (frame_epoch != m_epoch) return Action::Discard;
+
+        // 2. The sub-segment skip.
+        if (m_skip_ns >= 0) {
+            if (m_skip_base_pts == kUnset) m_skip_base_pts = pts_ns;
+            if (pts_ns - m_skip_base_pts < m_skip_ns) return Action::DropForSkip;
+            m_skip_ns = -1;                      // arrived
+        }
+
+        // 3. Pin the media clock, once, on the first frame that actually plays.
+        if (m_offset_ms == kNoClock) {
+            if (m_pin_base_pts == kUnset) m_pin_base_pts = pts_ns;
+            if (m_restart_wall_ms > 0)
+                m_offset_ms = m_restart_wall_ms - m_pin_base_pts / 1000000;
+        }
+        return Action::Play;
+    }
+
+    bool    have_clock()   const { return m_offset_ms != kNoClock; }
+    int64_t clock_offset_ms() const { return m_offset_ms; }
+    // Wall-clock time of a frame, once the clock is pinned.
+    int64_t wall_ms_for(int64_t pts_ns) const {
+        return m_offset_ms == kNoClock ? 0 : m_offset_ms + pts_ns / 1000000;
+    }
+    // What the pin was built from, for the log line that made these bugs
+    // visible in the first place.
+    int64_t pin_wall_ms()    const { return m_restart_wall_ms; }
+    int64_t pin_base_pts_ns() const { return m_pin_base_pts; }
+
+private:
+    static constexpr int64_t kUnset = INT64_MIN;
+    uint64_t m_epoch = 0;
+    int64_t  m_skip_ns        = -1;
+    int64_t  m_skip_base_pts  = kUnset;
+    int64_t  m_pin_base_pts   = kUnset;
+    int64_t  m_restart_wall_ms = 0;
+    int64_t  m_offset_ms      = kNoClock;
+};
+
+} // namespace multisite

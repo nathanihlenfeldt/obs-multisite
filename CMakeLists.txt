@@ -99,6 +99,13 @@ add_test(NAME playout_clock COMMAND test_playout_clock)
 add_executable(test_position_interp tests/test_position_interp.cpp)
 target_link_libraries(test_position_interp PRIVATE multisite_core)
 add_test(NAME position_interp COMMAND test_position_interp)
+
+# What a decoded frame is allowed to do, and in what order. Every case in it is
+# a bug that shipped: seeking broke five times in one afternoon and the suite
+# went nowhere near this path.
+add_executable(test_playout_timeline tests/test_playout_timeline.cpp)
+target_link_libraries(test_playout_timeline PRIVATE multisite_core)
+add_test(NAME playout_timeline COMMAND test_playout_timeline)
 add_test(NAME reliability COMMAND test_reliability)
 
 # The core is shared with the planned headless appliance, which links neither
