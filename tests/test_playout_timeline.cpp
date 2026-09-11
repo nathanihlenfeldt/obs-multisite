@@ -100,23 +100,40 @@ int main() {
               "and it stays completed for the rest of the fragment");
     }
 
-    std::printf("== a skipped frame changes nothing on its way past ==\n");
+    std::printf("== a seek reports the moment asked for, not the fragment ==\n");
     {
-        // The ordering bug in miniature: a frame dropped by the skip must not
-        // pin the clock either, or the clock describes a moment that was
-        // deliberately not shown.
+        // restart_wall_ms is the START of the landing fragment, so the pts it
+        // pairs with must be that fragment's start too — even though the first
+        // frames are dropped to land part-way in. Pairing it with the first
+        // frame that SURVIVED the skip reported every time up to a whole
+        // segment early. From the field: asked for ...649732, landed correctly,
+        // and reported ...647789 — 1943ms early, exactly the skip.
         PlayoutTimeline t;
         t.restart();
-        t.begin_fragment(2 * S);
-        t.set_restart_wall_ms(1789130054456);
-        const int64_t frag0 = 400 * S;
+        const int64_t frag_wall = 1789130647789;   // start of the fragment
+        const int64_t skip      = 1943 * 1000000LL;
+        const int64_t frag0     = (int64_t)(3312.003 * S);
+        t.begin_fragment(skip);
+        t.set_restart_wall_ms(frag_wall);
+
         CHECK(t.consider(t.epoch(), frag0) == Action::DropForSkip,
-              "the first frame of the fragment is skipped");
-        CHECK(!t.have_clock(), "and did not pin the clock");
-        const int64_t landed = frag0 + 2 * S;
-        CHECK(t.consider(t.epoch(), landed) == Action::Play, "the target plays");
-        CHECK(t.pin_base_pts_ns() == landed,
-              "the clock is pinned to the frame actually shown");
+              "the fragment's first frame is dropped to reach the target");
+        CHECK(!t.have_clock(), "a dropped frame does not pin the clock");
+
+        // Play forward until the skip is satisfied.
+        int64_t played = 0;
+        for (int i = 1; i < 200 && played == 0; ++i) {
+            const int64_t pts = frag0 + i * FR;
+            if (t.consider(t.epoch(), pts) == Action::Play) played = pts;
+        }
+        CHECK(played != 0, "the target is reached");
+        CHECK(t.pin_base_pts_ns() == frag0,
+              "the clock is pinned to the FRAGMENT's start, not the frame shown");
+        // The moment reported for the frame on air is the moment asked for.
+        const int64_t reported = t.wall_ms_for(played);
+        const int64_t asked    = frag_wall + skip / 1000000;
+        CHECK(reported >= asked && reported - asked < 40,
+              "so the reported time is the requested one, within a frame");
     }
 
     std::printf("== the skip re-bases per fragment ==\n");

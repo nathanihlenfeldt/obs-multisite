@@ -99,19 +99,30 @@ public:
         // 1. Staleness, before anything reads the frame.
         if (frame_epoch != m_epoch) return Action::Discard;
 
-        // 2. The sub-segment skip.
+        // 2. Claim the pin's base — on the FIRST frame of the fragment, before
+        // the skip can drop it.
+        //
+        // It pairs with restart_wall_ms, which is that fragment's START, so it
+        // has to be the pts of the fragment's start too. Claiming it after the
+        // skip instead paired the fragment's start time with a pts up to a
+        // whole segment later, and every displayed time then read that much
+        // early. Measured: a seek asking for ...649732 landed correctly and
+        // reported ...647789, 1943ms early — exactly the skip.
+        //
+        // Still after the staleness check, never before it: a frame from a
+        // position already left must not define this.
+        if (m_pin_base_pts == kUnset) m_pin_base_pts = pts_ns;
+
+        // 3. The sub-segment skip.
         if (m_skip_ns >= 0) {
             if (m_skip_base_pts == kUnset) m_skip_base_pts = pts_ns;
             if (pts_ns - m_skip_base_pts < m_skip_ns) return Action::DropForSkip;
             m_skip_ns = -1;                      // arrived
         }
 
-        // 3. Pin the media clock, once, on the first frame that actually plays.
-        if (m_offset_ms == kNoClock) {
-            if (m_pin_base_pts == kUnset) m_pin_base_pts = pts_ns;
-            if (m_restart_wall_ms > 0)
-                m_offset_ms = m_restart_wall_ms - m_pin_base_pts / 1000000;
-        }
+        // 4. Pin the media clock, once.
+        if (m_offset_ms == kNoClock && m_restart_wall_ms > 0)
+            m_offset_ms = m_restart_wall_ms - m_pin_base_pts / 1000000;
         return Action::Play;
     }
 
