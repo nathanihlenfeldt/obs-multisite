@@ -597,6 +597,14 @@ static void deliver_loop(SourceCtx* ctx) {
             }
         }
 
+        // Stop means stop. Checked again here, after the wait above, because
+        // a frame can pass the check in deliver_* microseconds before Stop
+        // flips `playing` and then sit in the queue across it — and this is
+        // the last point before air. Discarded rather than held: the decoder
+        // stays running after Stop by design, so Play re-delivers from the
+        // session's own position and nothing here is worth keeping.
+        if (!ctx->playing.load()) continue;
+
         // How much time did this frame have left when we handed it over?
         // Sampled here, immediately before the output call, because every
         // earlier point still has the wait loop and the seek-skip ahead of it.
@@ -678,7 +686,7 @@ static int64_t anchor_pts(SourceCtx* ctx, int64_t pts_ns, bool is_video) {
 }
 
 static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
-    if (!ctx->running.load()) return;
+    if (!ctx->running.load() || !ctx->playing.load()) return;
     const int64_t first = anchor_pts(ctx, f.pts_ns, true);
 
     PendingFrame item;
@@ -693,7 +701,7 @@ static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
 }
 
 static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
-    if (!ctx->running.load()) return;
+    if (!ctx->running.load() || !ctx->playing.load()) return;
 
     // Who wants this track? This source carries one of them; companion
     // audio-only sources in the same room carry the others. A track nobody has
@@ -1619,6 +1627,19 @@ void SourceCtx::play() {
               sess->behind_live_s(), sess->buffered_ahead_s());
 }
 
+// Stop has to close the door before it sweeps the floor. The decoder keeps
+// running after Stop on purpose — that is what "ready to play again" means —
+// so it goes on handing frames to deliver_video/deliver_audio the whole time
+// the source is stopped. Clearing the queue alone was therefore a one-shot
+// against a tap that was still open: the queue refilled within microseconds,
+// the delivery loop put those frames on air, and the picture carried on
+// playing with the button reading STOPPED. The giveaway in the log was a
+// "playout anchored" line at the same millisecond as "STOPPED" — a frame
+// delivered after Stop, re-anchoring the clock that Stop had just reset.
+//
+// `playing` is the door, checked in both deliver_* functions and once more in
+// the delivery loop. It must be cleared BEFORE the queue, or the sweep races
+// the refill.
 void SourceCtx::stop_playback() {
     playing = false;
     paused = false;
