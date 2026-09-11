@@ -535,6 +535,9 @@ if [ -z "$SRC_UNPACKED" ] && [ -n "$VSC_URL" ]; then
   note "downloading from $VSC_URL"
   if [ "$DRY_RUN" -eq 1 ]; then
     note "would download to $BUILD_DIR/$VSC_ZIP_NAME and check the digest"
+    # Set it even though nothing is downloaded, so the message in the next
+    # section names the file instead of printing an empty path.
+    VSC_ZIP="$BUILD_DIR/$VSC_ZIP_NAME"
   else
     have curl || die "curl is needed to download the package. Put the zip on this box and use --package instead."
     mkdir -p "$BUILD_DIR"
