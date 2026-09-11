@@ -352,13 +352,15 @@ out of scope, and the relay cannot re-encode.</summary>
 ## Roadmap
 
 <details>
-<summary>What is planned next: phases 6 to 15, from finishing the appliance to
-storage redundancy, satellite output routing, headless appliances, an ABR
-transcoder, a low-latency mode and keeping installations current.</summary>
+<summary>What is planned next: phases 6 to 15, from the appliance's SDI and
+x86 hardware tiers to storage redundancy, satellite output routing, headless
+appliances, an ABR transcoder, a low-latency mode and keeping installations
+current.</summary>
 
 - **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
-  tier and proven on a Pi 5, though not yet through an event. Still to come:
-  DeckLink SDI output, and hardware-decoder selection on Pi 4.
+  tier and proven on a Pi 5, though not yet through an event — that tier is done.
+  The rest is the hardware Phase 11 owns: DeckLink SDI output, which is §8.1's
+  production tier, and hardware-decoder selection on Pi 4.
 - **Phase 7 — Extensions.** The public simulcast relay is built and has pushed
   live streams to YouTube; SRT in and out is in. Still to come: re-encoding,
   signing in to YouTube instead of pasting a stream key, and starting by itself.

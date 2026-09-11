@@ -957,7 +957,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Operator page served from the plugin to a phone or tablet, following the machine's role | built (§8.4) |
 | Video-on-demand playback of past and interrupted events | built |
 | Any OBS machine can originate a broadcast | built |
-| Dedicated receive appliance (Raspberry Pi / mini-PC) | built, not yet run through an event |
+| Dedicated receive appliance (Raspberry Pi) | built and proven on a Pi 5; not yet run through an event (§10 Phase 6). The x86/SDI tier is Phase 11 |
 | Self-hosted, on storage you own | built |
 | Open protocol, no vendor lock-in | by design — the whole protocol is §4 |
 | Public simulcast to YouTube / Facebook / RTMP or SRT | built and pushing live to YouTube; not yet through a full event. H.264 over either; HEVC over SRT only, and not yet from real encoder output (§8.2) |
@@ -993,11 +993,13 @@ Multi-bucket mirroring has graduated from a direction to explore into Phase 9
 ## 10. Delivery phases
 
 Each phase leaves the project in a testable, usable state. Phases 1–5 are
-built and have been run end to end. Phases 6 and 7 are built but have not yet
-carried an event. Phase 8 is built — the vendor API and the Companion module —
-and both have been driven against a real OBS, the module also against a real
-campus player, though nothing has yet run a whole event. Phases 9–15 have not
-been started.
+built and have been run end to end. Phase 6 is built, proven on a Pi 5 and
+carrying `v0.1.12-alpha`; the hardware it left over — DeckLink SDI output and
+hardware-decode selection — moved to Phase 11 rather than being built here.
+Phase 7 is built but has not yet carried an event. Phase 8 is built — the vendor
+API and the Companion module — and both have been driven against a real OBS, the
+module also against a real campus player, though nothing has yet run a whole
+event. Phases 9–15 have not been started.
 
 - **Phase 1 — Reliability core.** ✅ Durable upload queue, retry/backoff, checksums,
   resume-after-crash, decoder cache with verification, and stale detection. This
@@ -1015,16 +1017,22 @@ been started.
 - **Phase 5 — User interface.** ✅ Encoder and decoder Qt docks, hotkeys, and
   plain-language status, plus event browsing (section 7.5.1), which needs
   bucket listing.
-- **Phase 6 — Satellite appliance.** 🟨 Headless Linux decoder with HDMI output
-  and a browser-based operator UI (section 8.1), built on the existing receive
-  core. Built: the player engine, DRM/KMS display output with its own
-  modesetting, ALSA multichannel audio, the splash and idle screens, the web
-  control surface (decoder controls, event list, storage and system settings,
-  decoupled preview), and the systemd/install path that makes it start on
-  power-up, **proven on a Pi 5 on 2026-09-07** though not yet through a
-  event. Outstanding: DeckLink SDI output for the production tier, and
-  hardware-decoder selection on Pi 4. The channel de-interleaver has been
-  dropped from scope rather than deferred (§4.3.1).
+- **Phase 6 — Satellite appliance.** ✅ The low-cost tier: a headless Linux decoder
+  with HDMI output and a browser-based operator UI (section 8.1), built on the
+  existing receive core. Built: the player engine, DRM/KMS display output with
+  its own modesetting, ALSA multichannel audio, the splash and idle screens, the
+  web control surface (decoder controls, event list, storage and system
+  settings, decoupled preview), and the systemd/install path that makes it start
+  on power-up, **proven on a Pi 5 on 2026-09-07** and carrying `v0.1.12-alpha`,
+  though not yet through a congregation's event. Complete **for the tier it
+  defines**, in section 8.1's terms: the ARM64/HDMI appliance is what this phase
+  set out to build. Its two remaining items are not finished here but moved,
+  because each belongs to a phase that owns the hardware rather than the
+  appliance shape — DeckLink SDI output, which is section 8.1's *production*
+  tier and therefore Phase 11, and hardware-decoder selection on Pi 4, which is
+  the same question Phase 11 asks for x86_64 and answers the same way: prefer a
+  hardware decoder when one exists, fall back to software. The channel
+  de-interleaver has been dropped from scope rather than deferred (§4.3.1).
 - **Phase 7 — Extensions.** 🟨 Built: the public simulcast relay (§8.2), as a
   separate container in `relay/` — copy remux to one or more RTMP **or SRT**
   destinations, per-destination audio selection, a delay buffer, and
@@ -1082,7 +1090,9 @@ been started.
   hardware decode, and one installer that copes with all of it. Two displays is
   Phase 10 applied to hardware — a 3840×1080 feed is a `2x1` layout with tile 0
   on the first output and tile 1 on the second. Hardware decode is VAAPI or QSV
-  with a software fallback, which the core's FFmpeg path already allows for.
+  with a software fallback, which the core's FFmpeg path already allows for; the
+  same prefer-hardware-fall-back-to-software rule covers the Pi 4's
+  `h264_v4l2m2m` decoder, which came here from Phase 6 (§8.1).
   Audio stays HDMI-embedded as it is, or goes to a chosen ALSA device. The
   awkward parts are not the code: the DeckLink driver is normally a manual
   install, which fights the one-script promise, and its SDK carries
