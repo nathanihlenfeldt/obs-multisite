@@ -338,6 +338,17 @@ add_executable(test_pcm_convert tests/test_pcm_convert.cpp)
 target_include_directories(test_pcm_convert PRIVATE src/appliance)
 add_test(NAME pcm_convert COMMAND test_pcm_convert)
 
+# The two halves of the AES67 audio path, kept free of ALSA so they build and
+# run anywhere. The card exists only on the appliance; the arithmetic that
+# addresses it does not need to, and that is the part that is easy to get wrong.
+add_executable(test_audio_queue tests/test_audio_queue.cpp)
+target_include_directories(test_audio_queue PRIVATE src/appliance)
+add_test(NAME audio_queue COMMAND test_audio_queue)
+
+add_executable(test_digisyn_calendar tests/test_digisyn_calendar.cpp)
+target_include_directories(test_digisyn_calendar PRIVATE src/appliance)
+add_test(NAME digisyn_calendar COMMAND test_digisyn_calendar)
+
 # ── Optional: the satellite appliance (headless player) ───────────────────────
 # The Raspberry Pi / mini-PC receive box: the same core, with its own video and
 # audio output and a browser-based operator interface instead of OBS.
