@@ -4,17 +4,19 @@
 //
 // The whole point of the audio design is that a satellite receives a
 // production bus — main mix, mic ISOs, click — not a stereo listener feed. So
-// this opens the device with the channel count the FEED carries and refuses to
-// quietly downmix: losing the click because a card was opened in stereo would
-// destroy the thing the packed multi-channel layout exists to deliver, and it
-// would do it silently.
+// this opens the device with the channel count the FEED carries and holds onto
+// as many of the feed's channels as the card will accept.
 //
 // On the low-cost tier the device is HDMI, which carries up to eight channels
-// of LPCM; a de-embedder at the campus recovers them.
+// of LPCM; a de-embedder at the campus recovers them. On the AES67 tier the
+// device is a vendor sound card that takes 32-bit integers and five-millisecond
+// periods, which is where both halves of the format negotiation below come
+// from — see `pcm_convert.h` for the first and `open()` for the second.
 //
 #include "audio_output.h"
 #include "log.h"
 #include "sysinfo.h"   // to report why sound broke up, rather than guess
+#include "pcm_convert.h"
 
 #include <alsa/asoundlib.h>
 
@@ -49,11 +51,17 @@ public:
 
 private:
     bool recover(int err);
+    // Hands `frames` of already-formatted samples to the card, recovering from
+    // an under-run without losing the rest of the buffer.
+    bool write_frames(const uint8_t* data, snd_pcm_uframes_t frames);
 
     mutable std::mutex m_mtx;
     snd_pcm_t*  m_pcm = nullptr;
     int         m_rate = 48000;
     int         m_channels = 2;
+    // Which of float/S32/S16 the card agreed to. Float is the decoder's own
+    // layout and costs nothing; the others are converted on the way out.
+    PcmOutFormat m_format = PcmOutFormat::Float32;
     std::string m_description = "no audio output";
     // Rate-limit the complaint: a card that keeps under-running must not fill
     // the log faster than it fills its buffer.
@@ -61,7 +69,9 @@ private:
     long long   m_logged_xruns = 0;
     // Channels the feed carries, when the device would not take them all.
     int         m_source_channels = 0;
-    std::vector<float> m_scratch;
+    // Scratch for the converted samples, kept between writes so the thread that
+    // presents the picture is not also reallocating a buffer every frame.
+    std::vector<uint8_t> m_bytes;
 };
 
 bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
@@ -84,15 +94,50 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
     snd_pcm_hw_params_any(m_pcm, hw);
     snd_pcm_hw_params_set_access(m_pcm, hw, SND_PCM_ACCESS_RW_INTERLEAVED);
 
-    // Interleaved float is exactly what the decoder produces, so nothing has
-    // to be converted on the way out.
-    rc = snd_pcm_hw_params_set_format(m_pcm, hw, SND_PCM_FORMAT_FLOAT_LE);
-    if (rc < 0) {
-        error = device + " will not take floating-point audio: " + snd_strerror(rc);
+    // Ask for what the decoder produces, then for signed integers if the card
+    // will not have it. Float arrives with no conversion at all, which is why
+    // it is first; a card that refuses it (the AES67 driver advertises
+    // S32_LE only) used to end the open here with a message an operator could
+    // do nothing about. test_format() is used rather than set_format() so a
+    // refusal cannot disturb the parameters the retry is built on.
+    static const struct { snd_pcm_format_t alsa; PcmOutFormat ours; } kFormats[] = {
+        { SND_PCM_FORMAT_FLOAT_LE, PcmOutFormat::Float32 },
+        { SND_PCM_FORMAT_S32_LE,   PcmOutFormat::S32     },
+        { SND_PCM_FORMAT_S16_LE,   PcmOutFormat::S16     },
+    };
+    bool format_ok = false;
+    for (const auto& cand : kFormats) {
+        if (snd_pcm_hw_params_test_format(m_pcm, hw, cand.alsa) == 0) {
+            snd_pcm_hw_params_set_format(m_pcm, hw, cand.alsa);
+            m_format = cand.ours;
+            format_ok = true;
+            break;
+        }
+    }
+    if (!format_ok) {
+        // Name what the card does offer. Being told the card takes none of
+        // float, S32 or S16 is only useful if the next line says what it wants
+        // instead, and that is one call away.
+        snd_pcm_format_mask_t* mask = nullptr;
+        snd_pcm_format_mask_alloca(&mask);
+        snd_pcm_hw_params_get_format_mask(hw, mask);
+        std::string offers;
+        for (int f = 0; f <= SND_PCM_FORMAT_LAST; ++f) {
+            if (snd_pcm_format_mask_test(mask, (snd_pcm_format_t)f)) {
+                if (!offers.empty()) offers += ", ";
+                offers += snd_pcm_format_name((snd_pcm_format_t)f);
+            }
+        }
+        error = device + " takes none of the formats this player can send "
+                "(float, 32-bit or 16-bit PCM). It offers: " +
+                (offers.empty() ? "nothing ALSA recognises" : offers);
         snd_pcm_close(m_pcm);
         m_pcm = nullptr;
         return false;
     }
+    if (m_format != PcmOutFormat::Float32)
+        plog_info("%s takes no floating-point audio — sending %s instead",
+                  device.c_str(), pcm_format_name(m_format));
 
     m_source_channels = channels;
     unsigned want = (unsigned)std::max(1, channels);
@@ -135,7 +180,13 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
     // frames against a monotonic clock, and a card whose own clock runs a few
     // parts per million away from it needs somewhere for that difference to go
     // over a two-hour event.
-    unsigned buffer_us = 500000;
+    //
+    // The figure wanted is kept separately because set_buffer_time_near writes
+    // the *achievable* value back into the variable it is given; comparing that
+    // against itself later would report that every card gave exactly what was
+    // asked for, on the one install where it matters.
+    const unsigned buffer_us_asked = 500000;
+    unsigned buffer_us = buffer_us_asked;
     snd_pcm_hw_params_set_buffer_time_near(m_pcm, hw, &buffer_us, nullptr);
     unsigned period_us = 40000;
     snd_pcm_hw_params_set_period_time_near(m_pcm, hw, &period_us, nullptr);
@@ -154,6 +205,35 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
     snd_pcm_sw_params_current(m_pcm, sw);
     snd_pcm_uframes_t buffer_size = 0, period_size = 0;
     snd_pcm_get_params(m_pcm, &buffer_size, &period_size);
+
+    // What the card actually granted, rather than what was asked for. A driver
+    // is free to clamp both — the AES67 driver pins period_bytes_min and
+    // period_bytes_max to one millisecond, and periods_min and periods_max to
+    // its own bufMs, so the half-second requested below becomes 8 ms and cannot
+    // be made larger. Nothing said so, and the consequence is not obvious: the
+    // delivery thread also presents the picture, so any stall longer than the
+    // buffer under-runs the card. A box that reports "broken up" thousands of
+    // times is usually being told this, not that its power supply is weak.
+    {
+        const unsigned rate = (unsigned)(m_rate > 0 ? m_rate : 1);
+        const double granted_ms = (double)buffer_size * 1000.0 / (double)rate;
+        const double period_ms  = (double)period_size  * 1000.0 / (double)rate;
+        const double asked_ms   = (double)buffer_us_asked / 1000.0;
+        m_description = std::string(device) + ", " +
+                        std::to_string(m_channels) +
+                        (m_channels == 1 ? " channel at " : " channels at ") +
+                        std::to_string(m_rate) + " Hz, " +
+                        pcm_format_name(m_format);
+        if (granted_ms < asked_ms / 2.0) {
+            plog_warn("%s gave a %.0f ms buffer, not the %.0f ms asked for "
+                      "(%.0f ms of it per period, %d periods). The thread that "
+                      "writes audio also presents the picture, so anything that "
+                      "stalls it longer than that gaps the sound.",
+                      device.c_str(), granted_ms, asked_ms, period_ms,
+                      (int)(buffer_size / (period_size ? period_size : 1)));
+        }
+    }
+
     // Start once there is a period banked, so the first write does not play
     // out into a half-empty buffer and under-run immediately.
     snd_pcm_sw_params_set_start_threshold(m_pcm, sw, period_size);
@@ -167,12 +247,11 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
         return false;
     }
 
-    char desc[200];
-    std::snprintf(desc, sizeof(desc), "%s, %d channel%s at %d Hz",
-                  device.c_str(), m_channels, m_channels == 1 ? "" : "s",
-                  m_rate);
-    m_description = desc;
+    m_description += ", " + std::to_string((int)(buffer_size * 1000ULL /
+                                    (unsigned)(m_rate > 0 ? m_rate : 1))) +
+                     " ms buffer";
     m_xruns = m_logged_xruns = 0;
+    m_bytes.clear();
     return true;
 }
 
@@ -224,33 +303,49 @@ void AlsaOutput::write(const multisite::DecodedAudioFrame& frame) {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (!m_pcm || frame.frames == 0 || frame.interleaved.empty()) return;
 
-    const float* samples = frame.interleaved.data();
-    snd_pcm_uframes_t remaining = frame.frames;
-
-    // The device would not take every channel the feed carries. Play the ones
-    // it will rather than nothing at all — the operator has already been told
-    // in the log that the rest are missing.
-    if (frame.channels != m_channels) {
-        m_scratch.resize((size_t)frame.frames * m_channels);
-        const int copy = std::min(frame.channels, m_channels);
-        for (uint32_t f = 0; f < frame.frames; ++f) {
-            const float* in = samples + (size_t)f * frame.channels;
-            float* out = m_scratch.data() + (size_t)f * m_channels;
-            for (int c = 0; c < copy; ++c) out[c] = in[c];
-            for (int c = copy; c < m_channels; ++c) out[c] = 0.0f;
-        }
-        samples = m_scratch.data();
+    // Straight through only when the card took float *and* the feed's channel
+    // count already matches the device: the decoder's own buffer is then
+    // exactly what ALSA is waiting for, and copying every sample on the thread
+    // that also presents the picture is worth avoiding.
+    if (m_format == PcmOutFormat::Float32 && frame.channels == m_channels) {
+        write_frames(reinterpret_cast<const uint8_t*>(frame.interleaved.data()),
+                     frame.frames);
+        return;
     }
 
+    // Otherwise convert: to integers, or to the channel count the card would
+    // take, or both. The policy is the one the float path already used — play
+    // what the card will take rather than nothing at all, having said so in the
+    // log when whole channels are being dropped.
+    pcm_convert(frame.interleaved.data(), frame.frames, frame.channels,
+                m_channels, m_format, m_bytes);
+    const size_t frame_bytes = (size_t)m_channels *
+                               (size_t)pcm_bytes_per_sample(m_format);
+    if (frame_bytes > 0)
+        write_frames(m_bytes.data(), m_bytes.size() / frame_bytes);
+}
+
+bool AlsaOutput::write_frames(const uint8_t* data, snd_pcm_uframes_t frames) {
+    if (!m_pcm) return false;
+    const size_t frame_bytes = (size_t)m_channels *
+                               (size_t)pcm_bytes_per_sample(m_format);
+    if (frame_bytes == 0) return false;
+
+    snd_pcm_uframes_t remaining = frames;
     while (remaining > 0) {
-        const snd_pcm_sframes_t wrote = snd_pcm_writei(m_pcm, samples, remaining);
+        const snd_pcm_sframes_t wrote = snd_pcm_writei(m_pcm, data, remaining);
         if (wrote < 0) {
-            if (!recover((int)wrote)) { snd_pcm_close(m_pcm); m_pcm = nullptr; return; }
+            if (!recover((int)wrote)) {
+                snd_pcm_close(m_pcm);
+                m_pcm = nullptr;
+                return false;
+            }
             continue;
         }
-        samples += (size_t)wrote * m_channels;
+        data += (size_t)wrote * frame_bytes;
         remaining -= (snd_pcm_uframes_t)wrote;
     }
+    return true;
 }
 
 double AlsaOutput::delay_s() const {

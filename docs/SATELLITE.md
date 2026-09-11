@@ -256,13 +256,28 @@ so the whole thing can be run without a terminal.
   report of everything it could check to
   `/var/tmp/multisite-aes67-<timestamp>/report.txt`, and says out loud which
   checks it could not make.
-- **The card is opened as `plughw:`, never `hw:`.** It accepts only S32_LE
-  samples and the player hands it floating point, so alsa-lib's plug layer does
-  the conversion. The driver gives the card no id, so ALSA truncates its name to
-  fifteen characters (`Digisyn_vSndCar`); the script reads the real name back
-  from `/proc/asound/cards` and writes `plughw:CARD=…` rather than guessing.
-  `plughw:` is already accepted by the player's own device list, so nothing in
-  the player's code changed for this.
+- **The player converts to what the card takes.** The card accepts only S32_LE
+  samples while the decoder hands out floating point, so the player asks for
+  float first, then 32-bit, then 16-bit integers, and converts when it has to.
+  Choosing the `hw:` entry from the device menu in the interface used to end
+  with `will not take floating-point audio: Invalid argument` and no sound,
+  because `hw:` has no plugin to convert for it; that now opens and plays. The
+  installer still writes `plughw:CARD=…`, which continues to work and does the
+  same conversion one layer down. The driver gives the card no id, so ALSA
+  truncates its name to fifteen characters (`Digisyn_vSndCar`); the script reads
+  the real name back from `/proc/asound/cards` rather than guessing.
+- **Expect "sound has broken up" lines, and know why.** The vendor driver fixes
+  the card's buffer at one millisecond per period and only as many periods as
+  `bufMs` — eight, by default — so the queue behind the picture is 8 ms while a
+  single decoded frame is about 21 ms. The log will report under-runs several
+  times a second, and it is not the power supply, the SD card or the network,
+  though the message suggests all three. It is the one real defect left in this
+  path and it is known and written up as
+  [BUGS.md point 5](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event);
+  the player now also prints the buffer the card actually granted, next to the
+  one it asked for, so the line reads `gave a 8 ms buffer, not the 500 ms asked
+  for`. It is untuned rather than unfixable, and needs the feeder thread
+  described there.
 - **The order of two processes decides whether there is sound at all.** The card
   has no rate and no channel count of its own; both are read out of a page of
   shared memory that the *daemon* fills in. A player that starts first opens a
@@ -290,13 +305,15 @@ so the whole thing can be run without a terminal.
   building looks exactly like a broken driver. Confirm how the destination is
   specified before trusting an install that only reports the card appeared.
 - **What is verified, and what is not.** On a bench Pi the module built, the
-  daemon came up, the card appeared, and eight channels of audio arrived. Not
-  yet verified: that lip sync holds across a two-hour service — the card reports
-  its playback position from the daemon's millisecond counter and the player
-  corrects from `snd_pcm_delay()`, which ten seconds of test tone cannot settle
-  — and how accurate PTP becomes, since a Pi's network interface does no
-  hardware timestamping, so it is whatever the software manages. Measure that at
-  the receiver, not on the Pi. The detail is in
+  daemon came up, the card appeared, the player opened it, and eight channels of
+  audio arrived — continuously broken up, for the buffer reason above. Not yet
+  verified: that the picture and the sound stay together across a two-hour
+  service — the card reports its playback position from the daemon's
+  millisecond counter and the player corrects from `snd_pcm_delay()`, which ten
+  seconds of test tone cannot settle, and a queue that empties every frame is
+  not a fair test of it — and how accurate PTP becomes, since a Pi's network
+  interface does no hardware timestamping, so it is whatever the software
+  manages. Measure that at the receiver, not on the Pi. The detail is in
   [BUGS.md entry 3](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event).
 
 ## Remote control from a phone

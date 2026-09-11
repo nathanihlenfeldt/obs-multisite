@@ -150,9 +150,10 @@ than inside `Program Files`, where writing needs elevation.
 
 ### 3. AES67 audio: works on the bench, unproven over an event
 
-**Status: installed and passing audio on a bench Pi. Two points still need a
-real event and are listed first; the two after them were open questions the
-bench run has now answered, and are kept for the edges they do not cover.**
+**Status: installed and passing audio on a bench Pi, but the sound is broken up
+continuously and the cause is known (point 5) — no fix applied yet. Points 1 and
+2 still need a real event; points 3 and 4 were open questions the bench run has
+answered and are kept for the edges they do not cover.**
 
 `scripts/player/aes67.sh` installs Digisynthetic's virtual sound card so the
 player's audio goes onto the network as AES67 instead of staying inside the
@@ -160,10 +161,11 @@ HDMI picture. It builds their kernel module, registers it with DKMS so a
 kernel update rebuilds it, installs their `DigiAes67Proc` daemon under
 systemd, stores the licence, and points the player at the new card. It has now
 been run on a bench Pi: the module built, the daemon came up, the card appeared,
-the player opened it, and eight channels of audio arrived. That settles the
-questions about whether the pieces fit together; what it does not settle is
-anything that needs a real service, which is the first two points below. The
-operator-facing version of this is
+the player opened it, and eight channels of audio arrived — but broken up on
+every frame, for a reason now known (point 5). That settles the questions about
+whether the pieces fit together; what it does not settle is anything that needs
+a real service, which is the first two points below. The operator-facing version
+of this is
 [docs/SATELLITE.md](docs/SATELLITE.md#aes67-audio-on-the-network).
 
 The vendor package it was written against is
@@ -194,16 +196,30 @@ bench run has since answered them in the common case. They stay here because
 each has an edge it does not cover, and because a future failure will land on
 one of them.
 
-**3. The card accepts only S32_LE; the player asks for FLOAT_LE.** Handled by
-using `plughw:` so alsa-lib's plug layer converts, and `plughw:` is already
-allow-listed by the web interface, so no C++ changed. The bench run got audio
-out at 8 channels and 48 kHz, so the plug layer does satisfy the driver's
-exact-match check on `buffer_bytes_max` at those settings. Still unverified:
-that it holds for other rates, channel counts or buffer sizes, since the driver
-compares buffer sizes exactly. If the player logs `audio out failed` with the
-daemon healthy, this is the first suspect — the escape hatch is an
-`/etc/asound.conf` with a pinned `pcm.plug` naming format, rate, channels,
-`period_size` and `buffer_size`, deliberately not shipped yet.
+**3. The card accepts only S32_LE; the player asked for FLOAT_LE.** Now handled
+in the player: `alsa_output.cpp` asks the card for float first and falls back to
+S32_LE and then S16_LE, converting in `pcm_convert.h` when an integer format is
+what it agreed to. That was reached by a bench box logging
+
+```
+audio output: hw:CARD=Default,DEV=0 will not take floating-point audio: Invalid argument
+```
+
+— the device list in the web interface offers `hw:` entries, so choosing the
+card from the menu was enough to hit it, and `hw:` has no plug layer to convert.
+The installer still writes `plughw:`; both now work. `tests/test_pcm_convert.cpp`
+covers the arithmetic (rounding, saturation, channel padding), which is the part
+that can be quietly wrong and needs no sound card to check.
+
+The old escape hatch was `plughw:` and it is still the fallback: alsa-lib's plug
+layer converts, and `plughw:` is allow-listed by the web interface. Still
+unverified: that the driver's exact comparison of `buffer_bytes_max` holds at
+rates, channel counts and buffer sizes other than 8 channels at 48 kHz — the
+driver compares buffer sizes exactly, so a mismatch fails the open. If the
+player logs `audio out failed` with the daemon healthy and a format this code
+can send, this is the first suspect; the escape hatch is an `/etc/asound.conf`
+with a pinned `pcm.plug` naming format, rate, channels, `period_size` and
+`buffer_size`, deliberately not shipped yet.
 
 **4. Start order decides whether the card works at all.** The card's rate and
 channel count are not in the module; both come from a page of shared memory
@@ -215,9 +231,82 @@ Encoded as a `multisite-player.service.d/aes67.conf` drop-in with
 bench, so the drop-in works in the simple case. Still unverified: that it wins
 the race on a machine slow to bring the daemon up under load.
 
+**5. The buffer under the picture is 8 ms; one decoded frame is 21, so it
+under-runs on every frame.** Root cause known from the vendor driver's own
+limits. No fix applied yet.
+
+Seen on the bench box alongside the format error in point 3, playing a 48 kHz
+eight-channel feed:
+
+```
+sound has broken up 8060 times — the board reports neither under-voltage nor throttling, so this is most likely the feed or a burst of seeking rather than the hardware
+sound has broken up 8070 times — …
+```
+
+climbing by ten a line, several lines a second — roughly forty under-runs a
+second, sustained. The message is right that it is not the power supply, and
+right that it is not the feed; it is arithmetic, and the arithmetic is here:
+
+```c
+// DigiAes67KoLib/Digisyn-vSndCard.c
+hw->formats          = SNDRV_PCM_FMTBIT_S32_LE;
+hw->period_bytes_min = bytes_1ms;      hw->period_bytes_max = bytes_1ms;
+hw->periods_min      = dsp->bufMs;     hw->periods_max      = dsp->bufMs;
+hw->buffer_bytes_max = bytes_1ms * hw->periods_max;
+```
+
+A period is exactly one millisecond, the number of periods is `bufMs`, and the
+buffer is therefore `bufMs` milliseconds and cannot be anything else. The
+player asks for half a second (`alsa_output.cpp`, `set_buffer_time_near`), and
+the driver silently clamps it to 8. One AAC frame at 48 kHz is 1024 samples —
+21.3 ms, and AC-3's 1536 samples is 32 ms. The delivery thread writes one whole
+frame per iteration (`player.cpp`, `m_audio.write(item.audio)`), the card takes
+8 ms of it, plays that, and sits empty for the remaining ~13 ms until the next
+frame arrives. One under-run per frame, which is the log.
+
+Two consequences past the clicks, and they explain more than the sound does.
+The blocking `snd_pcm_writei` holds the delivery thread for that ~13 ms — and
+**that thread also presents the picture**, so the video is being paced by a
+sound card that cannot keep up. And `snd_pcm_delay()` is what the player uses
+for lip sync (point 2), so a queue that empties every frame is a poor basis for
+it.
+
+Order of preference for a fix:
+
+1. **A feeder thread** holding a software ring, writing one-millisecond periods
+   as space frees, so the card is never written faster than it drains and is
+   never written *slower* than it drains either. Player-side, needs nothing from
+   the vendor, and is the right shape anyway: it takes the write off the thread
+   that presents the picture, where it should never have been. Not done here —
+   it is a threading change to the delivery path, and it wants a bench to tune
+   the ring depth against a real event.
+2. **Ask the vendor to raise the buffer.** Since `bufMs` is what sets `periods`,
+   and the driver clamps both ends, nothing on the ALSA side can widen it. This
+   is a question for them, not a knob we have; it is the same conversation as
+   point 1.
+3. Writing in ≤8 ms chunks from the existing thread keeps the card fed while
+   audio remains queued, but the queue still empties between frames — it changes
+   the shape of the failure, not the failure.
+
+`scripts/player/aes67.sh` already takes `--buf-ms`, but validates it to 2–8
+because that is what the daemon takes, so it is not a workaround today.
+
+A warning was added to `alsa_output.cpp` that prints the granted buffer against
+the requested one, so the next run says this in one line instead of eight
+thousand counts:
+
+```
+… gave a 8 ms buffer, not the 500 ms asked for (1 ms of it per period, 8 periods) …
+```
+
+**Next step:** the feeder thread (1), which needs the bench to tune and a real
+event to confirm.
+
 **Next step:** watch a full-length service through it, on the picture and the
 sound together — that is the one thing a bench cannot stand in for, and it is
-what settles points 2 and 3 above. Point 1 is a question for the vendor rather
+what settles points 2 and 3 above. The under-run in point 5 wants its feeder
+thread before that run is worth much, because audio that gaps every frame makes
+the lip-sync question unanswerable. Point 1 is a question for the vendor rather
 than a test, and decides whether a receiver at a real site can be aimed at the
 stream. The script writes a report of everything it could check to
 `/var/tmp/multisite-aes67-<timestamp>/report.txt` and says out loud which
