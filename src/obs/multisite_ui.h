@@ -124,14 +124,6 @@ void forward_marker_to_encoder(const std::string& label);
 struct DecoderSnapshot {
     std::string room_id;
     int         room_state = 0;       // matches RoomState
-    // How many Multisite Source instances exist on this machine. Every
-    // transport command (play/stop/pause/resume/seek/jog/delay/lock/marker)
-    // is applied to ALL of them at once — there is no per-instance targeting
-    // — while this snapshot, like every dock and page, only ever shows the
-    // FIRST one. Nothing is silently wrong with one source, which is the
-    // supported and tested configuration; this exists so a second one is a
-    // visible fact rather than a silent trap the moment somebody adds one.
-    int         decoder_source_count = 1;
     // Connection health, measured from this campus's own downloads. 0 healthy,
     // 1 degraded, 2 offline — the same meaning as the encoder's Link row. Only
     // meaningful once link_known is true (a request has been observed).

@@ -71,18 +71,6 @@ void register_decoder_controls(DecoderControls* d) {
     // restart the worker threads twice.
     for (auto* e : g_decoders) if (e == d) return;
     g_decoders.push_back(d);
-    // One decoder source per machine is the tested, supported shape: every
-    // transport command below is applied to every registered source at once,
-    // with no per-instance targeting, so a second source is silently pulled
-    // along by whatever the first one is told to do. That is fine as long as
-    // somebody knows it is happening — this is the one place it can be said,
-    // since a source has no idea whether it is alone.
-    if (g_decoders.size() == 2) {
-        mlog_warn("a second Multisite Source is now on this machine — "
-                  "play/stop/pause/seek/jog/delay/lock/marker act on ALL "
-                  "decoder sources at once, and every dock and page only "
-                  "ever shows the first one registered");
-    }
 }
 void unregister_decoder_controls(DecoderControls* d) {
     std::lock_guard<std::mutex> lk(g_mtx);
@@ -112,7 +100,6 @@ bool decoder_snapshot(DecoderSnapshot& out) {
     std::lock_guard<std::mutex> lk(g_mtx);
     if (g_decoders.empty()) return false;
     g_decoders.front()->snapshot(out);     // the dock follows the first source
-    out.decoder_source_count = (int)g_decoders.size();
     return true;
 }
 

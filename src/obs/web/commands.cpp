@@ -228,14 +228,6 @@ std::string decoder_status_json() {
     j["have_source"] = have_source;
     if (!have_source) return j.dump();
 
-    // Every command below acts on every Multisite Source on this machine at
-    // once; this page only ever shows the first one. One source is the
-    // supported shape and the common case, hence no field at all when it's
-    // true — a page that always carried this key would train an operator to
-    // ignore it.
-    if (s.decoder_source_count > 1)
-        j["decoder_source_count"] = s.decoder_source_count;
-
     j["room_id"]   = s.room_id;
     j["room_state"] = s.room_state;
     j["event_id"]  = s.event_id;

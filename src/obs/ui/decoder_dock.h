@@ -98,30 +98,6 @@ private:
     // refresh() only because that function is already long.
     void refreshEvents(const DecoderSnapshot& s);
 
-    // Runs at a much faster rate than refresh() to move the timeline playhead
-    // and the position readout continuously, the way any media player's scrub
-    // bar moves — interpolated from the last real sample plus elapsed
-    // wall-clock time, not from polling the source any harder. refresh()
-    // remains the source of truth: it sets the interpolation's starting point
-    // every 500ms and decides whether interpolating is even valid right now
-    // (it is not, mid-seek, mid-load, paused, or caught up with nothing new
-    // to show — those states freeze here exactly as they did before this
-    // existed).
-    void tickSmooth();
-
-    bool      m_smoothActive = false;
-    qint64    m_smoothBaseMs = 0;       // playhead_ms at the last real sample
-    qint64    m_smoothBaseWallMs = 0;   // wall clock at that sample
-    bool      m_smoothEnded = false;    // which text form below applies
-    long long m_smoothStartedMs = 0;
-    long long m_smoothTotalMs = 0;
-    QString   m_smoothBehindSuffix;     // "  —  12 sec behind", or empty
-    // Never shown past this, so an interpolation between two real samples
-    // cannot count a moment past the true end of a recording, or a clock time
-    // past the last confirmed live edge, even for the fraction of a second
-    // before the next real sample corrects it. 0 means no bound.
-    qint64    m_smoothUpperBoundMs = 0;
-
     QLabel* m_room = nullptr;
     QLabel* m_state = nullptr;
     QLabel* m_behind = nullptr;
@@ -159,7 +135,6 @@ private:
     QLabel*      m_liveElsewhere = nullptr;
     QString      m_events_signature;
     QTimer* m_timer = nullptr;
-    QTimer* m_smoothTimer = nullptr;
     size_t m_marker_count = 0;
 
     // Machine-wide storage settings, entered once here.

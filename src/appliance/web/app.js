@@ -24,20 +24,9 @@ let status = null;
 let settings = null;
 let systemInfo = null;
 let pollTimer = null;
-let smoothTimer = null;
 // The offset between this device's clock and the box's, so a phone with the
 // wrong time still shows the same reading as the box does.
 let clockSkewMs = 0;
-
-// Between real 500ms polls, the clock digits and the timeline dot are
-// interpolated from the last real sample plus elapsed wall-clock time — the
-// same technique any video player uses to move its scrub bar smoothly without
-// polling the engine any harder. Set from drawStatus() on every real sample;
-// active only while genuinely playing forward, so loading, seeking, holding,
-// buffering and a finished recording's last frame all freeze it exactly as
-// before.
-const smooth = { active: false, ended: false, baseMs: 0, baseWallMs: 0,
-                 upperBoundMs: 0, startedMs: 0, totalMs: 0, suffix: '' };
 
 /* ── Small helpers ───────────────────────────────────────────────────────── */
 
@@ -178,35 +167,11 @@ function drawStatus() {
   $('#lock').className = 'lock' + (s.locked ? ' on' : '');
 
   // ── The reading that matters ───────────────────────────────────────────
-  // Buffering means the decoder has started but no frame has decoded yet —
-  // exactly the window where playhead_ms is still the segment-duration
-  // ESTIMATE, not the frame-accurate clock, and about to visibly snap once
-  // the real one arrives. hhmmss(0) already reads as "--:--:--"; showing
-  // that rather than a number about to be wrong is the whole fix.
   const clock = $('#clock');
-  clock.textContent = hhmmss(s.buffering ? 0 : s.playhead_ms);
+  clock.textContent = hhmmss(s.playhead_ms);
   // While a jump is in flight the time shown is where playback is GOING, not
   // where the picture is. Say so rather than letting it read as fact.
-  clock.classList.toggle('provisional', !!s.seek_target_ms || !!s.buffering);
-
-  // Feed tickSmooth() from this exact, authoritative sample. Everything that
-  // freezes the clock/timeline/position below (loading, a pending seek,
-  // buffering, held, a recording that has run out) is exactly what already
-  // keeps this page from moving in those states, so interpolating never
-  // contradicts it.
-  smooth.active = s.playing && !s.paused && !s.loading && !s.buffering &&
-                 !s.seek_target_ms && !(s.ended && s.at_end);
-  if (smooth.active) {
-    smooth.baseMs = s.playhead_ms;
-    smooth.baseWallMs = Date.now() + clockSkewMs;
-    smooth.ended = s.ended;
-    smooth.startedMs = s.started_ms;
-    smooth.totalMs = s.total_ms;
-    smooth.suffix = s.current_marker ? ' · ' + s.current_marker : '';
-    smooth.upperBoundMs = s.ended
-      ? (s.started_ms && s.total_ms ? s.started_ms + s.total_ms : 0)
-      : (s.live_ms || 0);
-  }
+  clock.classList.toggle('provisional', !!s.seek_target_ms);
 
   let sub;
   if (!s.configured) {
@@ -306,34 +271,6 @@ function drawTimeline(s) {
   $('#tl-head').style.left = pct(s.playhead_ms) + '%';
   $('#tl-left').textContent = hhmmss(from);
   $('#tl-right').textContent = s.ended ? hhmmss(to) : hhmmss(to) + ' (now)';
-}
-
-// Runs five times as often as a real poll to move the clock, the timeline
-// dot, and (for a finished recording) the "X of Y" position continuously
-// between them. Reads the timeline's own from/to (set by drawTimeline above)
-// rather than recomputing them, so the two can never disagree about the span
-// a position is a fraction of. The live "behind the main site" phrase is left
-// alone here on purpose — it only ever changes at segment granularity, so
-// rewriting it every 100ms would just repeat the same words.
-function tickSmooth() {
-  if (!smooth.active) return;
-  let ms = smooth.baseMs + ((Date.now() + clockSkewMs) - smooth.baseWallMs);
-  if (smooth.upperBoundMs > 0 && ms > smooth.upperBoundMs) ms = smooth.upperBoundMs;
-
-  $('#clock').textContent = hhmmss(ms);
-
-  if (smooth.ended) {
-    const into = smooth.startedMs ? ms - smooth.startedMs : 0;
-    $('#position').textContent = `${elapsed(into)} of ${elapsed(smooth.totalMs)}` +
-      smooth.suffix;
-  }
-
-  const el = $('#timeline');
-  const from = Number(el.dataset.from), to = Number(el.dataset.to);
-  if (from && to && to > from) {
-    const pct = Math.max(0, Math.min(100, ((ms - from) / (to - from)) * 100));
-    $('#tl-head').style.left = pct + '%';
-  }
 }
 
 function drawCues(s) {
@@ -922,11 +859,6 @@ function startPolling() {
     if ($('#tab-log').classList.contains('is-on') && $('#log-follow').checked)
       refreshLog();
   }, 500);
-  // Five times as often, moving only the clock/timeline/position — cheap DOM
-  // writes, no network call, so this costs nothing extra on the box being
-  // polled.
-  if (smoothTimer) clearInterval(smoothTimer);
-  smoothTimer = setInterval(tickSmooth, 100);
 }
 
 // A tablet left on a music stand should stop asking while its screen is off,
@@ -934,7 +866,6 @@ function startPolling() {
 document.addEventListener('visibilitychange', () => {
   if (document.hidden) {
     if (pollTimer) { clearInterval(pollTimer); pollTimer = null; }
-    if (smoothTimer) { clearInterval(smoothTimer); smoothTimer = null; }
     stopPreview();
   } else {
     startPolling();
