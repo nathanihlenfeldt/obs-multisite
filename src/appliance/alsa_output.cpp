@@ -36,6 +36,7 @@
 #include <atomic>
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstring>
 #include <mutex>
 #include <string>
@@ -56,15 +57,107 @@ constexpr const char* kDigisynDevice = "/dev/Digisyn_vSndCard";
 // without being visible on lips. It is the same depth the ALSA path aims for.
 constexpr int kDigisynQueueMs = 60;
 
-// Is the PCM named for the Digisyn card? Asked of the card rather than matched
-// against the config string, so hw:, plughw: and default all take the same
-// branch, and HDMI and every other card keep the plain ALSA path.
-bool pcm_is_digisyn(snd_pcm_t* pcm) {
+// Does this string name the Digisyn card?
+//
+// "Digisyn" alone is the test, because the vendor truncates in three different
+// places: the card driver is "Digisyn_vSndCard", the shortname is
+// "Digisyn_vSndCar" (fifteen characters, ALSA's limit), and the card's own id —
+// what a device string carries after CARD= — is "Default". Matching any part of
+// the full name is the only test that survives all of them.
+bool name_mentions_digisyn(const char* s) {
+    return s != nullptr && std::strstr(s, "Digisyn") != nullptr;
+}
+
+// The card id a device string asks for, if it asks for one:
+// "sysdefault:CARD=Default" → "Default", "hw:CARD=Digisyn_vSndCar,DEV=0" →
+// "Digisyn_vSndCar", "default" → "".
+std::string card_id_in(const std::string& device) {
+    static const char key[] = "CARD=";
+    const size_t at = device.find(key);
+    if (at == std::string::npos) return std::string();
+    const size_t from = at + sizeof(key) - 1;
+    const size_t to = device.find_first_of(",:", from);
+    const size_t count =
+        (to == std::string::npos) ? std::string::npos : to - from;
+    return device.substr(from, count);
+}
+
+// Is the card that answers to this id the vendor's? Walked by number, so the
+// answer comes out of the card itself and never out of the string alone.
+bool card_id_is_digisyn(const std::string& card_id) {
+    if (card_id.empty()) return false;
+    for (int n = 0; n < 32; ++n) {
+        char ctl_name[32];
+        std::snprintf(ctl_name, sizeof ctl_name, "hw:%d", n);
+        snd_ctl_t* ctl = nullptr;
+        if (snd_ctl_open(&ctl, ctl_name, 0) < 0) continue;   // no such card
+        snd_ctl_card_info_t* ci = nullptr;
+        snd_ctl_card_info_alloca(&ci);
+        const bool readable = snd_ctl_card_info(ctl, ci) >= 0;
+        const char* id = readable ? snd_ctl_card_info_get_id(ci) : nullptr;
+        const bool match =
+            id != nullptr && card_id == id &&
+            (name_mentions_digisyn(snd_ctl_card_info_get_driver(ci)) ||
+             name_mentions_digisyn(snd_ctl_card_info_get_name(ci)) ||
+             name_mentions_digisyn(snd_ctl_card_info_get_longname(ci)));
+        snd_ctl_close(ctl);
+        if (match) return true;
+    }
+    return false;
+}
+
+// Why this PCM is the Digisyn AES67 card — or nullptr if it is not.
+//
+// Asked of the card rather than matched against the config string, so hw:,
+// plughw:, sysdefault: and default all take the same branch while HDMI and
+// every other card keep the plain ALSA path.
+//
+// Three answers are tried, because the first two can be hidden by a plugin:
+//
+//   1. the PCM's *id* — the vendor's own string, "Digisyn_vSndCard PCM".
+//   2. the *card* behind the PCM, through its control interface.
+//   3. failing both — and `sysdefault:CARD=…` is the case that does, the one the
+//      bench opened — the card id written in the device string, looked up.
+//
+// The PCM's *name* is deliberately not consulted, and was this function's first
+// version: the vendor sets it with `strcpy(pcm->name, "Dummy PCM")`
+// (DigiAes67KoLib/Digisyn-vSndCard.c), so the check never matched, the calendar
+// was never used and the log said nothing about it — a whole session of "broken
+// up" with no calendar line in it, which is exactly how it failed on the bench.
+//
+// The reason is returned rather than a bare yes so that this cannot fail
+// silently again: `open()` logs which answer matched.
+const char* digisyn_reason(snd_pcm_t* pcm, const std::string& device) {
     snd_pcm_info_t* info = nullptr;
     snd_pcm_info_alloca(&info);
-    if (snd_pcm_info(pcm, info) < 0) return false;
-    const char* name = snd_pcm_info_get_name(info);
-    return name != nullptr && std::strstr(name, "Digisyn") != nullptr;
+    const bool have_info = snd_pcm_info(pcm, info) >= 0;
+
+    if (have_info && name_mentions_digisyn(snd_pcm_info_get_id(info)))
+        return "the PCM carries the vendor's own id";
+
+    if (have_info) {
+        const int card = snd_pcm_info_get_card(info);
+        if (card >= 0) {
+            char ctl_name[32];
+            std::snprintf(ctl_name, sizeof ctl_name, "hw:%d", card);
+            snd_ctl_t* ctl = nullptr;
+            if (snd_ctl_open(&ctl, ctl_name, 0) == 0) {
+                snd_ctl_card_info_t* ci = nullptr;
+                snd_ctl_card_info_alloca(&ci);
+                const bool match =
+                    snd_ctl_card_info(ctl, ci) >= 0 &&
+                    (name_mentions_digisyn(snd_ctl_card_info_get_driver(ci)) ||
+                     name_mentions_digisyn(snd_ctl_card_info_get_name(ci)) ||
+                     name_mentions_digisyn(snd_ctl_card_info_get_longname(ci)));
+                snd_ctl_close(ctl);
+                if (match) return "the card behind the PCM is the vendor's";
+            }
+        }
+    }
+
+    if (card_id_is_digisyn(card_id_in(device)))
+        return "the device string names the vendor's card";
+    return nullptr;
 }
 
 class AlsaOutput : public AudioOutput {
@@ -182,10 +275,19 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
     // calendar of one-millisecond slots on a clock of its own, so the audio is
     // addressed into that calendar instead — see digisyn_calendar.h, and
     // scripts/player/digisyn_probe.c which proved the write on the bench. The
-    // card is identified by its name rather than by the config string, so every
-    // way of naming it (hw:, plughw:, default) takes this branch and every
-    // other device, HDMI included, is left exactly as it was.
-    if (pcm_is_digisyn(m_pcm)) {
+    // card is identified by its own name rather than by the config string, so
+    // every way of naming it (hw:, plughw:, sysdefault:, default) takes this
+    // branch and every other device, HDMI included, is left exactly as it was.
+    //
+    // The answer is logged either way. The first version of this check asked the
+    // PCM's *name* for "Digisyn", which the vendor sets to "Dummy PCM", so it
+    // never matched and the calendar was silently skipped — a whole bench
+    // session of "broken up" with no calendar line anywhere in it. Saying which
+    // answer matched, and saying so when none did, is the fix for that.
+    const char* why = digisyn_reason(m_pcm, device);
+    if (why != nullptr) {
+        plog_info("%s is the AES67 card (%s) — using its calendar, not ALSA",
+                  device.c_str(), why);
         if (open_calendar(channels, error)) {
             // The PCM is not written to in this mode; let it go so nothing else
             // believes the card is held open through ALSA.
