@@ -5,11 +5,46 @@ each entry has enough context to act on without anyone having been in the
 room when it was written. Delete an entry once it's fixed and released;
 this file is not a changelog.
 
-Last updated: 2026-09-09.
+Last updated: 2026-09-11.
 
 ---
 
 ## Open
+
+### 0. v0.1.12-alpha is written but deliberately not tagged yet
+
+**Status: waiting on the lipsync work. Do not tag `v*` from `main` until this
+is resolved.**
+
+The Pi player's hold fix (`screen_action()`, a held picture outranks the idle
+screen) is merged on `main` at `96c5d8c`, along with its notes under "What's new
+in v0.1.12-alpha" in `.github/RELEASE-NOTES.md` and the `VERSION 0.1.12` bump.
+
+`main` also carries 8 commits of in-flight decoder/lipsync work (delivery queue
+bounding, playout clock, drift measurement, `test_playout_clock`) that has **no
+entry in `RELEASE-NOTES.md`** — its reasoning lives in the entries below, and
+this file is explicitly not a changelog.
+
+Tagging `v0.1.12-alpha` from `main` right now would publish the release (a
+Windows plugin build and a relay container image) shipping that work while the
+notes mention only the hold fix — the discrepancy lands in front of anyone
+installing it.
+
+**To finish the release:** decide whether the lipsync work is ready. If it is,
+write it up in `RELEASE-NOTES.md` under `v0.1.12-alpha` alongside the hold fix,
+then tag. If it is not, hold the tag until it is; the hold fix is already
+delivered to anyone tracking `main`, which is what the appliance installer does.
+
+**If you do tag, tag the current `main`**, not the fix commit in isolation — the
+fix is not a branch and the tree only builds as a whole.
+
+A tag pushed from a commit that is not an ancestor of `main` builds the plugin
+and the container against that commit and creates the GitHub release as soon as
+the tag lands, so a mistake here is public before it is noticed: `gh release
+delete <tag> --yes --cleanup-tag` plus `git push origin :refs/tags/<tag>` is the
+way back, as happened once on 2026-09-11 before the tag was cut properly.
+
+---
 
 ### 1. Pi player: playback can stall indefinitely while downloads keep succeeding
 
