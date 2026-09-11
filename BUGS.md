@@ -145,6 +145,33 @@ the decoder fix, to avoid quietly widening what was meant to be one fix.
 
 ---
 
+### 3. The Windows install instructions point at the location OBS has deprecated
+
+`docs/OPERATOR.md` tells Windows operators to copy the `obs-plugins` and `data`
+folders into the OBS install directory, "typically `C:\Program Files\obs-studio\`",
+merging with what is there. That is the legacy layout. OBS's own plugins guide
+now recommends `C:\ProgramData\obs-studio\plugins` — one directory per plugin
+containing `bin\64bit\<name>.dll` and `data\locale\` — and says of the old
+location: *"Plugins in this location will stop working in a future version of
+OBS."* So this is a documented install path with an expiry date on it, and an
+operator following our guide today installs somewhere OBS intends to stop
+looking.
+
+**It is not only a documentation edit**, which is why it is here rather than
+fixed on sight. The artifact layout is what has to change with it: the Windows
+zip is staged as `obs-plugins/64bit/<name>.dll` plus
+`data/obs-plugins/obs-multisite/…` (`obs-plugin.yml`, "Stage plugin with its
+dependencies"), which matches the legacy layout and not the recommended one. So
+the staging step and the guide move together, and the release notes should say
+so for anyone currently installed the old way.
+
+**Worth doing before the update work in Phase 15** (README roadmap), because the
+recommended layout is what makes updating a Windows install tractable at all: it
+puts the files an updater must replace into application data it can own, rather
+than inside `Program Files`, where writing needs elevation.
+
+---
+
 ## Recently landed (context, not action items)
 
 - **`658cd5f`** — the decoder shutdown-hang fix and `test_s3_cancel`, above.

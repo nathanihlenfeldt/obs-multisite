@@ -980,6 +980,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Headless encoder appliance (DeckLink SDI or HDMI input; x86_64 or RK3588) | planned (§10 Phase 12) |
 | ABR transcoder ("relay plus"): a ladder written to a bucket that is its own HLS/DASH origin | planned (§10 Phase 13) |
 | End-to-end low latency (`obs-multisite-ll`) over ZeroTier, with WebRTC or SRT | early concept (§10 Phase 14) |
+| Knowing a newer build exists, and applying it without a manual reinstall | planned — notification first; whether an update applies itself is undecided (§10 Phase 15) |
 
 Further directions to explore: web/mobile simulcast served directly from the
 bucket (which needs no relay at all — the CMAF objects are already the right
@@ -995,7 +996,7 @@ Each phase leaves the project in a testable, usable state. Phases 1–5 are
 built and have been run end to end. Phases 6 and 7 are built but have not yet
 carried an event. Phase 8 is built — the vendor API and the Companion module —
 and both have been driven against a real OBS, the module also against a real
-campus player, though nothing has yet run a whole event. Phases 9–14 have not
+campus player, though nothing has yet run a whole event. Phases 9–15 have not
 been started.
 
 - **Phase 1 — Reliability core.** ✅ Durable upload queue, retry/backoff, checksums,
@@ -1133,6 +1134,53 @@ been started.
   Licensing needs checking rather than assuming, as it was for the codecs and for
   atkAudio. It would sit as a sub-project depending on the core and never
   depended on by it, exactly as `relay/` does.
+- **Phase 15 — Keeping installations current.** ⬜ Installing the plugin is a
+  manual act — unzip, move files, restart OBS — and the only way to learn that a
+  newer build exists is to go and look at the releases page. Two jobs live here
+  and they are not the same size.
+
+  **Telling the operator** is the small one. The plugin already speaks HTTPS
+  through the libcurl it links for uploads and already bundles on Windows, so a
+  version check costs one request and a comparison against `PLUGIN_VERSION`; it
+  belongs off the render thread, cached, and stated in the dock the operator
+  already has open rather than in a dialog nobody reads. OBS offers nothing to
+  build on: there is no update or upgrade entry point in `libobs` or in
+  `obs-frontend-api`, so this is written once, for all three platforms. The
+  decision to settle first is whether the check runs by default, because it is
+  the one request this project makes that tells a third party that OBS with this
+  plugin is running — and a project whose deployments are otherwise entirely
+  inside a church's own network should say that plainly rather than bury it in a
+  settings page nobody opens. Publishing a small manifest beside the release —
+  one request, one number, which build is for which OBS — also keeps the check
+  off GitHub's API and its rate limit, and is where the platform and OBS-version
+  matching has to live anyway, since OBS refuses a plugin built for a different
+  major version and offering the wrong asset is worse than offering none.
+
+  **Applying the update** is the part to be decided rather than assumed. Windows
+  cannot overwrite a DLL OBS has loaded: it can be renamed, or a helper can be
+  left behind to wait for OBS to exit, but either way the new version appears on
+  the *next* start, and the install directory needs elevation to write into.
+  macOS is the opposite — the per-user plugin directory is writable without
+  privileges, so the swap itself is easy — but these builds are neither signed
+  nor notarised, so an update arrives quarantined and OBS then loads nothing at
+  all and logs nothing, which is exactly the failure OPERATOR.md already warns
+  about; an updater would have to clear the flag itself. Linux is the easiest of
+  the three and the Flatpak case the most awkward, because a plugin that cannot
+  write its own directory should not pretend otherwise. OBS does not do this
+  in-process for itself either: on macOS it hands updates to Sparkle.
+
+  **The prerequisite, worth doing on its own merits.** Our Windows artifacts and
+  the operator guide both use the legacy layout — files merged into the OBS
+  install directory under `C:\Program Files\obs-studio\`. OBS now recommends
+  `C:\ProgramData\obs-studio\plugins`, one directory per plugin holding `bin/`
+  and `data/`, and states that the legacy location will stop working in a future
+  version. Repackaging into the recommended layout is what makes a Windows update
+  tractable at all, because the files being replaced become data an updater can
+  own rather than files inside Program Files.
+
+  Nothing here depends on phases 9–14, and it is small enough to pull forward if
+  reinstalling by hand on each release is costing more than those phases are
+  worth.
 
 ---
 

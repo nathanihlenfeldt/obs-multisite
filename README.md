@@ -330,6 +330,14 @@ out of scope, and the relay cannot re-encode.</summary>
   To test it: send identical audio on two tracks, play one through the main
   source and one through a companion into the same mix, and listen for comb
   filtering.
+- **Installing the plugin is manual, and so is updating it.** Unzip, move files,
+  restart OBS, and on macOS clear the quarantine flag (see
+  [OPERATOR.md](docs/OPERATOR.md)). Nothing tells an operator that a newer build
+  exists, and there is no OBS-level mechanism to add one — no update or upgrade
+  entry point exists in `libobs` or `obs-frontend-api`. The Windows instructions
+  also still use the install-directory layout OBS has said it will stop reading.
+  Both are Phase 15 in the [Roadmap](#roadmap), and the second is written up as
+  [BUGS.md entry 3](BUGS.md).
 - **Not yet used for a real event.** A six-hour soak has been run (see
   [Status](#status)) but no congregation has watched anything through this. The
   soak covered sustained upload, timeslipping and playout; it did not cover a
@@ -344,9 +352,9 @@ out of scope, and the relay cannot re-encode.</summary>
 ## Roadmap
 
 <details>
-<summary>What is planned next: phases 6 to 14, from finishing the appliance to
+<summary>What is planned next: phases 6 to 15, from finishing the appliance to
 storage redundancy, satellite output routing, headless appliances, an ABR
-transcoder and a low-latency mode.</summary>
+transcoder, a low-latency mode and keeping installations current.</summary>
 
 - **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
   tier and proven on a Pi 5, though not yet through an event. Still to come:
@@ -376,6 +384,18 @@ transcoder and a low-latency mode.</summary>
   bucket that becomes its own origin.
 - **Phase 14 — End-to-end low latency.** An early concept, over ZeroTier with
   WebRTC or SRT.
+- **Phase 15 — Keeping installations current.** Today the plugin is a set of
+  files an operator replaces by hand, and the only way anyone learns a newer
+  build exists is to go and look. Notifying them is the small half: the plugin
+  already speaks HTTPS through the libcurl it links for uploads — and already
+  bundles on Windows — so it can ask what the latest release is and say so in the
+  dock an operator already has open. Applying an update by itself is a different
+  size of job, and it is not one job: Windows cannot overwrite a DLL that OBS has
+  loaded and needs elevation to write where it lives, macOS makes the swap easy
+  but quarantines an unsigned download so that OBS then loads nothing and says
+  nothing, and a Flatpak install has to go through Flatpak. The prerequisite for
+  any of it is packaging into the directory layout OBS now recommends rather than
+  the one it has said will stop working.
 
 Each phase is described in full in
 [PROJECT-SCOPE.md §10](PROJECT-SCOPE.md#10-delivery-phases), which is also where
