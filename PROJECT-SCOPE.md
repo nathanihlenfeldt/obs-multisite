@@ -853,6 +853,14 @@ with the feedbacks already attached. It also carries a pass-through action that
 calls any vendor request by name, so a command this plugin adds later is
 reachable without waiting for a module release.
 
+**And it drives either end of the system.** The same module talks to a campus
+player appliance as well as to OBS: the appliance serves the same controls on its
+own HTTP API (§8.1) and has no OBS in it at all, so which end is a choice on the
+connection while the actions, feedbacks, variables and presets are written once.
+The two places the appliance names a command differently — `follow-live` for
+`return-to-live`, `load` for `load-event` — are a route table in one file of the
+module, which is what keeps that difference from ever reaching an operator.
+
 Two things about it are worth recording, because both were forced rather than
 chosen. It opens **its own obs-websocket connection**, so the operator types the
 host, port and password a second time — Companion modules each own their
@@ -862,18 +870,21 @@ requires module source to be MIT, so the plugin's `-or-later` cannot be carried
 across. The manifest states the distribution licence, which is what an installer
 sees.
 
-Since then the plugin has been driven against a real OBS, and the module is
-tagged **v0.1.0** in its own repository. Two things are still open, and neither
-is code: it has not run a whole event, and it is not in the Companion store yet —
-until it is, Companion loads it as a *developer module* (a directory set in the
-launcher's Developer section; each folder in it with a `companion/manifest.json`
-is one module), and that needs **Companion 4.0 or later**.
+Since then both ends have been driven for real: the plugin against an OBS, and
+the module against an OBS and a campus player. The module is tagged **v0.2.0**.
+Two things are still open, and neither is code: nothing has yet run a whole
+event, and the module is not in the Companion store — until it is, Companion
+loads it as a *developer module* (a directory set in the launcher's Developer
+section; each folder in it with a `companion/manifest.json` is one module), and
+that needs **Companion 4.0 or later**.
 
-**Two names still differ from the appliance's**, and are worth bringing together:
-the plugin's `decoder/return-to-live` and `decoder/load-event` against the
-appliance's `/api/follow-live` and `/api/load`. The plugin's are already served
-to the v0.1.8 pages, so unifying them is a change to both surfaces at once
-rather than a rename in one place.
+**Two names still differ from the appliance's** — the plugin's
+`decoder/return-to-live` and `decoder/load-event` against the appliance's
+`/api/follow-live` and `/api/load`. The Companion module maps them, so nothing
+an operator sees depends on the two being brought together any more: it is
+tidiness now, not a gap. The plugin's names are already served to the v0.1.8
+pages, so unifying them is a change to both surfaces at once rather than a
+rename in one place.
 
 ---
 
@@ -958,7 +969,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Re-encoding an HEVC feed for a streaming site | not built; an SRT destination carries HEVC unchanged instead (§8.2) |
 | Hosted streaming provider (Mux / Cloudflare Stream), persistent player embed, provider-side simulcast | planned (§8.2.1) |
 | External control API (obs-websocket vendor requests, §8.3) | built — every command of both halves, with vendor events |
-| Bitfocus Companion module (buttons, feedbacks, variables) | built — [companion-module-obs-multisite](https://github.com/stageaudioworks/companion-module-obs-multisite); not yet submitted to the store |
+| Bitfocus Companion module (buttons, feedbacks, variables) | built — [companion-module-obs-multisite](https://github.com/stageaudioworks/companion-module-obs-multisite), driving OBS or a campus player; not yet in the store |
 | Control from a Stream Deck via OBS hotkey triggers | available now, no parameters or feedback |
 | Web / mobile simulcast from the same files | planned; CMAF makes it feasible |
 | Scheduling / auto-go-live | planned — for the relay as well as the encoder |
@@ -983,8 +994,9 @@ Multi-bucket mirroring has graduated from a direction to explore into Phase 9
 Each phase leaves the project in a testable, usable state. Phases 1–5 are
 built and have been run end to end. Phases 6 and 7 are built but have not yet
 carried an event. Phase 8 is built — the vendor API and the Companion module —
-and has been driven against a real OBS, though not through a whole event.
-Phases 9–14 have not been started.
+and both have been driven against a real OBS, the module also against a real
+campus player, though nothing has yet run a whole event. Phases 9–14 have not
+been started.
 
 - **Phase 1 — Reliability core.** ✅ Durable upload queue, retry/backoff, checksums,
   resume-after-crash, decoder cache with verification, and stale detection. This
@@ -1026,9 +1038,10 @@ Phases 9–14 have not been started.
   plugin is an obs-websocket vendor request, mirroring the control pages name for
   name and driven through one shared command layer; and a Bitfocus Companion
   module provides the buttons, feedbacks, variables and presets (§8.3). What is
-  left is not code: it has been driven against a real OBS but not through a whole
-  event, and the module is not in the Bitfocus store yet. Hotkey-based control
-  from Companion works as well, and needs nothing.
+  left is not code: it has been driven against a real OBS and a real campus
+  player but has not run a whole event, and the module is not in the Bitfocus
+  store yet. Hotkey-based control from Companion works as well, and needs
+  nothing.
 
 - **Phase 9 — Redundant storage.** ⬜ Upload to two independent S3 targets, so a
   provider outage, a regional failure, an account lockout or an accident in one
