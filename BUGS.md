@@ -139,6 +139,32 @@ than inside `Program Files`, where writing needs elevation.
 
 ## Recently landed (context, not action items)
 
+- **Decoder seek accuracy and the timeline readout** — on `main` after
+  `v0.1.12-alpha`, so it needs release notes before the next tag, and two parts
+  are operator-visible. **Seeking now lands on the moment asked for and says
+  so**, within a millisecond, verified against a live event: asked 14:40:43.768,
+  reported 14:40:43.769. It previously started playing from the position just
+  left, ran on for seconds, then jumped somewhere else and reported a time up to
+  a whole segment early. **"Behind live" no longer swings by six seconds** — it
+  was a count of segments on both sides and is now the gap between two real
+  times, so a two-minute delay reads as two minutes instead of flicking between
+  1:54 and 2:00. Also: the decode dock's playhead is interpolated between state
+  refreshes rather than stepping twice a second, and its header is split into
+  what this box is doing (`PLAYING`/`HELD`/`STOPPED`/`READY`) and what the main
+  site is doing — Hold on a finished recording previously showed no indication
+  at all.
+
+  Getting there took five broken attempts in one afternoon, each found by the
+  operator rather than the suite, because nothing tested this path. The rules
+  now live in `src/core/playout_timeline.h` as one ordered decision the delivery
+  loop calls, with `tests/test_playout_timeline.cpp` failing on every one of
+  those five. **Known residual, not fixed:** a segment's `at_ms` and its media
+  pts disagree by up to ~61s on an event whose encoder has restarted, so
+  `seq x duration` is not interchangeable with `at_ms`. Seeks are unaffected —
+  `at_ms` is used consistently at both ends — but three places still fall back
+  to the estimate for segments outside the manifest window, and that is a
+  minute-scale error waiting for a seek into one of them.
+
 - **`v0.1.12-alpha`** — released 2026-09-11, tagged on `3bca35c`. The release
   body is `.github/RELEASE-NOTES.md` read at the tag, so the notes commit has to
   land *before* the tag: writing the notes and tagging in one push publishes the
