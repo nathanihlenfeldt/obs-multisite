@@ -29,6 +29,7 @@
 
 #include <algorithm>
 #include <atomic>
+#include <cstdint>
 #include <cstdlib>
 #include <chrono>
 #include <ctime>
@@ -134,34 +135,46 @@ struct SourceCtx : DecoderControls {
     std::atomic<bool>     decoder_started{false};
     uint64_t              seen_discontinuity = 0;
 
-    // Realtime pacing. OBS's async buffer only holds a fraction of a second,
-    // so fragments must be fed at roughly the rate they play out — decoding
-    // as fast as the cache allows would hand OBS frames seconds into the
-    // future, which it drops (producing jumpy video).
-    int64_t  last_video_pts_ns = 0;
-    bool     logged_av_offset = false;
-
-    // ── A/V drift measurement ────────────────────────────────────────────────
-    // The delivery arithmetic cannot introduce relative A/V skew: both streams
-    // are timestamped base + (pts - first) from the SAME base and the SAME
-    // anchor, so the output difference is exactly the source difference. Any
-    // lipsync error therefore has to be in the pts themselves — which is why
-    // this measures them rather than the delivery.
+    // ── Delivery lead measurement ────────────────────────────────────────────
+    // Measured at the HANDOUT, not at the source. That distinction is the
+    // whole point, and it replaces two earlier metrics that were measured on
+    // the source side and were both misleading:
     //
-    // What matters is not the instantaneous gap (audio and video interleave
-    // within a fragment, so that is never zero) but whether the two timelines
-    // ADVANCE at the same rate. Equal spans mean a fixed offset, correctable
-    // with a constant. Diverging spans mean a clock-rate mismatch, which is
-    // what "slipping further" would look like and cannot be fixed with one.
+    //   "a/v gap/drift"  compared the two streams' pts spans. Since both are
+    //                    timestamped base + (pts - first) from the same base
+    //                    and the same anchor, that difference is identically
+    //                    the difference already present in the media. It can
+    //                    never show a fault we introduce. Its "drift" term
+    //                    actually reported the startup offset left by the
+    //                    anchor race, which is constant and harmless.
+    //   "a/v pts offset" compared an audio pts against whatever video frame
+    //                    had most recently been delivered. Video leaves the
+    //                    decoder with B-frame reorder plus frame-threading
+    //                    latency and audio leaves it 1:1, so those two are
+    //                    never contemporaneous. The number was noise.
     //
-    // Spans, not gaps. Reset whenever the anchor resets, because a seek makes
-    // any span across it meaningless.
-    std::atomic<int64_t> av_first_video_pts_ns{-1};
-    std::atomic<int64_t> av_last_video_pts_ns{-1};
-    std::atomic<int64_t> av_first_audio_pts_ns{-1};
-    std::atomic<int64_t> av_last_audio_pts_ns{-1};
-    std::atomic<uint64_t> av_video_frames{0};
-    std::atomic<uint64_t> av_audio_frames{0};
+    // Both were checked against ground truth and cleared: the stored segments
+    // hold video and audio aligned to within one AAC frame across minutes of
+    // an event, and the decoded rates match nominal exactly. So the media is
+    // right and the arithmetic is right, which leaves the only thing neither
+    // metric could see — whether a frame still has time in hand when we hand
+    // it over.
+    //
+    // lead = timestamp - now at the moment of obs_source_output_*. Positive
+    // means the frame arrived with time to spare. Decaying toward zero on one
+    // stream while the other holds is lipsync being introduced downstream of
+    // us, and is the same condition that makes the timeline sticky. The
+    // minimum matters more than the mean: the mean hides the frame that was
+    // late, and the late frame is the one that shows.
+    //
+    // Windowed — reset after every report, so each line describes the interval
+    // it covers rather than an average since startup that can never recover.
+    std::atomic<int64_t>  lead_video_sum_ns{0};
+    std::atomic<int64_t>  lead_video_min_ns{INT64_MAX};
+    std::atomic<uint64_t> lead_video_count{0};
+    std::atomic<int64_t>  lead_audio_sum_ns{0};
+    std::atomic<int64_t>  lead_audio_min_ns{INT64_MAX};
+    std::atomic<uint64_t> lead_audio_count{0};
     std::atomic<bool> checked_layout{false};
 
     // Resume watchdog: if no frames reach OBS shortly after a resume, dump
@@ -214,7 +227,12 @@ struct SourceCtx : DecoderControls {
     // the decoder's callbacks return immediately instead of waiting for space
     // that will never come.
     std::atomic<bool> flushing{false};
+    // Split by stream. A dropped video frame repeats the previous picture; a
+    // dropped audio frame is a hole you can hear. Lumping them together hid
+    // which of the two was happening — and nothing read the total anyway.
     std::atomic<uint64_t> frames_dropped{0};
+    std::atomic<uint64_t> dropped_video{0};
+    std::atomic<uint64_t> dropped_audio{0};
     std::atomic<uint64_t> last_resync_log_ns{0};
 
     // ── Immediate feedback ───────────────────────────────────────────────────
@@ -386,6 +404,7 @@ static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
     if (!space) {
         // Delivery is not keeping up (or is stopped). Drop this frame.
         ctx->frames_dropped++;
+        if (item.is_video) ctx->dropped_video++; else ctx->dropped_audio++;
         return;
     }
     ctx->dq.push_back(std::move(item));
@@ -546,6 +565,26 @@ static void deliver_loop(SourceCtx* ctx) {
             }
         }
 
+        // How much time did this frame have left when we handed it over?
+        // Sampled here, immediately before the output call, because every
+        // earlier point still has the wait loop and the seek-skip ahead of it.
+        {
+            const int64_t lead =
+                (int64_t)item.timestamp - (int64_t)os_gettime_ns();
+            if (item.is_video) {
+                ctx->lead_video_sum_ns += lead;
+                ctx->lead_video_count++;
+                // Plain load/store: the delivery loop is the only writer.
+                if (lead < ctx->lead_video_min_ns.load())
+                    ctx->lead_video_min_ns = lead;
+            } else {
+                ctx->lead_audio_sum_ns += lead;
+                ctx->lead_audio_count++;
+                if (lead < ctx->lead_audio_min_ns.load())
+                    ctx->lead_audio_min_ns = lead;
+            }
+        }
+
         if (item.is_video) {
             const DecodedVideoFrame& f = item.video;
             struct obs_source_frame frame = {};
@@ -614,10 +653,6 @@ static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
     item.is_video  = true;
     item.timestamp = multisite::playout_due_ns(
         ctx->playout_base_ns.load(), f.pts_ns, first);
-    ctx->last_video_pts_ns = f.pts_ns;
-    if (ctx->av_first_video_pts_ns.load() < 0) ctx->av_first_video_pts_ns = f.pts_ns;
-    ctx->av_last_video_pts_ns = f.pts_ns;
-    ctx->av_video_frames++;
     item.video     = f;              // owns its plane buffer (deep copy)
 
     ctx->width  = (uint32_t)f.width;
@@ -674,20 +709,6 @@ static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
 
     const uint64_t ts = multisite::playout_due_ns(
         ctx->playout_base_ns.load(), f.pts_ns, first);
-
-    // Report the audio/video pts offset once: a large value here is the
-    // signature of a stream-timing problem rather than a delivery problem.
-    if (for_us) {
-        if (ctx->av_first_audio_pts_ns.load() < 0) ctx->av_first_audio_pts_ns = f.pts_ns;
-        ctx->av_last_audio_pts_ns = f.pts_ns;
-        ctx->av_audio_frames++;
-    }
-
-    if (for_us && !ctx->logged_av_offset && ctx->last_video_pts_ns != 0) {
-        ctx->logged_av_offset = true;
-        mlog_info("source: audio/video pts offset %.3fs (should be near zero)",
-                  (double)(f.pts_ns - ctx->last_video_pts_ns) / 1e9);
-    }
 
     for (obs_source_t* dest : companions) {
         PendingFrame item;
@@ -893,32 +914,45 @@ static void poll_loop(SourceCtx* ctx) {
                           (unsigned long long)ctx->frames_out.load());
             }
 
-            // A/V drift. Both streams are timestamped from the same anchor,
-            // so the output difference IS the source difference — measuring
-            // the pts is measuring the lipsync.
+            // Delivery lead: how much time each stream had in hand at the
+            // handout, over the interval since the last report.
             //
-            // gap    the instantaneous offset. Never zero: audio and video
-            //        interleave within a fragment. A steady value is fine.
-            // drift  how much further apart the two timelines have grown
-            //        since the anchor. THIS is the number that matters. Near
-            //        zero means a fixed offset, correctable with a constant.
-            //        Growing means the clocks run at different rates, which
-            //        no constant can fix and which reads as sync slipping
-            //        further the longer it plays.
-            const int64_t vf = ctx->av_first_video_pts_ns.load();
-            const int64_t vl = ctx->av_last_video_pts_ns.load();
-            const int64_t af = ctx->av_first_audio_pts_ns.load();
-            const int64_t al = ctx->av_last_audio_pts_ns.load();
-            if (vf >= 0 && af >= 0 && vl > vf) {
-                const double v_span = (double)(vl - vf) / 1e9;
-                const double a_span = (double)(al - af) / 1e9;
-                mlog_info("source: a/v gap=%+.0fms drift=%+.0fms over %.0fs "
-                          "(video %.3fs / audio %.3fs, %llu v + %llu a frames)",
-                          (double)(al - vl) / 1e6,
-                          (a_span - v_span) * 1000.0,
-                          v_span, v_span, a_span,
-                          (unsigned long long)ctx->av_video_frames.load(),
-                          (unsigned long long)ctx->av_audio_frames.load());
+            // Healthy looks like both streams sitting near kMaxDeliveryLeadNs
+            // with a min that stays comfortably positive. The diagnosis is in
+            // the COMPARISON, not the absolute values:
+            //
+            //   video min decaying while audio holds   video is arriving late
+            //                                          — that is the lipsync,
+            //                                          and the sticky timeline
+            //   both decaying together                 delivery is behind as a
+            //                                          whole; look upstream at
+            //                                          fetch or decode
+            //   both steady and drops zero             we are handing OBS good
+            //                                          frames on time, so the
+            //                                          fault is past our
+            //                                          handoff (async
+            //                                          buffering)
+            //
+            // Drops are absolute totals, not windowed: what matters is whether
+            // they are moving at all, and which stream.
+            const uint64_t vn = ctx->lead_video_count.exchange(0);
+            const uint64_t an = ctx->lead_audio_count.exchange(0);
+            if (vn > 0 || an > 0) {
+                const int64_t vsum = ctx->lead_video_sum_ns.exchange(0);
+                const int64_t asum = ctx->lead_audio_sum_ns.exchange(0);
+                const int64_t vmin = ctx->lead_video_min_ns.exchange(INT64_MAX);
+                const int64_t amin = ctx->lead_audio_min_ns.exchange(INT64_MAX);
+                mlog_info("source: lead video mean=%+.0fms min=%+.0fms (%llu) | "
+                          "audio mean=%+.0fms min=%+.0fms (%llu) | "
+                          "dropped %llu v / %llu a",
+                          vn ? (double)vsum / (double)vn / 1e6 : 0.0,
+                          vn ? (double)vmin / 1e6 : 0.0,
+                          (unsigned long long)vn,
+                          an ? (double)asum / (double)an / 1e6 : 0.0,
+                          an ? (double)amin / 1e6 : 0.0,
+                          (unsigned long long)an,
+                          (unsigned long long)ctx->dropped_video.load(),
+                          (unsigned long long)ctx->dropped_audio.load());
             }
         }
 
@@ -984,15 +1018,14 @@ static void feed_loop(SourceCtx* ctx) {
                     ctx->pts_wall_offset_ms   = SourceCtx::kOffsetUnset;
                     ctx->restart_wall_ms      = 0;
                     ctx->restart_wall_pending = true;
-                    ctx->logged_av_offset = false;
-                    ctx->last_video_pts_ns = 0;
-                    // A seek makes any span across it meaningless.
-                    ctx->av_first_video_pts_ns = -1;
-                    ctx->av_last_video_pts_ns  = -1;
-                    ctx->av_first_audio_pts_ns = -1;
-                    ctx->av_last_audio_pts_ns  = -1;
-                    ctx->av_video_frames = 0;
-                    ctx->av_audio_frames = 0;
+                    // The lead window measures the current clock, and the
+                    // clock is about to be re-anchored.
+                    ctx->lead_video_sum_ns = 0;
+                    ctx->lead_video_count  = 0;
+                    ctx->lead_video_min_ns = INT64_MAX;
+                    ctx->lead_audio_sum_ns = 0;
+                    ctx->lead_audio_count  = 0;
+                    ctx->lead_audio_min_ns = INT64_MAX;
                     {
                         std::lock_guard<std::mutex> qlk(ctx->dq_mtx);
                         ctx->dq.clear();         // stale frames from the old timeline
