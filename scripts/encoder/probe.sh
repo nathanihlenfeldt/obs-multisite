@@ -34,13 +34,31 @@
 #                         without it the script prints the command and carries on
 #   --keep-raw            keep the captured frames (they are large)
 #   --upload-url URL      PUT the finished tarball here when the run ends
-#                         (or set PROBE_UPLOAD_URL). Off unless given.
+#                         (or set PROBE_UPLOAD_URL) instead of a file drop
+#   --no-upload           upload nothing; just write the tarball
 #
 # ── Getting the report back ───────────────────────────────────────────────────
 #
 # The board is in someone else's lab, most likely behind the Great Firewall,
-# and asking them to find and email a tarball is how reports go missing. So the
-# script can send it itself, to a URL you generate beforehand:
+# and asking them to find and email a tarball is how reports go missing.
+#
+# BY DEFAULT the script uploads the tarball to a public file drop and prints
+# the link, for whoever ran it to send back. That is one short line instead of
+# an attachment, it needs no account at either end, and — the reason it is the
+# default rather than a flag — it needs no argument, so it works for a vendor
+# who was already given the plain one-line command above.
+#
+# Two things follow from that, and both should be said to the vendor rather
+# than discovered:
+#
+#   * the board sends a file out. Nothing else in this script touches the
+#     network, so this is the exception, and --no-upload turns it off.
+#   * the link is unguessable but NOT private. Anyone holding it can read the
+#     report: board model, kernel, device lists, and any serial numbers the
+#     probes happened to print.
+#
+# Where that is not acceptable, --upload-url PUTs to a pre-signed URL instead
+# and nothing becomes public. Generate it beforehand:
 #
 #   export MULTISITE_S3_KEY=...  MULTISITE_S3_SECRET=...
 #   scripts/encoder/presign.py --endpoint https://ACCOUNT.r2.cloudflarestorage.com \
@@ -87,8 +105,14 @@ INSTALL_TOOLS=0
 KEEP_RAW=0
 # Never defaulted, and never committed with a value: this repository is public
 # and a pre-signed URL is a write capability. Env var so it can be passed
-# without appearing in the vendor's shell history.
+# without appearing in the vendor's shell history. When set, it is used instead
+# of the paste services below.
 UPLOAD_URL="${PROBE_UPLOAD_URL:-}"
+# Uploading is ON by default, which is unusual for a script that otherwise
+# touches nothing. It is deliberate: the command the vendor was given has no
+# arguments, so anything that has to be switched on will never run. --no-upload
+# turns it off, and the run is announced before anything leaves the machine.
+DO_UPLOAD=1
 
 usage() {
   cat <<'EOF'
@@ -102,6 +126,7 @@ usage: probe.sh [options]
   --install-tools       apt-get install v4l-utils and alsa-utils if missing
   --keep-raw            keep the captured frames (they are large)
   --upload-url URL      PUT the finished tarball here (or set PROBE_UPLOAD_URL)
+  --no-upload           do not upload anything; just write the tarball
   --help                this
 EOF
 }
@@ -121,6 +146,7 @@ while [ $# -gt 0 ]; do
     --keep-raw)          KEEP_RAW=1; shift ;;
     --upload-url)        UPLOAD_URL="${2:-}"; shift 2 ;;
     --upload-url=*)      UPLOAD_URL="${1#*=}"; shift ;;
+    --no-upload)         DO_UPLOAD=0; shift ;;
     -h|--help)           usage; exit 0 ;;
     *) printf 'probe.sh: unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -714,13 +740,154 @@ printf '    Report:    %s\n' "$REPORT"
 printf '    Send back: %s\n\n' "$_send"
 
 # ── Sending it back ──────────────────────────────────────────────────────────
-# A PUT to a pre-signed URL: no account at this end, no server at the other,
-# and no credentials anywhere in this file. See the note at the top.
+#
+# Nobody has an account on either end and nothing of ours is running anywhere,
+# so the tarball goes to a public file drop and the script prints the link for
+# whoever ran it to send back. Not automatic — it still needs that one paste —
+# but a short line is a great deal easier to get out of a lab than a tarball.
+#
+# Several services, tried in order, because which of these answer from inside
+# mainland China is not something that can be established from outside it. The
+# first one that returns a usable link wins; the report records which, so the
+# next board can start with the one that worked.
+#
+# What this means for the report: the link is unguessable but it is not
+# private. Anyone who has it can read the report — board model, kernel, the
+# device list, and any serial numbers those commands happened to print. That is
+# the trade for needing no account, and it is why the upload can be turned off.
+upload_to_paste() {
+  _file="$1"
+  _name=$(basename "$_file")
+  _url=""
+  _via=""
+
+  # Each entry is "name|host-that-must-appear-in-the-link". The host is not
+  # decoration: the first version of this scraped any URL out of the reply, and
+  # when curl failed a TLS handshake it matched the address inside curl's own
+  # error text and reported success with a link to curl's documentation. A
+  # wrong link is worse than no link, because nobody finds out until the report
+  # never arrives.
+  # litterbox first because its files expire. An anonymous catbox upload cannot
+  # be deleted afterwards — there is no handle to delete it with — so every
+  # report would sit publicly forever: board model, kernel, device list, and
+  # whatever serial numbers the probes happened to print, from a vendor
+  # relationship nobody asked to have indexed. 72h is its maximum and is long
+  # enough for a report somebody is waiting for; catbox stays as the fallback,
+  # because a permanent link still beats no report at all.
+  # The host to match is the one the link comes back on, which is not always
+  # the one uploaded to: litterbox takes the file at litterbox.catbox.moe and
+  # hands back a link on litter.catbox.moe. Matching the registered domain
+  # rather than the exact subdomain tolerates that — and still rejects the case
+  # this check exists for, a URL scraped out of curl's own error text.
+  for _entry in \
+      "litterbox|catbox.moe" \
+      "catbox.moe|catbox.moe" \
+      "file.io|file.io"
+  do
+    _svc="${_entry%%|*}"
+    _host="${_entry##*|}"
+    printf '    trying %s ... ' "$_svc"
+    _raw=""; _rc=0
+    case "$_svc" in
+      catbox.moe)
+        _raw=$(curl --silent --show-error --connect-timeout 20 --max-time 600 \
+                    -A "multisite-probe/$PROBE_VERSION" \
+                    -F "reqtype=fileupload" -F "fileToUpload=@${_file}" \
+                    "https://catbox.moe/user/api.php" 2>&1); _rc=$? ;;
+      litterbox)
+        # Same service as catbox, same API, but the file expires.
+        _raw=$(curl --silent --show-error --connect-timeout 20 --max-time 600 \
+                    -A "multisite-probe/$PROBE_VERSION" \
+                    -F "reqtype=fileupload" -F "time=72h" \
+                    -F "fileToUpload=@${_file}" \
+                    "https://litterbox.catbox.moe/resources/internals/api.php" \
+                    2>&1); _rc=$? ;;
+      file.io)
+        _raw=$(curl --silent --show-error --connect-timeout 20 --max-time 600 \
+                    -A "multisite-probe/$PROBE_VERSION" \
+                    -F "file=@${_file}" "https://file.io" 2>&1); _rc=$? ;;
+    esac
+
+    if [ "$_rc" -ne 0 ]; then
+      # curl itself failed — no route, DNS, TLS. Its output is an error
+      # message, not a reply, and must not be searched for a link.
+      printf 'no (curl %s: %s)\n' "$_rc" \
+             "$(printf '%s' "$_raw" | tr -d '\r' | head -1 | cut -c1-60)"
+      continue
+    fi
+
+    # Match the link rather than the sentence around it — each of these words
+    # it differently — but only a link at the host that service actually
+    # serves from, and never a management or delete handle.
+    _cand=$(printf '%s\n' "$_raw" \
+            | grep -Eo 'https://[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+' \
+            | grep -F "$_host" \
+            | grep -v -i -E 'manage|delete|admin|/rm/' \
+            | head -1)
+    case "$_cand" in
+      https://*)
+        printf 'ok\n'; _url="$_cand"; _via="$_svc"; break ;;
+      *)
+        # It answered, but not with a link we can use — an error page, a quota
+        # notice, or a format change. Show the first line of what it did say.
+        printf 'no (%s)\n' \
+               "$(printf '%s' "$_raw" | tr -d '\r' | head -1 | cut -c1-60)" ;;
+    esac
+  done
+
+  PASTE_URL="$_url"
+  PASTE_VIA="$_via"
+  [ -n "$_url" ]
+}
+
+# Two ways out, in order of preference:
+#
+#   --upload-url given   PUT straight to a pre-signed URL. Nothing for anyone
+#                        to forward, and the report is not public. Needs the
+#                        URL to have been generated and passed in.
+#   otherwise            upload to a public file drop and print the link for
+#                        whoever ran it to send back. Needs no account and no
+#                        argument, which is why it is the default: the command
+#                        the vendor has takes no options.
 #
 # This runs last and on purpose cannot fail the run. The tarball is already
-# written and its path already printed, so every path through here ends with
-# the operator able to send it by hand.
-if [ -n "$UPLOAD_URL" ]; then
+# written and its path already printed, so every path through here — including
+# both of them failing — ends with the operator able to send it by hand.
+if [ -z "$UPLOAD_URL" ] && [ "$DO_UPLOAD" = "1" ]; then
+  if [ ! -f "$TARBALL" ]; then
+    printf '    Upload:    skipped — no tarball to send (is tar installed?)\n\n'
+  elif ! have curl; then
+    printf '    Upload:    skipped — curl is not installed on this board\n\n'
+  else
+    _bytes=$(wc -c < "$TARBALL" 2>/dev/null || echo 0)
+    _mb=$(( _bytes / 1048576 ))
+    say "Uploading the report (${_mb} MB) so it can be sent back as a link"
+    if upload_to_paste "$TARBALL"; then
+      # Printed like this because it is the one thing that has to survive being
+      # read off a screen in somebody else's lab and pasted into a chat window.
+      printf '\n'
+      printf '    ============================================================\n'
+      printf '      SEND THIS LINK BACK:\n\n'
+      printf '        %s\n\n' "$PASTE_URL"
+      printf '      (uploaded via %s; the file is also at %s)\n' "$PASTE_VIA" "$_send"
+      printf '    ============================================================\n\n'
+      {
+        printf '\n--- sent back ---\n'
+        printf '  uploaded %s bytes via %s\n' "$_bytes" "$PASTE_VIA"
+        printf '  %s\n' "$PASTE_URL"
+      } >> "$REPORT"
+    else
+      printf '\n    Upload:    FAILED — none of the file drops answered.\n'
+      printf '               Nothing is wrong with the run. Send this file:\n'
+      printf '               %s\n\n' "$_send"
+      {
+        printf '\n--- sent back ---\n'
+        printf '  upload FAILED: no file drop answered (blocked, or no route out)\n'
+        printf '  the tarball is still here and can be sent by hand\n'
+      } >> "$REPORT"
+    fi
+  fi
+elif [ -n "$UPLOAD_URL" ]; then
   if [ ! -f "$TARBALL" ]; then
     printf '    Upload:    skipped — no tarball to send (is tar installed?)\n\n'
   elif ! have curl; then
