@@ -7,6 +7,8 @@
 #include "role_selector.h"
 #include "web_box.h"
 
+#include "../../core/position_interp.h"
+
 #include <obs-module.h>
 
 #include <QComboBox>
@@ -550,6 +552,14 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, &DecoderDock::refresh);
     m_timer->start(500);
+
+    // Repaint five times per state refresh so the playhead glides instead of
+    // stepping twice a second. This timer NEVER samples state — it only
+    // repaints from the model refresh() leaves behind, which is what keeps a
+    // single writer on the widgets.
+    m_smoothTimer = new QTimer(this);
+    connect(m_smoothTimer, &QTimer::timeout, this, &DecoderDock::paintPosition);
+    m_smoothTimer->start(100);
     refresh();
 }
 
@@ -772,7 +782,8 @@ void DecoderDock::refresh() {
         m_room->setText(tr_("Dock.NoSource"));
         m_state->setText(QString());
         m_playback->setText(QString());
-        m_behind->setText("—");
+        m_posValid = false;
+        paintPosition();
         m_net->setText("—");
         m_net->setStyleSheet(QString());
         m_error->hide();
@@ -885,60 +896,75 @@ void DecoderDock::refresh() {
             break;
     }
 
+    // ── Position model ───────────────────────────────────────────────────────
+    // Describe the readout; do not draw it. paintPosition() is the only writer
+    // of m_behind and the playhead, so that the smooth timer between refreshes
+    // cannot contradict this. See the note in the header for what happened the
+    // last time two timers shared those widgets.
+    //
     // Lead with the clock time being shown — the thing an operator can match
     // against what is happening in the room — and express the offset in plain
     // language rather than as a signed number.
+    m_posValid    = true;
+    m_posFixed    = true;
+    m_posAnimate  = false;
+    m_posVod      = false;
+    m_posBoundMs  = 0;
+    m_posTooltip  = QString();
+    m_posBaseMs     = (long long)s.playhead_ms;
+    m_posBaseWallMs = (long long)QDateTime::currentMSecsSinceEpoch();
+
     if (s.stopped) {
         // First, ahead of everything else: a stopped source is not downloading,
         // so every other line here would be describing a position that cannot
         // move. Showing "2 minutes behind" under a stopped button is the kind
         // of stale number an operator reasonably acts on.
-        m_behind->setText(tr_("Dock.Stopped"));
-        m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #8b9198;");
-        m_behind->setToolTip(QString());
+        m_posText  = tr_("Dock.Stopped");
+        m_posStyle = "font-size: 18px; font-weight: 500; color: #8b9198;";
     } else if (s.seek_target_ms > 0) {
         // A jog or a timeline click. The position updates instantly; the
         // wording makes clear the picture has not caught up yet, so the
         // operator is neither left wondering nor misled.
-        m_behind->setText(tr_("Dock.GoingTo").arg(clock_time(s.seek_target_ms)));
-        m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #3b82c4;");
+        m_posText  = tr_("Dock.GoingTo").arg(clock_time(s.seek_target_ms));
+        m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
     } else if (s.loading) {
-        m_behind->setText(tr_("Dock.LoadingRecording"));
-        m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #3b82c4;");
+        m_posText  = tr_("Dock.LoadingRecording");
+        m_posStyle = "font-size: 18px; font-weight: 500; color: #3b82c4;";
     } else if (s.ended) {
         // A finished recording: show where you are in it and how much is left.
-        // "Behind live" is meaningless once there is no live edge to be behind.
-        // How far through the recording, out of its total length — the way a
-        // media player reads. "Behind live" means nothing once the event has
-        // finished, and the total length is what an operator actually wants
-        // when deciding whether it will fit the slot.
-        const long long elapsed = (s.started_ms > 0 && s.playhead_ms > s.started_ms)
-            ? (s.playhead_ms - s.started_ms) : 0;
-        const QString pos = position(elapsed) +
-            (s.total_ms > 0 ? "  /  " + position(s.total_ms) : QString());
-        if (s.at_end) {
-            m_behind->setText(pos + "   " + tr_("Dock.AtEnd"));
-            m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #8b9198;");
-        } else {
-            m_behind->setText(pos);
-            m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #8fd3b4;");
-        }
-        // The clock time of the recorded moment stays available, just smaller.
-        m_behind->setToolTip(tr_("Dock.Showing").arg(clock_time(s.playhead_ms)));
+        // How far through, out of its total length — the way a media player
+        // reads. "Behind live" means nothing once the event has finished, and
+        // the total length is what an operator actually wants when deciding
+        // whether it will fit the slot.
+        m_posFixed     = false;
+        m_posVod       = true;
+        m_posAtEnd     = s.at_end;
+        m_posStartedMs = (long long)s.started_ms;
+        m_posTotalMs   = (long long)s.total_ms;
+        // A recording cannot play past its own end, so interpolation must not
+        // walk past it either. Only a bound we actually know.
+        if (s.started_ms > 0 && s.total_ms > 0)
+            m_posBoundMs = (long long)s.started_ms + (long long)s.total_ms;
+        // Animate only while it is genuinely running: not held, and not
+        // already sitting at the end.
+        m_posAnimate = s.playing && !s.paused && !s.at_end;
     } else if (s.head > s.live_edge && s.live_edge > 0) {
         // Caught right up: nothing new has been published yet. This is normal
         // and must not look like a fault.
-        m_behind->setText(tr_("Dock.WaitingForMain"));
-        m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #8fd3b4;");
+        m_posText  = tr_("Dock.WaitingForMain");
+        m_posStyle = "font-size: 18px; font-weight: 500; color: #8fd3b4;";
     } else if (s.behind_live_s < 1.0) {
-        m_behind->setText(tr_("Dock.ShowingNow"));
-        m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #8fd3b4;");
+        m_posText  = tr_("Dock.ShowingNow");
+        m_posStyle = "font-size: 18px; font-weight: 500; color: #8fd3b4;";
     } else {
-        m_behind->setText(tr_("Dock.Showing").arg(clock_time(s.playhead_ms))
-                          + "  —  "
-                          + tr_("Dock.BehindBy")
-                              .arg(friendly_duration(s.behind_live_s)));
-        m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #e0a020;");
+        // Behind live and playing: the clock time advances second by second,
+        // which is the case that made the 500ms step visible in the first place.
+        m_posFixed   = false;
+        m_posVod     = false;
+        m_posBehindS = s.behind_live_s;
+        // The live edge is the furthest this can meaningfully go.
+        if (s.live_ms > 0) m_posBoundMs = (long long)s.live_ms;
+        m_posAnimate = s.playing && !s.paused && !s.buffering;
     }
 
     // Timeline entirely in clock time now, with the real downloaded ranges.
@@ -959,7 +985,6 @@ void DecoderDock::refresh() {
             ? (s.room_state == 1 /* offline */ ? tr_("Dock.TimelineOffline")
                                                : tr_("Dock.TimelineNothing"))
             : tr_("Dock.TimelineWaiting"));
-    m_timeline->setPlayhead(s.playhead_ms);
     m_timeline->setDownloaded(s.cached_spans);
     {
         std::vector<long long> mt;
@@ -1061,6 +1086,78 @@ void DecoderDock::refresh() {
     }
 
     refreshEvents(s);
+
+    // Draw once now with this fresh sample, rather than leaving the readout a
+    // tick behind whenever state changes. The smooth timer takes it from here.
+    paintPosition();
+}
+
+// The only writer of m_behind and the playhead.
+void DecoderDock::paintPosition() {
+    if (!m_posValid) {
+        m_behind->setText("—");
+        m_behind->setToolTip(QString());
+        m_timeline->setPlayhead(0);
+        return;
+    }
+
+    const long long head = livePlayheadMs();
+    m_timeline->setPlayhead(head);
+
+    // QLabel::setText and TimelineBar::setPlayhead both no-op on an unchanged
+    // value, but setStyleSheet re-parses the sheet every call — at ten calls a
+    // second that is pure waste, so it is guarded by hand.
+    const auto style = [this](const char* css) {
+        if (m_posAppliedStyle == QLatin1String(css)) return;
+        m_posAppliedStyle = QLatin1String(css);
+        m_behind->setStyleSheet(m_posAppliedStyle);
+    };
+
+    if (m_posFixed) {
+        if (m_posAppliedStyle != m_posStyle) {
+            m_posAppliedStyle = m_posStyle;
+            m_behind->setStyleSheet(m_posAppliedStyle);
+        }
+        m_behind->setText(m_posText);
+        m_behind->setToolTip(m_posTooltip);
+        return;
+    }
+
+    if (m_posVod) {
+        const long long elapsed =
+            (m_posStartedMs > 0 && head > m_posStartedMs) ? head - m_posStartedMs : 0;
+        const QString pos = position(elapsed) +
+            (m_posTotalMs > 0 ? "  /  " + position(m_posTotalMs) : QString());
+        if (m_posAtEnd) {
+            style("font-size: 18px; font-weight: 500; color: #8b9198;");
+            m_behind->setText(pos + "   " + tr_("Dock.AtEnd"));
+        } else {
+            style("font-size: 18px; font-weight: 500; color: #8fd3b4;");
+            m_behind->setText(pos);
+        }
+        // The clock time of the recorded moment stays available, just smaller.
+        m_behind->setToolTip(tr_("Dock.Showing").arg(clock_time(head)));
+        return;
+    }
+
+    // Behind live. Only the clock time advances between samples; how far behind
+    // we are does not, because the live edge is moving at the same rate.
+    style("font-size: 18px; font-weight: 500; color: #e0a020;");
+    m_behind->setText(tr_("Dock.Showing").arg(clock_time(head))
+                      + "  —  "
+                      + tr_("Dock.BehindBy").arg(friendly_duration(m_posBehindS)));
+    m_behind->setToolTip(QString());
+}
+
+long long DecoderDock::livePlayheadMs() const {
+    if (!m_posAnimate) return m_posBaseMs;
+    // A refresh period and a half. The rule itself lives in core and is tested
+    // there — see position_interp.h for why it is not written inline here.
+    static constexpr long long kMaxExtrapolationMs = 750;
+    return multisite::interpolate_position(
+        m_posBaseMs, m_posBaseWallMs,
+        (long long)QDateTime::currentMSecsSinceEpoch(),
+        m_posBoundMs, kMaxExtrapolationMs);
 }
 
 } // namespace multisite_obs

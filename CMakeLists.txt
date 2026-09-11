@@ -92,6 +92,13 @@ add_test(NAME timebase COMMAND test_timebase)
 add_executable(test_playout_clock tests/test_playout_clock.cpp)
 target_link_libraries(test_playout_clock PRIVATE multisite_core)
 add_test(NAME playout_clock COMMAND test_playout_clock)
+
+# Where the dock's playhead reads between state samples. Header-only and free
+# of Qt, so the arithmetic that once froze the dock is checked without a
+# display — which is how it got shipped broken the first time.
+add_executable(test_position_interp tests/test_position_interp.cpp)
+target_link_libraries(test_position_interp PRIVATE multisite_core)
+add_test(NAME position_interp COMMAND test_position_interp)
 add_test(NAME reliability COMMAND test_reliability)
 
 # The core is shared with the planned headless appliance, which links neither

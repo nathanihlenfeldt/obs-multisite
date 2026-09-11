@@ -75,6 +75,10 @@ public:
 
 private slots:
     void refresh();
+    // Paints the position readout and the playhead. The ONLY writer of either,
+    // called both by refresh() with a fresh sample and by the smooth timer in
+    // between — see the note on the position model below for why that matters.
+    void paintPosition();
     void onStart();
     void onSaveSettings();
     void onOpenSettings();
@@ -94,6 +98,52 @@ private slots:
     void onEventActivated();
 
 private:
+    // ── Position model ───────────────────────────────────────────────────────
+    // refresh() runs twice a second, which is visibly steppy on a scrub bar
+    // next to something that plays video for a living. So the playhead is
+    // interpolated between samples — but the FIRST attempt at that shipped a
+    // frozen timer and an apparently dead Play button, and the shape of the
+    // fix is the important part.
+    //
+    // That version had two timers writing m_behind and the playhead directly:
+    // refresh() every 500ms and a smooth tick every 100ms. The fast one always
+    // had the last word, so a single bad interpolation input overwrote the
+    // correct value five times per refresh and the display stuck there
+    // permanently — with the backend healthy and refresh() running the whole
+    // time, which is exactly why it was so hard to find. Play was working too;
+    // it just had no way to show it.
+    //
+    // Hence one writer. refresh() only ever updates this model; paintPosition()
+    // is the only thing that touches the widgets. A bad input can now produce
+    // at most one wrong frame, which the next refresh corrects, instead of a
+    // display no amount of correct state can reach.
+    //
+    // The second safeguard is that extrapolation is bounded relative to the
+    // last authoritative sample rather than to some absolute end-of-recording
+    // value. If refresh() ever stops, the readout settles a fraction of a
+    // second past the last real number instead of being pinned to a clamp
+    // computed from something else entirely — which is what the old
+    // upper-bound clamp did.
+    bool      m_posValid   = false;   // false: no source, show a dash
+    bool      m_posFixed   = true;    // true: m_posText is the whole answer
+    bool      m_posAnimate = false;   // does the playhead move between samples?
+    long long m_posBaseMs     = 0;    // authoritative playhead…
+    long long m_posBaseWallMs = 0;    // …and the wall-clock time it was taken
+    long long m_posBoundMs    = 0;    // never interpolate past this; 0 = none
+    QString   m_posText, m_posStyle, m_posTooltip;
+    // Last stylesheet actually applied. setStyleSheet re-parses on every
+    // call and does not no-op on an unchanged value, unlike setText.
+    QString   m_posAppliedStyle;
+    // Animated variants need these to re-render their text each tick.
+    bool      m_posVod   = false;     // finished recording: elapsed / total
+    bool      m_posAtEnd = false;
+    long long m_posStartedMs = 0, m_posTotalMs = 0;
+    double    m_posBehindS = 0;
+
+    // The interpolated playhead right now, or the plain sample when not
+    // animating. Clamped both ways — see the note above.
+    long long livePlayheadMs() const;
+
     // Rebuilds the recordings list from the current listing. Separate from
     // refresh() only because that function is already long.
     void refreshEvents(const DecoderSnapshot& s);
@@ -138,6 +188,9 @@ private:
     QLabel*      m_liveElsewhere = nullptr;
     QString      m_events_signature;
     QTimer* m_timer = nullptr;
+    // Repaints between state refreshes so the playhead glides rather than
+    // stepping twice a second. Paints only; it never samples state.
+    QTimer* m_smoothTimer = nullptr;
     size_t m_marker_count = 0;
 
     // Machine-wide storage settings, entered once here.
