@@ -139,9 +139,8 @@ than inside `Program Files`, where writing needs elevation.
 
 ## Recently landed (context, not action items)
 
-- **Decoder seek accuracy and the timeline readout** — on `main` after
-  `v0.1.12-alpha`, so it needs release notes before the next tag, and two parts
-  are operator-visible. **Seeking now lands on the moment asked for and says
+- **Decoder seek accuracy and the timeline readout** — released in
+  `v0.1.13-alpha`. Two parts are operator-visible. **Seeking now lands on the moment asked for and says
   so**, within a millisecond, verified against a live event: asked 14:40:43.768,
   reported 14:40:43.769. It previously started playing from the position just
   left, ran on for seconds, then jumped somewhere else and reported a time up to

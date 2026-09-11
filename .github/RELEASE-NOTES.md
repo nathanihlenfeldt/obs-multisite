@@ -30,6 +30,79 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.13-alpha
+
+Two things an operator does constantly — scrubbing to a moment, and reading how
+far behind the main site they are — now do what they say. Both were wrong in
+ways that are easy to work around once you know, and hard to trust around if
+you don't.
+
+### Scrubbing to a time goes there, and the clock agrees
+
+Choosing a time on the timeline used to start playing immediately from the
+position you had just left, run on for several seconds, jump somewhere else,
+and settle showing a time that was not the one you picked — on a long recording,
+minutes out. The picture and the readout disagreed, so neither could be
+trusted for lining up a cue.
+
+Underneath, the seek itself had been picking the right segment all along. What
+went wrong was everything built on top of it. A decoder holds several seconds
+of already-decoded pictures, and clearing the queue on a seek did not stop it
+handing those over — so the position you had left kept playing, and worse, the
+first of those frames defined the clock that every displayed time was then
+measured from. Because that mapping is learned once and kept, a single frame
+from the wrong place put the whole readout out for as long as playback
+continued.
+
+A frame now carries which timeline it belongs to, and anything from a position
+already left is discarded rather than believed. The clock is fixed to the
+fragment the seek landed on, which is what makes the reported time the
+requested one: measured against a live event, asking for 14:40:43.768 now
+reports 14:40:43.769.
+
+Seeking within a segment is also honest now. Segments are six seconds long and
+landing part-way into one means skipping the frames before your moment; the
+readout used to describe the start of the segment rather than where it had
+actually landed, up to six seconds early.
+
+### "Behind live" holds still
+
+The delay readout swung by six seconds while nothing about the delay had
+changed. It was counting whole segments on both sides, and each side steps
+independently as segments publish and playback advances.
+
+It is now the gap between two real times, so setting a two-minute delay reads
+as two minutes and stays there instead of flicking between 1:54 and 2:00. The
+main site's content advances continuously; we simply learn about it in six
+second pieces, so the live edge is carried forward between updates rather than
+waiting for the next one.
+
+### Smaller things in the decode dock
+
+The playhead is redrawn between state updates instead of stepping twice a
+second, so the scrub bar moves the way one should.
+
+The header is now two readings rather than one: what this box is doing —
+**PLAYING**, **HELD**, **STOPPED**, **READY** — and, separately, what the main
+site is doing. A single chip could only ever show one of them, so playing a
+finished recording read **BROADCAST ENDED** with nothing to say it was playing,
+and **Hold** on a finished recording showed no indication at all.
+
+### For anyone working on the decoder
+
+The rules governing what a decoded frame may do, and in what order, are now one
+tested component (`src/core/playout_timeline.h`) that the delivery loop calls,
+rather than several blocks whose order mattered and was not written down.
+Seeking broke five times in one afternoon getting here, every one of them found
+by an operator rather than the suite, because nothing tested that path;
+`tests/test_playout_timeline.cpp` fails on all five.
+
+One known limit, unchanged by this release: on an event whose encoder has been
+restarted, a segment's recorded wall-clock time and its position in the media
+can disagree by up to a minute. Seeking is unaffected, because the same measure
+is used at both ends, but the two are not interchangeable and a few places still
+estimate one from the other for segments outside the current manifest window.
+
 ## What's new in v0.1.12-alpha
 
 ### Holding the picture no longer hands the screen to the box's own address
