@@ -200,15 +200,21 @@ it lands.
 **Four files are edited by nearly every piece of work** — `BUGS.md`,
 `README.md`, `PROJECT-SCOPE.md` and `.github/RELEASE-NOTES.md`. Expect a rebase
 to reach them, and when it does, prefer appending your section to rewriting
-somebody else's paragraph to make room for it. `BUGS.md` entry 0 is shared
-state: it records what is on `main` and what is not yet written up in the
-release notes, so re-read it after fetching rather than trusting the copy read
-at the start of a session, and check whether the commit it describes is still
-the newest one.
+somebody else's paragraph to make room for it. `BUGS.md` entry 0 was shared
+state: while `v0.1.12-alpha` was waiting to be tagged it recorded what was on
+`main` and what was not yet written up in the release notes, and it went stale
+twice in one day — once naming a commit hash that a later amend had changed, once
+still saying the tag was pending after it had been cut. Re-read it after
+fetching rather than trusting the copy read at the start of a session, and check
+whether the commit it describes is still the newest one. The same discipline now
+lives in "Recently landed" near the bottom of that file, which is where released
+work goes once there is nothing left to act on.
 
 **Nothing here is local to one session.** A tag publishes a Windows plugin
 build and a container image to everyone who installs it, and a release deleted
-and re-cut is public twice. That is why `BUGS.md` entry 0 says to tag the
-current `main` and to check `gh release list` and `git tag -l` first — worth
-running in every session, not only one that intends to tag.
+and re-cut is public twice. Tag the current `main`, and check `gh release list`
+and `git tag -l` before you do — worth running in every session, not only one
+that intends to tag. `BUGS.md` kept that rule in a hold entry while
+`v0.1.12-alpha` waited to be tagged; with the release cut, the rule now lives in
+"Recently landed" at the bottom of that file.
 

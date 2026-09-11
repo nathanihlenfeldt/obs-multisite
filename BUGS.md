@@ -11,46 +11,7 @@ Last updated: 2026-09-11.
 
 ## Open
 
-### 0. v0.1.12-alpha: notes written, tag not yet cut
-
-**Status: ready to tag. Cutting the tag is the next action, not a pending
-decision.**
-
-`main` is 17 commits past `v0.1.11-alpha`, and `CMakeLists.txt` already reads
-`VERSION 0.1.12`, so the bump is not outstanding either. Three changes an
-operator would notice are now written up under "What's new in v0.1.12-alpha" in
-`.github/RELEASE-NOTES.md`: the Pi player's hold fix (`96c5d8c`, a held picture
-outranks the idle screen), Stop releasing the picture (`814cacf`, `4baad6a`), and
-the decode dock's header split into playback and source (`61b03fd`) — the last
-two in one section, since the chip is where Stop becomes legible. Everything
-else merged since the last release is decoder/lipsync measurement — delivery
-queue bounding per stream, the playout clock and its test, and the drift
-measurement that replaced two misleading metrics — which changes no operator's
-day and is deliberately not in the notes. Its reasoning lives in the entries
-below; this file is explicitly not a changelog.
-
-The wording collision this entry used to flag is settled: the hold-fix section
-said "**Stop** and waiting are unchanged", which read as a claim about Stop and
-would have contradicted the new section in the same release. It now reads
-"unchanged *in this respect*", scoped to the screen rule it actually discusses.
-
-**The order matters when tagging.** The release body is `--notes-file
-.github/RELEASE-NOTES.md` as checked out *at the tag*, so the notes commit must
-be pushed and tagged in that order — writing the notes and tagging in one push
-would publish the previous release's body, with the new sections sitting in the
-tagged tree but not in the release anyone reads.
-
-Tag the current `main`, not a fix commit in isolation: the tree only builds as a
-whole. A tag pushed from a commit that is not an ancestor of `main` builds the
-plugin and the container against that commit and creates the GitHub release as
-soon as the tag lands, so a mistake here is public before it is noticed: `gh
-release delete <tag> --yes --cleanup-tag` plus `git push origin
-:refs/tags/<tag>` is the way back, as happened once on 2026-09-11 before the tag
-was cut properly.
-
----
-
-### 1. Pi player: playback can stall indefinitely while downloads keep succeeding
+### 0. Pi player: playback can stall indefinitely while downloads keep succeeding
 
 **Status: root cause not found. Needs a live thread-dump on next repro.**
 
@@ -107,7 +68,7 @@ Save the output into this entry before doing anything else.
 
 ---
 
-### 2. Encoder can hang the same way the decoder used to on shutdown
+### 1. Encoder can hang the same way the decoder used to on shutdown
 
 **Status: known, not fixed. Fix shape is understood; not built.**
 
@@ -149,7 +110,7 @@ the decoder fix, to avoid quietly widening what was meant to be one fix.
 
 ---
 
-### 3. The Windows install instructions point at the location OBS has deprecated
+### 2. The Windows install instructions point at the location OBS has deprecated
 
 `docs/OPERATOR.md` tells Windows operators to copy the `obs-plugins` and `data`
 folders into the OBS install directory, "typically `C:\Program Files\obs-studio\`",
@@ -178,7 +139,38 @@ than inside `Program Files`, where writing needs elevation.
 
 ## Recently landed (context, not action items)
 
-- **`658cd5f`** — the decoder shutdown-hang fix and `test_s3_cancel`, above.
+- **`v0.1.12-alpha`** — released 2026-09-11, tagged on `3bca35c`. The release
+  body is `.github/RELEASE-NOTES.md` read at the tag, so the notes commit has to
+  land *before* the tag: writing the notes and tagging in one push publishes the
+  previous release's body, with the new sections in the tagged tree but absent
+  from the release anyone reads. Tag the current `main`, never a commit in
+  isolation — the tree only builds as a whole. A tag that has to be withdrawn is
+  `gh release delete <tag> --yes --cleanup-tag` plus `git push origin
+  :refs/tags/<tag>`, and the re-cut is public a second time, as happened on
+  2026-09-11 before this one was cut properly.
+- **`96c5d8c`** — the Pi player's hold fix (a held picture outranks the idle
+  screen) and its four-boolean rule, `test_idle_screen`.
+- **`814cacf`, `4baad6a`** — Stop releases the picture: in-flight requests
+  cancelled, the poll loop stopped, the decoder released, the cache deliberately
+  kept. `resume_pending()` undoes `cancel_pending()`; `stopped` became a state of
+  its own rather than a reading of `!playing`, because loading is also not playing
+  and loading has to download.
+- **`61b03fd`** — the decode dock's header split into two labels, playback and
+  source, so neither can misstate the other. `READY` is new.
+- **`9361cca`, `6b5c812`, `bd60b61`, `207182d`** — decoder/lipsync measurement:
+  the delivery queue bounded per stream, the delivery lead measured at the
+  handout, A/V drift measured rather than reasoned about, and the unsigned cast
+  cleared as a suspect (it wraps in the cast and again in the addition; the two
+  cancel bit-for-bit). The lipsync cause itself is still open.
+- **`0bc1036`** — reverted `a40aad5` and `0444fe9`, a night's decoder UX. Nathan
+  saw a frozen timer, a state reading stopped while video played, and Play doing
+  nothing, on a build carrying them, and the live status endpoint showed a
+  healthy core by every measure available. Known-good beats a build nobody can
+  account for. Two things from that session are worth re-landing deliberately:
+  Play is disabled precisely because playback is already running, and the badge
+  for a pinned recording reports the *event's* state rather than the *playback*
+  state.
+- **`658cd5f`** — the decoder shutdown-hang fix and `test_s3_cancel`.
 - **`ca41a99`** — `m_head` wasn't reset when the session's followed event
   changed, only the "is it seated" flag was — so switching events (or a
   room going live again after ending) could report the OLD event's
@@ -187,7 +179,7 @@ than inside `Program Files`, where writing needs elevation.
   the Pi player both. Confirmed working correctly on the Pi player: after
   a `BROADCAST ENDED` → `LIVE` transition, `head` correctly reset to `0`
   rather than staying frozen at the old event's position (separate from
-  the still-open stall in item 1 above, which happens *before* any such
+  the still-open stall in item 0 above, which happens *before* any such
   transition, while continuing to play out the ended recording).
 - **`96ef6d0`** — the playing clock could pair a fragment's wall time with
   a different fragment's pts after a jump. Fixed with a once-per-decoder

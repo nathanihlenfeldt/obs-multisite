@@ -337,7 +337,7 @@ out of scope, and the relay cannot re-encode.</summary>
   entry point exists in `libobs` or `obs-frontend-api`. The Windows instructions
   also still use the install-directory layout OBS has said it will stop reading.
   Both are Phase 15 in the [Roadmap](#roadmap), and the second is written up as
-  [BUGS.md entry 3](BUGS.md).
+  [BUGS.md entry 2](BUGS.md).
 - **Not yet used for a real event.** A six-hour soak has been run (see
   [Status](#status)) but no congregation has watched anything through this. The
   soak covered sustained upload, timeslipping and playout; it did not cover a
