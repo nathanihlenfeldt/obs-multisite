@@ -1,0 +1,400 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Install guide — OBS Multisite</title>
+<meta name="description" content="Get a main campus broadcasting and a satellite campus receiving in about twenty minutes. Covers the bucket, the retention rule, the OBS plugin on Windows, macOS and Linux, and the Raspberry Pi campus player.">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%234cc2ff'/></svg>">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="4.5" r="3" fill="currentColor"/>
+        <circle cx="4.5" cy="19" r="3" fill="currentColor" opacity=".55"/>
+        <circle cx="19.5" cy="19" r="3" fill="currentColor" opacity=".55"/>
+        <path d="M12 7.5v4m0 0L5.5 16M12 11.5L18.5 16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      OBS Multisite
+    </a>
+    <nav>
+      <a href="./#features" class="hide-sm">Features</a>
+      <a href="./#cases" class="hide-sm">Use cases</a>
+      <a href="./#status" class="hide-sm">Status</a>
+      <a href="install.html">Install</a>
+      <a class="cta" href="https://github.com/stageaudioworks/obs-multisite">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero" style="padding:64px 0 48px">
+  <div class="wrap">
+    <span class="pill"><span class="dot"></span> {{TAG}}</span>
+    <h1 style="max-width:20ch">Get broadcasting in about twenty minutes.</h1>
+    <p class="lede">
+      You will set up a bucket, install one plugin on both machines, go live at
+      the main campus, and receive at a satellite.
+    </p>
+  </div>
+</div>
+
+<section style="padding-bottom:40px">
+  <div class="wrap">
+    <p class="eyebrow">Before you start</p>
+    <h2>What you need</h2>
+
+    <div class="tablewrap">
+      <table>
+        <tr>
+          <th style="width:30%">Item</th><th>Detail</th>
+        </tr>
+        <tr>
+          <td><strong>OBS Studio 32.2.2</strong></td>
+          <td>At the main campus, and at each satellite that receives on a PC.</td>
+        </tr>
+        <tr>
+          <td><strong>An S3-compatible bucket</strong></td>
+          <td>Cloudflare R2 is the assumed default &mdash; it charges no egress,
+          which is what makes sending the same service to several campuses
+          affordable. AWS S3, Backblaze B2 and MinIO also work.</td>
+        </tr>
+        <tr>
+          <td><strong>A read <em>and</em> write token</strong></td>
+          <td>It must include <code>s3:ListBucket</code>. Cloudflare's
+          &ldquo;Object Read &amp; Write&rdquo; token has it; an object-scoped
+          token does not, and the recordings list will tell you so rather than
+          showing an empty list.</td>
+        </tr>
+        <tr>
+          <td><strong>Storage headroom</strong></td>
+          <td>Roughly <strong>2.7&nbsp;GB per hour</strong> of service at
+          6&nbsp;Mbps.</td>
+        </tr>
+      </table>
+    </div>
+
+    <p style="color:var(--text-3);font-size:15px;margin-top:24px">
+      This is alpha software &mdash; see
+      <a href="./#status">what has been tested</a> before a Sunday depends on
+      it.
+    </p>
+  </div>
+</section>
+
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Setup</p>
+    <h2>Four steps</h2>
+
+    <ol class="steps">
+
+      <!-- 1 -->
+      <li class="step">
+        <h3>Install the plugin on every machine</h3>
+        <p>Download the build for each platform from
+        <a href="https://github.com/stageaudioworks/obs-multisite/releases">Releases</a>,
+        and install it at the main campus and at every satellite. It is one
+        module containing both plugins &mdash; the same download does the
+        sending and the receiving.</p>
+
+        <div class="tabs" id="ostabs">
+          <div class="tablist" role="tablist">
+            <button role="tab" aria-selected="true"  aria-controls="p-win" id="t-win">Windows</button>
+            <button role="tab" aria-selected="false" aria-controls="p-mac" id="t-mac">macOS</button>
+            <button role="tab" aria-selected="false" aria-controls="p-lin" id="t-lin">Linux</button>
+          </div>
+
+          <div class="tabpanel" role="tabpanel" id="p-win" aria-labelledby="t-win">
+            <p>Download <a href="{{DL_WINDOWS}}"><code>{{FN_WINDOWS}}</code></a> and
+            copy the <code>obs-plugins</code> and <code>data</code> folders into
+            your OBS install directory &mdash; usually
+            <code>C:\Program Files\obs-studio\</code> &mdash; merging with what
+            is already there.</p>
+          </div>
+
+          <div class="tabpanel" role="tabpanel" id="p-mac" aria-labelledby="t-mac" hidden>
+            <p>Apple Silicon. Download <a href="{{DL_MACOS}}"><code>{{FN_MACOS}}</code></a>
+            and move <code>obs-multisite.plugin</code> into
+            <code>~/Library/Application Support/obs-studio/plugins/</code>.</p>
+            <p>Then <strong>clear the quarantine flag, or macOS will silently
+            refuse to load it</strong> &mdash; these builds are not signed yet:</p>
+<pre><code>xattr -dr com.apple.quarantine \
+  ~/Library/Application\ Support/obs-studio/plugins/obs-multisite.plugin</code></pre>
+          </div>
+
+          <div class="tabpanel" role="tabpanel" id="p-lin" aria-labelledby="t-lin" hidden>
+            <p>Download <a href="{{DL_LINUX}}"><code>{{FN_LINUX}}</code></a> and put
+            <code>obs-multisite.so</code> in
+            <code>~/.config/obs-studio/plugins/obs-multisite/bin/64bit/</code>
+            with <code>data/</code> alongside it.</p>
+          </div>
+        </div>
+
+        <p style="margin-top:18px">Restart OBS. You should now see
+        <strong>Multisite Encoder</strong> and <strong>Multisite Decoder</strong>
+        under <strong>View → Docks</strong>.</p>
+      </li>
+
+      <!-- 2 -->
+      <li class="step">
+        <h3>Set a retention rule &mdash; before your first broadcast</h3>
+        <div class="callout" style="margin-top:0">
+          <p><strong>Nothing in this project deletes anything.</strong> Without
+          a lifecycle rule, every service you ever broadcast stays in the bucket
+          for ever, and you pay for all of it.</p>
+        </div>
+        <p>In your storage provider's console, add a rule for the prefix
+        <code>events/</code> and another for <code>rooms/</code>, both deleting
+        objects after the same number of days. Seven days is the design
+        default.</p>
+        <p><strong>The rule is also your DVR depth</strong> &mdash; a campus can
+        rewind only as far as retention allows. If you want a campus to be able
+        to replay last month's service, retention has to cover last month.</p>
+      </li>
+
+      <!-- 3 -->
+      <li class="step">
+        <h3>Set up the main campus</h3>
+        <p>Open the <strong>Multisite Encoder</strong> dock →
+        <strong>Settings…</strong></p>
+        <ul class="clean">
+          <li>Enter the bucket details and pick a video encoder.</li>
+          <li>Choose a <strong>feed name</strong>. Every campus will type the
+          same one &mdash; it is how they find you.</li>
+          <li>Settings save as you type; there is no Apply button.</li>
+        </ul>
+        <p>Press <strong>Go live.</strong> The dock shows how much has been
+        sent, how much is waiting, and whether the link is healthy.</p>
+        <div class="callout good">
+          <p>If the internet drops, the encoder keeps recording to disk and
+          sends the backlog when it returns. Nothing is lost and nothing is
+          skipped.</p>
+        </div>
+        <p><strong>Stereo only? You are done with this step.</strong> For
+        production audio &mdash; main mix, mic ISOs, a click &mdash; enable the
+        tracks in OBS's own <strong>Settings → Output → Recording</strong>,
+        assign sources to tracks in <strong>Advanced Audio Properties</strong>,
+        then name them under <strong>Settings… → Track labels</strong> so the
+        campus sees &ldquo;Click&rdquo; and not &ldquo;Track 3&rdquo;.</p>
+      </li>
+
+      <!-- 4 -->
+      <li class="step">
+        <h3>Set up each satellite campus</h3>
+        <ul class="clean">
+          <li>Open the <strong>Multisite Decoder</strong> dock →
+          <strong>Settings…</strong> and enter the same bucket details. These
+          are stored per machine, so any source you add later is already
+          configured.</li>
+          <li>Add a <strong>Multisite Source (Decoder)</strong> to a scene and
+          enter the same feed name.</li>
+          <li>Press <strong>Load event</strong>, let the buffer fill, then
+          <strong>Play</strong> when you are ready.</li>
+          <li>Press <strong>Lock</strong> for the service so nothing gets
+          clicked by accident.</li>
+        </ul>
+        <p>Playback waits until a minute of the service is buffered before it
+        starts, so the picture never chases the live edge.</p>
+        <p>Each campus runs its own clock: <strong>hold</strong> the picture for
+        a local welcome, <strong>resume</strong>, then <strong>catch up to
+        now</strong> &mdash; or stay a set number of minutes behind live all
+        service. What one campus does has no effect on any other.</p>
+        <p>To play a past service instead, pick it from the
+        <strong>Recordings</strong> list. To add an ISO or the click, add a
+        <strong>Multisite Audio Track (Decoder)</strong> for the same feed
+        &mdash; it costs no extra download, because every track already arrives
+        in the same segment.</p>
+      </li>
+    </ol>
+  </div>
+</section>
+
+<!-- ======================= PI ======================= -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Alternative</p>
+    <h2>A campus without a PC</h2>
+    <p class="section-lede">
+      Instead of OBS at the satellite, a Raspberry&nbsp;Pi&nbsp;5 can be the
+      whole campus player: HDMI out to the screen, a splash and idle screen
+      between services, and a browser control panel on the church network. One
+      script installs it.
+    </p>
+    <pre><code>curl -fsSL --retry 5 \
+  https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/install.sh \
+  | sudo bash</code></pre>
+    <p>The appliance is driven from its own web page, or from a Stream Deck
+    through the
+    <a href="https://github.com/stageaudioworks/companion-module-obs-multisite">Companion
+    module</a>, which speaks to it directly over HTTP &mdash; no OBS involved at
+    the far end at all.</p>
+    <p>It can also put its sound onto the network as
+    <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/SATELLITE.md#aes67-audio-on-the-network">AES67</a>
+    rather than leaving it inside the HDMI picture, so the campus console takes
+    the feed with or without a screen attached. The same script sets it up.</p>
+    <p>Which to choose for a given room &mdash; PC or appliance &mdash; is set
+    out in
+    <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/SATELLITE.md">Choosing
+    a satellite</a>.</p>
+  </div>
+</section>
+
+<!-- ======================= THEN ======================= -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">Then, if you want it</p>
+    <h2>Beyond the basic path</h2>
+    <div class="grid">
+      <div class="card">
+        <h3>Stream to the public</h3>
+        <p style="margin-top:8px">The relay container reads the same files
+        already in your bucket and pushes them to YouTube, Facebook or any RTMP
+        or SRT destination &mdash; without uploading the service a second
+        time.
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/STREAMING.md">Streaming
+        to the public →</a></p>
+      </div>
+      <div class="card">
+        <h3>Control it from a phone</h3>
+        <p style="margin-top:8px">Both docks serve an operator page on your
+        church network &mdash; Go live and markers on the sending side; play,
+        hold, jog and the recordings list on the receiving side. The address is
+        in the dock under <strong>Settings → Remote control</strong>, port 8080
+        unless you change it. No password: the building's network is the
+        guard.</p>
+      </div>
+      <div class="card">
+        <h3>Put it on a Stream Deck</h3>
+        <p style="margin-top:8px">The Companion module gives you buttons that
+        light up &mdash; on air, held, behind live, link offline &mdash; for
+        either half, and for the Pi appliance.
+        <a href="https://github.com/stageaudioworks/companion-module-obs-multisite">Companion
+        module →</a></p>
+      </div>
+      <div class="card">
+        <h3>Download a finished service</h3>
+        <p style="margin-top:8px">Any completed service pulls down as a single
+        MP4 with every audio track intact &mdash; including services whose
+        encoder crashed part-way through.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= TROUBLE ======================= -->
+<section>
+  <div class="wrap">
+    <p class="eyebrow">If something is wrong</p>
+    <h2>Where to look first</h2>
+    <ul class="clean">
+      <li><strong>Read the OBS log.</strong> Help → Log Files → Show Log Files.
+      Both plugins log everything they do under <code>[multisite]</code>,
+      including why they refused something.</li>
+      <li><strong>An empty recordings list</strong> usually means the token
+      cannot <code>ListBucket</code>. The dock will say so rather than showing
+      you nothing.</li>
+      <li><strong>The plugin does not appear in View → Docks</strong> on macOS
+      &mdash; the quarantine flag is still set. Re-run the
+      <code>xattr</code> command in step 1 and restart OBS.</li>
+      <li><strong>The campus is a long way behind</strong> and not catching up
+      &mdash; that is timeslipping working. Press catch up to now.</li>
+    </ul>
+    <div class="callout info">
+      <p>A good bug report is a real contribution: much of what works well here
+      was fixed because somebody took the time to paste a log.
+      <a href="https://github.com/stageaudioworks/obs-multisite/issues">Open an
+      issue →</a></p>
+    </div>
+
+    <h3 style="margin-top:40px">Going deeper</h3>
+    <div class="tablewrap">
+      <table>
+        <tr><th style="width:44%">You want to…</th><th>Read</th></tr>
+        <tr><td>Install, configure and operate in depth</td>
+            <td><a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/OPERATOR.md">Operator guide</a></td></tr>
+        <tr><td>Choose between a PC and the Pi box</td>
+            <td><a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/SATELLITE.md">Choosing a satellite</a></td></tr>
+        <tr><td>Put the appliance's sound on the network</td>
+            <td><a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/SATELLITE.md#aes67-audio-on-the-network">AES67 audio</a></td></tr>
+        <tr><td>Send the service to YouTube or Facebook</td>
+            <td><a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/STREAMING.md">Streaming to the public</a></td></tr>
+        <tr><td>Build, test or contribute</td>
+            <td><a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/DEVELOPER.md">Developer guide</a></td></tr>
+        <tr><td>Read the design and storage protocol</td>
+            <td><a href="https://github.com/stageaudioworks/obs-multisite/blob/main/PROJECT-SCOPE.md">PROJECT-SCOPE</a></td></tr>
+      </table>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <h4>OBS Multisite</h4>
+        <p style="color:var(--text-3);margin:0;max-width:34ch">
+          Multisite church streaming through storage you own. Released under the
+          GPL-3.0-or-later in support of local churches.
+        </p>
+      </div>
+      <div>
+        <h4>Start</h4>
+        <a href="install.html">Install guide</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/releases">Downloads</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/OPERATOR.md">Operator guide</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/SATELLITE.md">Choosing a campus box</a>
+      </div>
+      <div>
+        <h4>Go further</h4>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/STREAMING.md">Public simulcast</a>
+        <a href="https://github.com/stageaudioworks/companion-module-obs-multisite">Companion module</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/PROJECT-SCOPE.md">Design &amp; protocol</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/DEVELOPER.md">Developer guide</a>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <a href="https://github.com/stageaudioworks/obs-multisite">Source on GitHub</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/issues">Report a bug</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/LICENSE">License</a>
+        <a href="https://www.stageaudioworks.com">Stage Audio Works</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>&copy; 2026 Stage Audio Works &middot; GPL-3.0-or-later</span>
+      <span>Site built from {{TAG}} &middot; {{BUILD_DATE}}</span>
+    </div>
+  </div>
+</footer>
+
+<script>
+// OS tabs. Defaults to the visitor's own platform; falls back to Windows.
+(function () {
+  var root = document.getElementById('ostabs');
+  if (!root) return;
+  var tabs = Array.prototype.slice.call(root.querySelectorAll('[role=tab]'));
+
+  function select(tab) {
+    tabs.forEach(function (t) {
+      var on = t === tab;
+      t.setAttribute('aria-selected', on ? 'true' : 'false');
+      document.getElementById(t.getAttribute('aria-controls')).hidden = !on;
+    });
+  }
+
+  tabs.forEach(function (t) {
+    t.addEventListener('click', function () { select(t); });
+  });
+
+  var ua = navigator.userAgent;
+  var guess = /Mac/i.test(ua) ? 't-mac' : /Linux|X11/i.test(ua) ? 't-lin' : 't-win';
+  var el = document.getElementById(guess);
+  if (el) select(el);
+})();
+</script>
+
+</body>
+</html>

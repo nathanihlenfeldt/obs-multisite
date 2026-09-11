@@ -1,0 +1,485 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OBS Multisite — multisite church streaming through storage you own</title>
+<meta name="description" content="Send a live church service from a main campus to any number of satellite campuses, over ordinary venue internet, using nothing but an S3 bucket you control. Two OBS Studio plugins. No subscription, no dedicated hardware, no inbound ports.">
+<meta property="og:title" content="OBS Multisite">
+<meta property="og:description" content="Multisite church streaming through storage you own. Two OBS Studio plugins, one bucket, any number of campuses.">
+<meta property="og:type" content="website">
+<link rel="stylesheet" href="assets/style.css">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><circle cx='16' cy='16' r='14' fill='%234cc2ff'/></svg>">
+</head>
+<body>
+
+<header class="nav">
+  <div class="wrap">
+    <a class="brand" href="./">
+      <svg width="22" height="22" viewBox="0 0 24 24" fill="none" aria-hidden="true">
+        <circle cx="12" cy="4.5" r="3" fill="currentColor"/>
+        <circle cx="4.5" cy="19" r="3" fill="currentColor" opacity=".55"/>
+        <circle cx="19.5" cy="19" r="3" fill="currentColor" opacity=".55"/>
+        <path d="M12 7.5v4m0 0L5.5 16M12 11.5L18.5 16" stroke="currentColor" stroke-width="1.6" stroke-linecap="round"/>
+      </svg>
+      OBS Multisite
+    </a>
+    <nav>
+      <a href="#features" class="hide-sm">Features</a>
+      <a href="#cases" class="hide-sm">Use cases</a>
+      <a href="#status" class="hide-sm">Status</a>
+      <a href="install.html">Install</a>
+      <a class="cta" href="https://github.com/stageaudioworks/obs-multisite">GitHub</a>
+    </nav>
+  </div>
+</header>
+
+<div class="hero">
+  <div class="wrap">
+    <span class="pill"><span class="dot"></span> {{TAG}}</span>
+    <h1>Multisite church streaming, through storage you own.</h1>
+    <p class="lede">
+      Send a live service from your main campus to any number of satellite
+      campuses over ordinary venue internet &mdash; using nothing but an
+      <strong>S3-compatible bucket you control</strong>.
+    </p>
+    <p class="lede">
+      Two OBS Studio plugins. No subscription, no dedicated encoder or decoder
+      hardware, no inbound ports at any site, and no company that can price you
+      out later.
+    </p>
+    <div class="btns">
+      <a class="btn btn-primary" href="install.html">Install guide &rarr;</a>
+      <a class="btn btn-ghost" href="{{RELEASE_URL}}">Download {{TAG}}</a>
+    </div>
+    <p class="hero-note">
+      Free software under the GPLv3. Built by the projects team at
+      <a href="https://www.stageaudioworks.com">Stage Audio Works</a>, a worship
+      AVL integrator working across Africa.
+    </p>
+  </div>
+</div>
+
+<!-- ======================= WHY ======================= -->
+<section id="why">
+  <div class="wrap">
+    <p class="eyebrow">Why this exists</p>
+    <h2>A solved problem &mdash; if you can reach the solutions.</h2>
+    <div style="display:grid;gap:34px;grid-template-columns:repeat(auto-fit,minmax(300px,1fr))">
+      <div>
+        <p>Multisite streaming is well served by commercial platforms, and the
+        teams behind them have earned their place. But those platforms are
+        largely unavailable outside the developed world &mdash; and where they
+        are available, the recurring cost can exceed a congregation's entire
+        annual AV budget.</p>
+        <p>This is a set of tools instead of a managed service. Nobody answers
+        the phone. In exchange: you own the storage, you own the content, and
+        the ongoing cost is a few dollars a month of object storage.</p>
+      </div>
+      <div>
+        <p>The design priority, in order, is <strong>reliability</strong>, then
+        quality, then simplicity &mdash; and <strong>latency last</strong>. A
+        campus that is a minute behind but never drops a frame is worth far
+        more than one that is two seconds behind and stutters.</p>
+        <p>Everything is written to disk before it is sent, sent again until
+        the bucket confirms it, and buffered deeply at the far end before it
+        plays. Minutes of the service sit at the campus in advance, so an
+        outage part-way through is something the congregation never sees.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= HOW ======================= -->
+<section id="how">
+  <div class="wrap">
+    <p class="eyebrow">How it works</p>
+    <h2>One upload. Any number of campuses.</h2>
+    <p class="section-lede">
+      The main site muxes OBS's encoded frames into CMAF segments and writes
+      them to a bucket. Each campus polls two small JSON files to find what is
+      live, then pulls segments down ahead of playback into a local cache.
+      There is no central server, no database and no vendor &mdash; the bucket
+      is a dumb file store, and all of the intelligence is at the edges.
+    </p>
+
+    <div class="flow">
+      <svg viewBox="0 0 900 260" role="img" aria-label="Main site uploads CMAF segments to an S3 bucket; campuses and an optional public relay pull them back down.">
+        <defs>
+          <marker id="ar" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto">
+            <path d="M0 0 L9 4.5 L0 9 z" fill="var(--text-3)"/>
+          </marker>
+        </defs>
+        <style>
+          .bx { fill: var(--ink-2); stroke: var(--line); stroke-width: 1.5; rx: 10; }
+          .bx-a { fill: color-mix(in srgb, var(--accent) 12%, var(--ink-2)); stroke: var(--accent); }
+          .t  { fill: var(--text); font: 600 15px var(--font); }
+          .s  { fill: var(--text-3); font: 400 12.5px var(--font); }
+          .ln { stroke: var(--text-3); stroke-width: 1.5; fill: none; marker-end: url(#ar); }
+          .lbl{ fill: var(--text-3); font: 500 11.5px var(--font); letter-spacing: .04em; }
+        </style>
+
+        <!-- main site -->
+        <rect class="bx" x="8" y="86" width="196" height="88"/>
+        <text class="t" x="28" y="118">Main campus</text>
+        <text class="s" x="28" y="138">OBS + encoder plugin</text>
+        <text class="s" x="28" y="156">Records to disk, then uploads</text>
+
+        <!-- arrow to bucket -->
+        <path class="ln" d="M210 130 H330"/>
+        <text class="lbl" x="228" y="120">HTTPS OUT</text>
+
+        <!-- bucket -->
+        <rect class="bx bx-a" x="338" y="72" width="200" height="116"/>
+        <text class="t" x="360" y="106">Your S3 bucket</text>
+        <text class="s" x="360" y="126">CMAF segments</text>
+        <text class="s" x="360" y="144">+ two small JSON files</text>
+        <text class="s" x="360" y="168">R2, S3, MinIO, Backblaze…</text>
+
+        <!-- arrows out -->
+        <path class="ln" d="M544 104 H600 Q616 104 616 88 V54 H676"/>
+        <path class="ln" d="M544 130 H676"/>
+        <path class="ln" d="M544 156 H600 Q616 156 616 172 V206 H676"/>
+        <text class="lbl" x="556" y="122">HTTPS IN</text>
+
+        <!-- campuses -->
+        <rect class="bx" x="684" y="24" width="208" height="60"/>
+        <text class="t" x="702" y="48">Campus A</text>
+        <text class="s" x="702" y="68">OBS + decoder plugin</text>
+
+        <rect class="bx" x="684" y="100" width="208" height="60"/>
+        <text class="t" x="702" y="124">Campus B</text>
+        <text class="s" x="702" y="144">Raspberry Pi player, no PC</text>
+
+        <rect class="bx" x="684" y="176" width="208" height="60"/>
+        <text class="t" x="702" y="200">Public simulcast</text>
+        <text class="s" x="702" y="220">YouTube, Facebook, SRT</text>
+      </svg>
+    </div>
+
+    <div class="callout info">
+      <p><strong>The invariant that makes it reliable:</strong> a segment is
+      listed in the manifest only <em>after</em> the bucket has confirmed it
+      stored. If a campus can see an entry, the object exists. Retries, crash
+      resume and deep buffering all build on that one rule.</p>
+    </div>
+
+    <h3 style="margin-top:34px">What it asks of your network</h3>
+    <p style="color:var(--text-2);max-width:66ch">
+      Very little, and deliberately so. Everything moves over ordinary HTTPS to
+      object storage. There are <strong style="color:var(--text)">no inbound
+      connections, no port forwarding, no static IP, no VPN</strong> and no
+      firewall rules to negotiate with a building's IT department. It works on
+      connections that would defeat a direct stream: mobile data, LEO satellite,
+      consumer fibre, and networks behind carrier-grade NAT. If a laptop at the
+      site can load a web page, it can usually send or receive a service.
+    </p>
+  </div>
+</section>
+
+<!-- ======================= FEATURES ======================= -->
+<section id="features">
+  <div class="wrap">
+    <p class="eyebrow">Features</p>
+    <h2>Built for the Sunday, not the demo.</h2>
+    <p class="section-lede">
+      Everything below is built and running today.
+    </p>
+
+    <div class="grid">
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M21 12a9 9 0 1 1-2.6-6.4"/><path d="M21 3v6h-6"/></svg></div>
+        <h3>Survives the outage</h3>
+        <p>Durable store-and-forward upload. Nothing is lost through a dropped
+        link, a crash, or a mid-service restart &mdash; the encoder keeps
+        recording to disk and sends the backlog when the connection returns.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/></svg></div>
+        <h3>Every campus on its own clock</h3>
+        <p>Hold the picture for a local welcome, resume, then catch up to live
+        &mdash; or sit a set number of minutes behind all service. Scrub back,
+        jump to a marker. What one campus does has no effect on any other.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 14v-4M8 18V6M13 21V3M18 16V8M22 13v-2"/></svg></div>
+        <h3>Production audio, six tracks</h3>
+        <p>Main mix, mic ISOs and a click travel inside the same fragment and
+        appear at the campus as separate sources &mdash; one download, one
+        playout clock. Label them once and the campus sees &ldquo;Click&rdquo;,
+        not &ldquo;Track 3&rdquo;.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="2" y="4" width="20" height="14" rx="2"/><path d="M8 21h8M12 18v3"/></svg></div>
+        <h3>A campus without a PC</h3>
+        <p>A Raspberry&nbsp;Pi&nbsp;5 appliance with HDMI output, a splash and
+        idle screen, and a browser control panel &mdash; installed by one
+        script. No OBS at the far end, nothing for a volunteer to click by
+        accident.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M5 12h14M12 5l7 7-7 7"/></svg></div>
+        <h3>Public simulcast<span class="tag">Relay</span></h3>
+        <p>A separate container reads the same segments and pushes them to
+        YouTube, Facebook or any RTMP destination &mdash; or over SRT to a
+        broadcast partner or hardware decoder. You never upload the service
+        twice.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="6" y="2" width="12" height="20" rx="2.5"/><path d="M11 18h2"/></svg></div>
+        <h3>Control it from a phone</h3>
+        <p>Both docks serve a plain-language operator page on the church
+        network. Drop a marker from the back of the room, check buffer depth
+        from a phone. No app to install.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><rect x="3" y="4" width="18" height="16" rx="2"/><path d="M3 9h18M9 9v11"/></svg></div>
+        <h3>Stream Deck and automation</h3>
+        <p>Every command is an obs-websocket vendor request, with events on
+        state change. The
+        <a href="https://github.com/stageaudioworks/companion-module-obs-multisite">Companion
+        module</a> puts them on a Stream Deck with buttons that light up &mdash;
+        on air, held, behind live, link offline &mdash; and drives the Pi
+        appliance directly too.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M4 6h16M4 12h16M4 18h10"/><circle cx="19" cy="18" r="2.5"/></svg></div>
+        <h3>Every service, watchable after</h3>
+        <p>The campus lists what the room has recorded &mdash; what is on air,
+        what finished, and what was cut short by an encoder that died. Even an
+        interrupted service plays back from the beginning as video on demand.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><ellipse cx="12" cy="5.5" rx="8" ry="3"/><path d="M4 5.5v13c0 1.7 3.6 3 8 3s8-1.3 8-3v-13"/><path d="M4 12c0 1.7 3.6 3 8 3s8-1.3 8-3"/></svg></div>
+        <h3>Storage you can keep tidy</h3>
+        <p>List the room's services with their sizes from the encoder dock and
+        delete one &mdash; or everything older than a chosen number of days
+        &mdash; with confirmation and a verification pass. The service on air is
+        never offered for deletion.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12"/><circle cx="12" cy="18" r="3"/><path d="M12 3a6 6 0 0 1 6 6M12 6a3 3 0 0 1 3 3"/></svg></div>
+        <h3>AES67 audio on the network</h3>
+        <p>The Pi appliance can put its sound onto the network as an AES67
+        stream instead of leaving it inside the HDMI picture, so the campus
+        console takes the feed whether or not a screen is attached.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 2l8 4v6c0 5-3.5 8.5-8 10-4.5-1.5-8-5-8-10V6z"/><path d="M9 12l2 2 4-4"/></svg></div>
+        <h3>Any OBS encoder</h3>
+        <p>CMAF segments from x264, NVENC, QuickSync or AMF, in H.264 or HEVC.
+        Whatever your main site already encodes with, on whatever GPU it already
+        has.</p>
+      </div>
+
+      <div class="card">
+        <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 3v18h18"/><path d="M7 15l4-5 3 3 5-7"/></svg></div>
+        <h3>Costs what storage costs</h3>
+        <p>About 2.7&nbsp;GB per hour of service at 6&nbsp;Mbps. On a provider
+        that charges no egress, sending the same service to ten campuses costs
+        the same as sending it to one.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= USE CASES ======================= -->
+<section id="cases">
+  <div class="wrap">
+    <p class="eyebrow">Use cases</p>
+    <h2>What churches actually do with it.</h2>
+    <p class="section-lede">
+      The shape of the tool follows one job &mdash; carrying a service from a
+      room with a production team to rooms without one. These are the ways that
+      job tends to show up.
+    </p>
+
+    <div class="cases">
+      <div class="case">
+        <div>
+          <h3>The satellite campus</h3>
+          <div class="who">The job it was built for</div>
+        </div>
+        <p>A congregation meets in a second building across town. The main
+        campus preaches live; the satellite takes the feed on a screen, runs its
+        own worship set before and after, and holds the picture while its own
+        host welcomes the room. Timeslipping means the satellite's service order
+        does not have to match the main site's minute for minute.</p>
+      </div>
+
+      <div class="case">
+        <div>
+          <h3>The church plant on a bad connection</h3>
+          <div class="who">Where commercial gear gives up</div>
+        </div>
+        <p>A new site on mobile data or LEO satellite, behind carrier-grade NAT,
+        with no static IP and no IT department. Because everything is outbound
+        HTTPS and the campus buffers minutes ahead, a link that would make a
+        direct stream unwatchable produces a picture the room never sees falter.</p>
+      </div>
+
+      <div class="case">
+        <div>
+          <h3>Overflow and second rooms</h3>
+          <div class="who">Same building, different space</div>
+        </div>
+        <p>A chapel, a youth room, a foyer screen. A Raspberry&nbsp;Pi appliance
+        per room is cheap enough to leave installed and simple enough that
+        nobody needs to operate it &mdash; it boots to an idle screen and picks
+        the service up on its own.</p>
+      </div>
+
+      <div class="case">
+        <div>
+          <h3>Public simulcast without a second upload</h3>
+          <div class="who">YouTube, Facebook, or a broadcast partner</div>
+        </div>
+        <p>The relay container reads the same segments already in the bucket and
+        pushes them out to RTMP or SRT, a few minutes behind on purpose. The
+        main site's uplink carries the service once, no matter how many places
+        it ends up.</p>
+      </div>
+
+      <div class="case">
+        <div>
+          <h3>Sound into the campus console</h3>
+          <div class="who">Where the room has a real PA</div>
+        </div>
+        <p>Six audio tracks arrive in the same download &mdash; programme mix,
+        mic ISOs, a click for the local band to play to. The campus engineer
+        mixes them in the room rather than taking whatever the main site's
+        stereo bus happened to be doing.</p>
+      </div>
+
+      <div class="case">
+        <div>
+          <h3>Watch it again on Tuesday</h3>
+          <div class="who">Archive, without an archive product</div>
+        </div>
+        <p>Every service is already sitting in the bucket as playable media.
+        A campus can replay a past one from the recordings list, and a finished
+        service downloads as a single MP4 with every audio track intact.</p>
+      </div>
+    </div>
+  </div>
+</section>
+
+<!-- ======================= STATUS ======================= -->
+<section id="status">
+  <div class="wrap">
+    <p class="eyebrow">Tested &mdash; {{TAG}}</p>
+    <h2>Six hours, 15&nbsp;GB, zero failures.</h2>
+    <p class="section-lede">
+      Run end to end between two machines against real Cloudflare R2, with the
+      Raspberry&nbsp;Pi campus player on real hardware.
+    </p>
+
+    <div class="stats">
+      <div class="stat"><span class="n">6 hrs</span><span class="l">continuous soak, end to end</span></div>
+      <div class="stat"><span class="n">3,661</span><span class="l">segments, over 15 GB uploaded</span></div>
+      <div class="stat"><span class="n">0</span><span class="l">retries and upload failures</span></div>
+      <div class="stat"><span class="n">0.0%</span><span class="l">lagged frames (10 of 658,837)</span></div>
+    </div>
+
+    <p style="color:var(--text-2);max-width:66ch;margin-top:26px">
+      Six audio tracks were carried throughout. Timeslipping held a campus a
+      steady two and then three minutes behind live for hours; a scrub back
+      nearly three hours and a return to live both recovered cleanly. Audio and
+      video stayed in sync across the whole run, with the reported A/V offset
+      holding between 0.005&nbsp;s and 0.021&nbsp;s through several decoder
+      restarts.
+    </p>
+
+    <h3 style="margin-top:40px">Worth knowing before you plan around it</h3>
+    <ul class="clean">
+      <li><strong>It is not low latency, and it is not two-way.</strong> The
+      delay is tens of seconds, by design &mdash; that is the trade that buys
+      the reliability. It cannot carry a live conversation between campuses or a
+      two-way interview; for that, use SRT or WebRTC, both already in OBS.</li>
+      <li><strong>Seeking is accurate to about a second</strong>, not to a
+      frame.</li>
+      <li><strong>The relay does not re-encode.</strong> An HEVC feed cannot
+      reach YouTube or Facebook, which want H.264 over RTMP; an SRT destination
+      carries HEVC unchanged. H.264 is the default and decodes everywhere,
+      Raspberry&nbsp;Pi campuses included.</li>
+      <li><strong>This is alpha, and no congregation has watched a service
+      through it yet.</strong> Run it with a fallback the first few times, and
+      treat a successful rehearsal as necessary rather than sufficient.</li>
+    </ul>
+    <p style="margin-top:22px">
+      The full picture &mdash; everything not yet proven, and the roadmap
+      through storage redundancy, SDI output tiers and a headless encoder
+      appliance &mdash; is kept in the repository under
+      <a href="https://github.com/stageaudioworks/obs-multisite#known-gaps">Known gaps</a>
+      and <a href="https://github.com/stageaudioworks/obs-multisite#roadmap">Roadmap</a>.
+    </p>
+  </div>
+</section>
+
+<!-- ======================= CTA ======================= -->
+<section id="get">
+  <div class="wrap" style="text-align:center">
+    <h2 style="margin-bottom:14px">Set it up this week.</h2>
+    <p class="section-lede" style="margin:0 auto 30px">
+      The install guide gets you broadcasting between two machines in about
+      twenty minutes. You need OBS Studio, a bucket, and a token that can read
+      and write it.
+    </p>
+    <div class="btns" style="justify-content:center">
+      <a class="btn btn-primary" href="install.html">Read the install guide &rarr;</a>
+      <a class="btn btn-ghost" href="https://github.com/stageaudioworks/obs-multisite/releases">All releases</a>
+    </div>
+  </div>
+</section>
+
+<footer>
+  <div class="wrap">
+    <div class="foot-grid">
+      <div>
+        <h4>OBS Multisite</h4>
+        <p style="color:var(--text-3);margin:0;max-width:34ch">
+          Multisite church streaming through storage you own. Released under the
+          GPL-3.0-or-later in support of local churches.
+        </p>
+      </div>
+      <div>
+        <h4>Start</h4>
+        <a href="install.html">Install guide</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/releases">Downloads</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/OPERATOR.md">Operator guide</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/SATELLITE.md">Choosing a campus box</a>
+      </div>
+      <div>
+        <h4>Go further</h4>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/STREAMING.md">Public simulcast</a>
+        <a href="https://github.com/stageaudioworks/companion-module-obs-multisite">Companion module</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/PROJECT-SCOPE.md">Design &amp; protocol</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/DEVELOPER.md">Developer guide</a>
+      </div>
+      <div>
+        <h4>Project</h4>
+        <a href="https://github.com/stageaudioworks/obs-multisite">Source on GitHub</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/issues">Report a bug</a>
+        <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/LICENSE">License</a>
+        <a href="https://www.stageaudioworks.com">Stage Audio Works</a>
+      </div>
+    </div>
+    <div class="foot-bottom">
+      <span>&copy; 2026 Stage Audio Works &middot; GPL-3.0-or-later</span>
+      <span>Site built from {{TAG}} &middot; {{BUILD_DATE}}</span>
+    </div>
+  </div>
+</footer>
+
+</body>
+</html>

@@ -1,0 +1,52 @@
+name: Site
+
+# The website is hand-written under site/; the build only fills in the current
+# release tag and its download links. Rebuild it whenever those two inputs
+# change — a page edit, or a new release — so the site never advertises a
+# version that is no longer the latest.
+on:
+  push:
+    branches: [main]
+    paths:
+      - 'site/**'
+      - 'CMakeLists.txt'
+      - '.github/workflows/site.yml'
+  release:
+    types: [published, released, edited, deleted]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+# Never cancel a deploy half-done; queue the next one behind it.
+concurrency:
+  group: pages
+  cancel-in-progress: false
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build the site
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: python3 site/build.py
+
+      - uses: actions/configure-pages@v5
+      - uses: actions/upload-pages-artifact@v3
+        with:
+          path: _site
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4
