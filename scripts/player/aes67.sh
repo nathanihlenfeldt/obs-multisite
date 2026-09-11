@@ -26,8 +26,11 @@
 #
 # What this is, honestly
 # ----------------------
-# A test build. It has not yet run on a Pi. Three things are known from reading
-# the vendor's package, and each is handled here rather than hoped for:
+# It has run on a bench Pi: the module builds, the daemon comes up, the card
+# appears, and eight channels of audio arrive. That is a bench, not an event,
+# so what follows is still the list of things handled here rather than things
+# proven, three of them known from reading the vendor's package before any of
+# it was run:
 #
 #   1. THE CARD DOES NOT ACCEPT FLOATING-POINT SAMPLES. Its only format is
 #      S32_LE. The player asks for FLOAT_LE and gives up if it cannot have it,
@@ -51,12 +54,14 @@
 # in a church means the sound quietly disappears one Tuesday and nothing on the
 # screen explains why. DKMS rebuilds it as part of the kernel upgrade instead.
 #
-# What it deliberately does not do, and cannot: it does not set up the far end.
-# Nothing in the vendor's configuration flow asks for a multicast address, a
-# port, or a channel map — those live behind their own route tool — so a Pi
-# that installs cleanly may still be sending something no receiver knows to
-# listen for. The notes printed at the end say so, because a silent success
-# here would be the most expensive kind.
+# What it deliberately does not do: it does not choose the destination. Nothing
+# in the vendor's configuration flow asks for a multicast address, a port, or a
+# channel map — those live behind their own route tool, on a computer — so the
+# Pi side can be perfect while a receiver that needs a particular address and
+# port still has not been told. Audio did arrive on the bench, so a receiver can
+# find the stream as it comes; what is open is aiming it somewhere specific. The
+# notes printed at the end say so, because a silent success here would be the
+# most expensive kind.
 #
 # Safe to run again: every step checks before it acts, and an existing player
 # configuration is edited rather than replaced.
@@ -1337,32 +1342,34 @@ note "$PASSES passed, $FAILS failed, $SKIPS skipped"
 echo
 say "What this has not checked, and cannot from here"
 note ""
-note "1. Whether the far end hears anything at all. That needs a receiver — a"
-note "   console, a computer running an AES67 monitor — on the same network, and"
-note "   somebody listening to it. Nothing on this box can stand in for that."
+note "The far end was not part of this run. On the bench the card appeared, the"
+note "player opened it and eight channels arrived, so these pieces do work"
+note "together — but that is a bench, not a service. Three things to watch, worst"
+note "first:"
 note ""
-note "2. Whether the far end knows to listen. This is the one to watch. The"
-note "   vendor's configuration flow asks for a rate, a channel count, a buffer,"
-note "   a PTP domain and an interface, and never asks for a multicast address, a"
-note "   port or a channel map — those are set through their route tool, which is"
-note "   a separate program on a computer. So a Pi that installed perfectly may"
-note "   still be sending a stream no receiver has been told about, and that looks"
-note "   exactly like a broken driver from the other end of the building."
+note "1. Whether the far end knows where to listen. The vendor's configuration"
+note "   flow asks for a rate, a channel count, a buffer, a PTP domain and an"
+note "   interface, and never asks for a multicast address, a port or a channel"
+note "   map — those are set through their route tool, a separate program on a"
+note "   computer. A receiver found the stream on the bench, but aiming it at a"
+note "   particular address and port is not something this box does, and a"
+note "   receiver that has not been told looks exactly like a broken driver from"
+note "   the other end of the building."
 note ""
-note "3. Lip sync over a long event. The card reports its position from the"
+note "2. Lip sync over a long event. The card reports its position from the"
 note "   daemon's millisecond counter and the player corrects from snd_pcm_delay()."
 note "   Whether that stays truthful over two hours is not something ten seconds of"
 note "   test tone can show. Watch a full service on the picture and the sound"
 note "   together before trusting it."
 note ""
-note "4. Whether PTP locks properly. AES67 wants the two ends within a"
+note "3. Whether PTP locks properly. AES67 wants the two ends within a"
 note "   millisecond, and a Pi's network interface does not timestamp packets in"
 note "   hardware, so the achievable accuracy is whatever the software gets. Watch"
 note "   it on the receiver, not here."
 echo
 
 if [ "$FAILS" -eq 0 ] && [ "$DRY_RUN" -eq 0 ]; then
-  note "If the far end is silent, the first thing to look at is item 2 above."
+  note "If the far end is silent, the first thing to look at is item 1 above."
   echo
 fi
 

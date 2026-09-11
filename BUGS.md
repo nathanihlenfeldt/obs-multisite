@@ -148,61 +148,78 @@ than inside `Program Files`, where writing needs elevation.
 
 ---
 
-### 3. AES67 audio: built, never run on a Pi
+### 3. AES67 audio: works on the bench, unproven over an event
 
-**Status: written, not exercised. Four things are unverified, listed worst first.**
+**Status: installed and passing audio on a bench Pi. Two points still need a
+real event and are listed first; the two after them were open questions the
+bench run has now answered, and are kept for the edges they do not cover.**
 
 `scripts/player/aes67.sh` installs Digisynthetic's virtual sound card so the
 player's audio goes onto the network as AES67 instead of staying inside the
 HDMI picture. It builds their kernel module, registers it with DKMS so a
 kernel update rebuilds it, installs their `DigiAes67Proc` daemon under
-systemd, stores the licence, and points the player at the new card. It has
-been dry-run on a laptop and its parts have been tested in isolation; it has
-not been run against the hardware.
+systemd, stores the licence, and points the player at the new card. It has now
+been run on a bench Pi: the module built, the daemon came up, the card appeared,
+the player opened it, and eight channels of audio arrived. That settles the
+questions about whether the pieces fit together; what it does not settle is
+anything that needs a real service, which is the first two points below. The
+operator-facing version of this is
+[docs/SATELLITE.md](docs/SATELLITE.md#aes67-audio-on-the-network).
 
 The vendor package it was written against is
 `linux-vsc-aarch64-1.0.1-20260529.zip`, sha256
 `f7c8e99f510cf362e7b15d736bb164ef7d547b8590b610ac502448544da46c31`, pinned in
 the script. Nothing from that package or any licence is committed.
 
-**1. Nothing tells the far end what to receive.** Their `--setup` asks for a
-sample rate, a channel count, a buffer, a PTP domain and an interface, and
-never asks for a multicast address, a port, a payload type or a channel map —
-those live behind their separate route tool, which looks like a PC-side
-configurator, and `_route` in `/etc/DigiAes67Proc/` is where it lands. So a Pi
-that installs cleanly may still transmit a stream no receiver has been told
-about, which from the other end of the building looks exactly like a broken
-driver. **Ask the vendor how the destination is specified**, before believing
-any "it works" report that only says the card appeared.
+**1. Nothing on the Pi tells the far end what to receive.** Their `--setup`
+asks for a sample rate, a channel count, a buffer, a PTP domain and an
+interface, and never asks for a multicast address, a port, a payload type or a
+channel map — those live behind their separate route tool, which looks like a
+PC-side configurator, and `_route` in `/etc/DigiAes67Proc/` is where it lands.
+Audio did arrive on the bench, so a receiver can find the stream as it comes;
+what is still open is how a *specific* destination is chosen, which is what a
+site landing on a fixed address and port in an existing console will need.
+**Ask the vendor how the destination is specified**, before commissioning a
+site where the address matters.
 
-**2. The card accepts only S32_LE; the player asks for FLOAT_LE.** Handled by
-using `plughw:` so alsa-lib's plug layer converts, and `plughw:` is already
-allow-listed by the web interface, so no C++ changed. Unverified: whether the
-plug layer's buffer negotiation satisfies the driver's exact-match check on
-`buffer_bytes_max`. If the player logs `audio out failed` with the daemon
-healthy, this is the first suspect — the escape hatch is an
-`/etc/asound.conf` with a pinned `pcm.plug` naming format, rate, channels,
-`period_size` and `buffer_size`, deliberately not shipped yet.
-
-**3. Start order decides whether the card works at all.** The card's rate and
-channel count are not in the module; both come from a page of shared memory
-the daemon fills in. A player that starts first opens a card advertising zero
-channels at zero hertz, refuses it, logs `audio out failed`, sets
-`m_audio_open = true` to avoid a retry storm, and **keeps running silently**.
-Encoded as a `multisite-player.service.d/aes67.conf` drop-in with
-`Wants=`/`After=DigiAes67Proc.service`. Unverified: that this is early enough
-in practice.
-
-**4. Lip sync and PTP.** The card reports playback position from the daemon's
+**2. Lip sync and PTP.** The card reports playback position from the daemon's
 millisecond counter and the player corrects from `snd_pcm_delay()`. Whether
 that holds sync over a two-hour event is not knowable from ten seconds of test
 tone. Separately, AES67 wants both ends within a millisecond and a Pi's NIC
 does no hardware timestamping, so the achievable PTP accuracy is whatever the
 software manages — measure it on the receiver, not on the Pi.
 
-**Next step:** run `sudo bash scripts/player/aes67.sh --package <zip>` on the
-Pi, then work through the four above in that order, with a real AES67 receiver
-on the network. The script writes a report of everything it could check to
+The two below were open questions when this script was first written, and the
+bench run has since answered them in the common case. They stay here because
+each has an edge it does not cover, and because a future failure will land on
+one of them.
+
+**3. The card accepts only S32_LE; the player asks for FLOAT_LE.** Handled by
+using `plughw:` so alsa-lib's plug layer converts, and `plughw:` is already
+allow-listed by the web interface, so no C++ changed. The bench run got audio
+out at 8 channels and 48 kHz, so the plug layer does satisfy the driver's
+exact-match check on `buffer_bytes_max` at those settings. Still unverified:
+that it holds for other rates, channel counts or buffer sizes, since the driver
+compares buffer sizes exactly. If the player logs `audio out failed` with the
+daemon healthy, this is the first suspect — the escape hatch is an
+`/etc/asound.conf` with a pinned `pcm.plug` naming format, rate, channels,
+`period_size` and `buffer_size`, deliberately not shipped yet.
+
+**4. Start order decides whether the card works at all.** The card's rate and
+channel count are not in the module; both come from a page of shared memory
+the daemon fills in. A player that starts first opens a card advertising zero
+channels at zero hertz, refuses it, logs `audio out failed`, sets
+`m_audio_open = true` to avoid a retry storm, and **keeps running silently**.
+Encoded as a `multisite-player.service.d/aes67.conf` drop-in with
+`Wants=`/`After=DigiAes67Proc.service`. The ordering held across reboots on the
+bench, so the drop-in works in the simple case. Still unverified: that it wins
+the race on a machine slow to bring the daemon up under load.
+
+**Next step:** watch a full-length service through it, on the picture and the
+sound together — that is the one thing a bench cannot stand in for, and it is
+what settles points 2 and 3 above. Point 1 is a question for the vendor rather
+than a test, and decides whether a receiver at a real site can be aimed at the
+stream. The script writes a report of everything it could check to
 `/var/tmp/multisite-aes67-<timestamp>/report.txt` and says out loud which
 checks it could not make.
 

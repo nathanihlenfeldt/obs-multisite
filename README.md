@@ -40,6 +40,7 @@ far more than one that is two seconds behind and stutters.
 | Get broadcasting in about twenty minutes | [QUICKSTART.md](QUICKSTART.md) |
 | Install, configure and operate in depth | [Operator guide](docs/OPERATOR.md) |
 | Choose between a PC and the Pi box | [Choosing a satellite](docs/SATELLITE.md) |
+| Put the appliance's sound on the network (AES67) | [AES67 audio](docs/SATELLITE.md#aes67-audio-on-the-network) |
 | Send the event to YouTube or Facebook | [Streaming to the public](docs/STREAMING.md) |
 | Control it from a Stream Deck | [Companion module](https://github.com/stageaudioworks/companion-module-obs-multisite) |
 | Build, test or contribute | [Developer guide](docs/DEVELOPER.md) |
@@ -183,6 +184,12 @@ but has not yet carried real encoder output.
 - **Multi-track production audio.** Up to 6 OBS tracks — main mix, ISOs, click —
   travel in the same fragment and are exposed at the satellite as separate
   sources, sharing one download and one playout clock.
+- **AES67 audio on the appliance.** A campus can put the player's sound onto the
+  network as an AES67 stream instead of leaving it inside the HDMI picture, so
+  its own console can take the feed whether or not a screen is attached. Built
+  on Digisynthetic's virtual sound card and installed by one script; it passes
+  eight channels on a bench Pi, but has not yet been through an event. See
+  [AES67 audio](docs/SATELLITE.md#aes67-audio-on-the-network).
 - **Event browsing.** The decoder lists what a room has recorded, shows which is
   on air, which are finished recordings and which were cut short by an encoder
   that died, and plays any of them back.
@@ -266,7 +273,8 @@ relay/          the public simulcast relay: a container that pushes the same
 tests/          every guarantee above has a test.
 cmake/          the driver scripts the muxer round-trip tests run through.
 test-data/      fixtures, and a note on how the CMAF ones are produced.
-scripts/player/ the install script and systemd unit for the appliance.
+scripts/player/ the install scripts and systemd units for the appliance,
+                including AES67 audio onto the network.
 scripts/        optional Lua control script, superseded by the encoder dock.
 ```
 
@@ -299,6 +307,13 @@ out of scope, and the relay cannot re-encode.</summary>
   Multi-track audio needs none of it, since each track is already its own
   source. On the appliance the packed channels go out of HDMI in order, which
   is what an eight-channel de-embedder expects.
+- **AES67 audio on the appliance is installed but unproven over an event.**
+  Eight channels were received on a bench Pi, so the card, the daemon and the
+  player's plumbing do work together. What is not measured is lip sync across a
+  two-hour service and the PTP accuracy a Pi's network interface can reach
+  without hardware timestamping; also, nothing on the Pi tells a receiver which
+  address and port to listen on — that is set through the vendor's own tool.
+  See [BUGS.md entry 3](BUGS.md).
 - **AV1 is carried but lightly exercised**, unlike H.264 and HEVC.
 - **Seeking is accurate to about a second**, not to a frame.
 - **The relay will not send an HEVC feed to a streaming site.** Those want
@@ -360,7 +375,9 @@ current.</summary>
 - **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
   tier and proven on a Pi 5, though not yet through an event — that tier is done.
   The rest is the hardware Phase 11 owns: DeckLink SDI output, which is §8.1's
-  production tier, and hardware-decoder selection on Pi 4.
+  production tier, and hardware-decoder selection on Pi 4. AES67 audio, which
+  puts the sound onto the network rather than leaving it in the picture, is
+  installed and passing eight channels on a bench Pi.
 - **Phase 7 — Extensions.** The public simulcast relay is built and has pushed
   live streams to YouTube; SRT in and out is in. Still to come: re-encoding,
   signing in to YouTube instead of pasting a stream key, and starting by itself.

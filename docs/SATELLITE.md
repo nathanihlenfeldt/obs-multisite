@@ -213,6 +213,92 @@ sudo multisite-player --config /etc/multisite-player/config.json --verbose
 hundred lines are also in the interface, under Log, for an operator with a
 phone and no SSH.
 
+### AES67 audio on the network
+
+Out of the box the sound leaves on the HDMI socket with the picture, so it
+reaches whatever is plugged into the Pi and nothing else. A campus that wants
+the sound on its own console — a separate feed, its own level control, working
+whether or not a screen is attached — needs it on the network, and on a church
+network that means AES67. `scripts/player/aes67.sh` installs Digisynthetic's
+virtual sound card so the player's audio arrives as an AES67 stream instead of
+staying inside the picture. The vendor's package has to be on the box first,
+and their licence with it:
+
+```bash
+# put linux-vsc-aarch64-1.0.1-20260529.zip and the licence on the box, then:
+sudo bash scripts/player/aes67.sh \
+    --package /home/pi/linux-vsc-aarch64-1.0.1-20260529.zip \
+    --license-file /home/pi/license.dat
+```
+
+Their package is served from a host in China, which is sometimes reachable from
+a campus and sometimes not, so `--package` — a zip copied across on a stick or
+by `scp` — is the reliable path; `--url` (or `VSC_URL=https://…`) downloads it
+instead when the box can reach it. On a box that has never seen this repository,
+fetch the script the way the player installer is fetched:
+
+```bash
+VSC_URL=https://…/linux-vsc-aarch64-1.0.1-20260529.zip \
+AES67_LICENSE_FILE=/home/pi/license.dat \
+  curl -fsSL https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/aes67.sh \
+  | sudo -E bash
+```
+
+Add `--with-player` to install the player in the same run, on a box that has
+neither yet. Every option that takes a value can also be passed as `VAR=value`,
+so the whole thing can be run without a terminal.
+
+- **One run does all of it.** The script builds their kernel module, registers
+  it with DKMS so a kernel update rebuilds it, installs their `DigiAes67Proc`
+  daemon under systemd, stores the licence, and points the player at the new
+  card. It is safe to run again: every step checks before it acts, and an
+  existing player configuration is edited rather than replaced. It writes a
+  report of everything it could check to
+  `/var/tmp/multisite-aes67-<timestamp>/report.txt`, and says out loud which
+  checks it could not make.
+- **The card is opened as `plughw:`, never `hw:`.** It accepts only S32_LE
+  samples and the player hands it floating point, so alsa-lib's plug layer does
+  the conversion. The driver gives the card no id, so ALSA truncates its name to
+  fifteen characters (`Digisyn_vSndCar`); the script reads the real name back
+  from `/proc/asound/cards` and writes `plughw:CARD=…` rather than guessing.
+  `plughw:` is already accepted by the player's own device list, so nothing in
+  the player's code changed for this.
+- **The order of two processes decides whether there is sound at all.** The card
+  has no rate and no channel count of its own; both are read out of a page of
+  shared memory that the *daemon* fills in. A player that starts first opens a
+  card advertising zero channels at zero hertz, refuses it, and carries on
+  running **silently**. A systemd drop-in starts the daemon first and orders the
+  player after it. Do not remove it.
+- **The daemon's settings are written the way their own binary writes them.**
+  The script fills in the sample rate, channel count, buffer, PTP domain and
+  interface in the format the daemon itself uses, then checks the result with
+  `--status` rather than assuming it took. To change one later, use
+  `sudo /usr/local/bin/DigiAes67Proc --setup`, and keep any change of rate or
+  channel count in step with `/etc/multisite-player/config.json`.
+- **A kernel update rebuilds the driver.** The vendor's own instructions make
+  that a hand step, which on an unattended box in a church means the sound
+  quietly disappears one Tuesday and nothing on the screen explains why. DKMS is
+  what prevents that; `--no-dkms` turns it off for a box where a manual rebuild
+  is preferred.
+- **The far end still has to be told what to listen for.** This is the one to
+  settle before a site goes live. Their Pi-side configuration flow asks for a
+  rate, a channel count, a buffer, a PTP domain and an interface, and never asks
+  for a multicast address, a port or a channel map — those live behind their
+  separate route tool, a PC-side program, and land in
+  `/etc/DigiAes67Proc/_route`. So a Pi can install perfectly and still transmit
+  a stream no receiver has been told about, which from the other end of the
+  building looks exactly like a broken driver. Confirm how the destination is
+  specified before trusting an install that only reports the card appeared.
+- **What is verified, and what is not.** On a bench Pi the module built, the
+  daemon came up, the card appeared, and eight channels of audio arrived. Not
+  yet verified: that lip sync holds across a two-hour service — the card reports
+  its playback position from the daemon's millisecond counter and the player
+  corrects from `snd_pcm_delay()`, which ten seconds of test tone cannot settle
+  — and how accurate PTP becomes, since a Pi's network interface does no
+  hardware timestamping, so it is whatever the software manages. Measure that at
+  the receiver, not on the Pi. The detail is in
+  [BUGS.md entry 3](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event).
+
 ## Remote control from a phone
 
 The decoder in OBS serves the same page the appliance does — play, hold, catch
