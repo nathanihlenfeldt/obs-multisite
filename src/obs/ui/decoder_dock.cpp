@@ -542,6 +542,15 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     m_timer = new QTimer(this);
     connect(m_timer, &QTimer::timeout, this, &DecoderDock::refresh);
     m_timer->start(500);
+
+    // 100ms: five times the state refresh, cheap for a widget this size, and
+    // enough that a playhead moving across even a short recording no longer
+    // visibly steps — which is what "500ms, twice a second" looked like on a
+    // scrub bar next to anything that plays video for a living.
+    m_smoothTimer = new QTimer(this);
+    connect(m_smoothTimer, &QTimer::timeout, this, &DecoderDock::tickSmooth);
+    m_smoothTimer->start(100);
+
     refresh();
 }
 
@@ -903,6 +912,28 @@ void DecoderDock::refresh() {
         m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #e0a020;");
     }
 
+    // Feed tickSmooth()'s interpolation from this exact, authoritative
+    // sample. Active only where the text just set above is a genuinely
+    // moving number — never mid-seek, mid-load, paused, at the live edge
+    // with nothing new yet, or once a recording has run out, all of which
+    // freeze here exactly as refresh() already freezes them.
+    m_smoothActive = s.playing && !s.paused && s.seek_target_ms == 0 &&
+                     !s.loading && !(s.ended && s.at_end) &&
+                     !(s.head > s.live_edge && s.live_edge > 0) &&
+                     (s.ended || s.behind_live_s >= 1.0);
+    if (m_smoothActive) {
+        m_smoothBaseMs       = (qint64)s.playhead_ms;
+        m_smoothBaseWallMs   = QDateTime::currentMSecsSinceEpoch();
+        m_smoothEnded        = s.ended;
+        m_smoothStartedMs    = s.started_ms;
+        m_smoothTotalMs      = s.total_ms;
+        m_smoothBehindSuffix = "  —  " + tr_("Dock.BehindBy")
+                                            .arg(friendly_duration(s.behind_live_s));
+        m_smoothUpperBoundMs = s.ended
+            ? (s.total_ms > 0 && s.started_ms > 0 ? s.started_ms + s.total_ms : 0)
+            : s.live_ms;
+    }
+
     // Timeline entirely in clock time now, with the real downloaded ranges.
     // A finished recording spans its WHOLE length — from the moment it started
     // to its true end — so the bar stops growing and the scale means something.
@@ -1015,7 +1046,16 @@ void DecoderDock::refresh() {
         m_audio->setToolTip(QString());
     }
 
-    if (!s.last_error.empty()) {
+    if (s.decoder_source_count > 1) {
+        // Rare and structural, not a fault — but every control on this dock
+        // acts on ALL Multisite Sources on this machine at once, while the
+        // dock only ever shows the first one, so it must never be silent.
+        m_error->setText(QString::number(s.decoder_source_count) +
+                         " decoder sources are on this machine — every "
+                         "control here acts on all of them, and this dock "
+                         "only shows the first one.");
+        m_error->show();
+    } else if (!s.last_error.empty()) {
         m_error->setText(QString::fromStdString(s.last_error));
         m_error->show();
     } else {
@@ -1023,6 +1063,28 @@ void DecoderDock::refresh() {
     }
 
     refreshEvents(s);
+}
+
+void DecoderDock::tickSmooth() {
+    if (!m_smoothActive) return;
+    qint64 interpolated = m_smoothBaseMs +
+        (QDateTime::currentMSecsSinceEpoch() - m_smoothBaseWallMs);
+    if (m_smoothUpperBoundMs > 0 && interpolated > m_smoothUpperBoundMs)
+        interpolated = m_smoothUpperBoundMs;
+
+    m_timeline->setPlayhead(interpolated);
+
+    if (m_smoothEnded) {
+        const long long elapsed =
+            (m_smoothStartedMs > 0 && interpolated > m_smoothStartedMs)
+                ? (interpolated - m_smoothStartedMs) : 0;
+        m_behind->setText(position(elapsed) +
+            (m_smoothTotalMs > 0 ? "  /  " + position(m_smoothTotalMs) : QString()));
+        m_behind->setToolTip(tr_("Dock.Showing").arg(clock_time(interpolated)));
+    } else {
+        m_behind->setText(tr_("Dock.Showing").arg(clock_time(interpolated)) +
+                          m_smoothBehindSuffix);
+    }
 }
 
 } // namespace multisite_obs
