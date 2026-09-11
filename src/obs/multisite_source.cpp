@@ -322,7 +322,7 @@ struct SourceCtx : DecoderControls {
     uint64_t feed_start_ns = 0;      // wall clock when this decoder started
     uint64_t pushed_media_ns = 0;    // media duration handed over so far
 
-    // Ordered delivery queue (see the note above kMaxQueuedFrames).
+    // Ordered delivery queue (see the note above kMaxQueuedVideo).
     std::deque<PendingFrame> dq;
     std::mutex               dq_mtx;
     std::condition_variable  dq_cv;
@@ -346,13 +346,33 @@ struct SourceCtx : DecoderControls {
 // order, and a dedicated thread releases them when they are nearly due. Audio
 // and video therefore stay together and neither starves the other.
 static constexpr uint64_t kMaxDeliveryLeadNs = 400000000ULL;   // 400 ms
-// The decoder now emits frames in presentation order (it sorts each
-// fragment's packets by timestamp before decoding), so this queue only needs
-// to smooth small jitter rather than absorb a track-ordering skew. Measured
-// against real captured segments, a window of 8 already gives zero audio
-// lateness; 16 leaves margin. At 720p an I420 frame is ~1.3 MB, so this caps
-// out around 21 MB instead of 60 MB.
-static constexpr size_t   kMaxQueuedFrames = 16;
+// Bounded PER STREAM, not as one total. A flat item count sounds equivalent
+// and is not: audio and video share this queue, and audio outnumbers video
+// per TRACK. Measured on a two-track event, audio ran 93.75 frames/s against
+// video's 30 — so of a flat 16 slots, audio held about twelve and video less
+// than four. That is ~130ms of video in flight when the pacing gate wants
+// 400ms, and it showed up exactly that way: audio was handed to OBS sitting
+// on the gate at +397ms while video limped in at +233ms, every window, with
+// video therefore the stream that would drop first under any hiccup.
+//
+// The scaling is the real argument. A flat bound makes audio's share grow
+// with TRACK COUNT, so the multi-track feature this plugin exists to provide
+// squeezes video harder the more you use it — four tracks would leave video
+// about two slots. Bounding each stream separately breaks that coupling:
+// video's allowance no longer depends on how many audio tracks a campus
+// takes.
+//
+// Sized from the gate rather than guessed: 12 video frames is 400ms at 30fps,
+// which is what kMaxDeliveryLeadNs is trying to hold. Audio frames are small
+// (an AAC frame is ~21ms of samples) so 48 costs almost nothing and covers
+// several tracks at once.
+//
+// Memory is now predictable, which the flat bound also failed at: the cap is
+// 12 video frames regardless of track count. At 1080p an I420 frame is
+// ~3.1 MB, so ~37 MB worst case — where a flat 64 would have risked 200 MB
+// had a stall filled it with video.
+static constexpr size_t   kMaxQueuedVideo = 12;
+static constexpr size_t   kMaxQueuedAudio = 48;
 // If frames fall further behind wall time than this, the playout clock is
 // re-anchored rather than dumping a backlog into OBS.
 static constexpr uint64_t kClockResyncThresholdNs = 2000000000ULL;   // 2 s
@@ -395,10 +415,22 @@ static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
     //
     // Dropping a frame is vastly preferable to hanging the application: the
     // decoder always makes progress, so join always returns.
+    // Counted on demand rather than tracked in parallel counters. The queue is
+    // at most 60 items and this runs a few hundred times a second, so the scan
+    // is free — and counters would have to be kept in step with the delivery
+    // loop's erase, every flush, and every dq.clear() on seek, which is how
+    // they drift out of step and stall the decoder against a phantom full
+    // queue.
+    const bool want_video = item.is_video;
     const bool space = ctx->dq_cv.wait_for(
-        lk, std::chrono::milliseconds(250), [ctx] {
-            return ctx->dq.size() < kMaxQueuedFrames || !ctx->running.load() ||
-                   ctx->flushing.load();
+        lk, std::chrono::milliseconds(250), [ctx, want_video] {
+            if (!ctx->running.load() || ctx->flushing.load()) return true;
+            const size_t n = (size_t)std::count_if(
+                ctx->dq.begin(), ctx->dq.end(),
+                [want_video](const PendingFrame& f) {
+                    return f.is_video == want_video;
+                });
+            return n < (want_video ? kMaxQueuedVideo : kMaxQueuedAudio);
         });
     if (!ctx->running.load() || ctx->flushing.load()) return;
     if (!space) {
