@@ -33,6 +33,38 @@
 #   --install-tools       apt-get install v4l-utils and alsa-utils if missing;
 #                         without it the script prints the command and carries on
 #   --keep-raw            keep the captured frames (they are large)
+#   --upload-url URL      PUT the finished tarball here when the run ends
+#                         (or set PROBE_UPLOAD_URL). Off unless given.
+#
+# ── Getting the report back ───────────────────────────────────────────────────
+#
+# The board is in someone else's lab, most likely behind the Great Firewall,
+# and asking them to find and email a tarball is how reports go missing. So the
+# script can send it itself, to a URL you generate beforehand:
+#
+#   aws s3 presign s3://BUCKET/encoder-probe/BOARD-DATE.tar.gz \
+#       --expires-in 604800 --endpoint-url https://YOUR-ENDPOINT
+#
+# That is a pre-signed PUT: it needs no account at the other end, no server of
+# yours running anywhere, and it carries no credentials — it is permission to
+# write one object, under one name, until it expires (seven days is the SigV4
+# maximum). Give it to the vendor as part of the command:
+#
+#   curl -fsSL https://raw.githubusercontent.com/.../probe.sh \
+#     | sudo bash -s -- --upload-url 'https://...'
+#
+# DO NOT commit a URL here or anywhere else in this repository. It is public,
+# and a pre-signed URL is a write capability for as long as it lives. One URL
+# per board, because the object name is part of what is signed and a second run
+# against the same URL overwrites the first.
+#
+# Reachability is worth one command before a ten-minute run — from the board:
+#
+#   curl -sS -o /dev/null -w '%{http_code} %{time_total}s\n' -T /dev/null 'URL'
+#
+# The upload never decides whether the run succeeded. The tarball is always
+# written locally and its path always printed, so a blocked or expired URL
+# costs nothing but the walk to the machine.
 #
 # Safe to run again: every run writes a fresh directory. Roughly ten to fifteen
 # minutes, most of it the temperature soak.
@@ -48,6 +80,10 @@ THERMAL_MINUTES=10
 DO_THERMAL=1
 INSTALL_TOOLS=0
 KEEP_RAW=0
+# Never defaulted, and never committed with a value: this repository is public
+# and a pre-signed URL is a write capability. Env var so it can be passed
+# without appearing in the vendor's shell history.
+UPLOAD_URL="${PROBE_UPLOAD_URL:-}"
 
 usage() {
   cat <<'EOF'
@@ -60,6 +96,7 @@ usage: probe.sh [options]
   --no-thermal          skip the temperature watch
   --install-tools       apt-get install v4l-utils and alsa-utils if missing
   --keep-raw            keep the captured frames (they are large)
+  --upload-url URL      PUT the finished tarball here (or set PROBE_UPLOAD_URL)
   --help                this
 EOF
 }
@@ -77,6 +114,8 @@ while [ $# -gt 0 ]; do
     --no-thermal)        DO_THERMAL=0; shift ;;
     --install-tools)     INSTALL_TOOLS=1; shift ;;
     --keep-raw)          KEEP_RAW=1; shift ;;
+    --upload-url)        UPLOAD_URL="${2:-}"; shift 2 ;;
+    --upload-url=*)      UPLOAD_URL="${1#*=}"; shift ;;
     -h|--help)           usage; exit 0 ;;
     *) printf 'probe.sh: unknown option: %s\n\n' "$1" >&2; usage >&2; exit 2 ;;
   esac
@@ -668,3 +707,53 @@ fi
 say "Done — $_p passed, $_f failed, $_s skipped, $_e said nothing"
 printf '    Report:    %s\n' "$REPORT"
 printf '    Send back: %s\n\n' "$_send"
+
+# ── Sending it back ──────────────────────────────────────────────────────────
+# A PUT to a pre-signed URL: no account at this end, no server at the other,
+# and no credentials anywhere in this file. See the note at the top.
+#
+# This runs last and on purpose cannot fail the run. The tarball is already
+# written and its path already printed, so every path through here ends with
+# the operator able to send it by hand.
+if [ -n "$UPLOAD_URL" ]; then
+  if [ ! -f "$TARBALL" ]; then
+    printf '    Upload:    skipped — no tarball to send (is tar installed?)\n\n'
+  elif ! have curl; then
+    printf '    Upload:    skipped — curl is not installed on this board\n\n'
+  else
+    # Show where it is going, without the signature. The query string IS the
+    # credential, and this output is likely to be pasted into an email.
+    _dest="${UPLOAD_URL%%\?*}"
+    _bytes=$(wc -c < "$TARBALL" 2>/dev/null || echo 0)
+    _mb=$(( _bytes / 1048576 ))
+    say "Sending the report back (${_mb} MB) — $_dest"
+
+    # Generous but bounded. A link out of a Chinese lab can be slow and can
+    # stall outright, and a probe that hangs here at the end of a ten-minute
+    # run is worse than one that gives up and says so. --retry covers the
+    # transient half of that; --max-time covers the rest.
+    _ulog="$OUT_DIR/upload.log"
+    if curl --fail --silent --show-error \
+            --connect-timeout 30 --max-time 900 \
+            --retry 4 --retry-delay 10 --retry-connrefused \
+            -T "$TARBALL" "$UPLOAD_URL" >"$_ulog" 2>&1; then
+      printf '    Upload:    sent (%s MB)\n\n' "$_mb"
+      {
+        printf '\n--- sent back ---\n'
+        printf '  uploaded %s bytes to %s\n' "$_bytes" "$_dest"
+      } >> "$REPORT"
+    else
+      _err=$(head -c 400 "$_ulog" 2>/dev/null)
+      printf '    Upload:    FAILED — %s\n' "${_err:-no output from curl}"
+      printf '               The run itself is fine. Send this file by hand:\n'
+      printf '               %s\n\n' "$_send"
+      {
+        printf '\n--- sent back ---\n'
+        printf '  upload to %s FAILED: %s\n' "$_dest" "${_err:-no output}"
+        printf '  (expired URL, no route out, or a proxy in the way — the\n'
+        printf '   tarball is still here and can be sent by hand)\n'
+      } >> "$REPORT"
+    fi
+    rm -f "$_ulog"
+  fi
+fi
