@@ -247,6 +247,15 @@ logs one line and carries on. obs-websocket ships with OBS 28 and later and is
 enabled in Tools → WebSocket Server Settings; there is nothing separate to
 install.
 
+**The ready-made module.** If you would rather not build the buttons by hand,
+there is one:
+[companion-module-obs-multisite](https://github.com/stageaudioworks/companion-module-obs-multisite)
+is a Bitfocus Companion module carrying every action above, the feedbacks that
+light a button while an event is live or a campus is held, behind live or
+offline, the variables, and a preset bank for each half. It asks for the host,
+port and password a second time, because each Companion module opens its own
+connection.
+
 > The decoder requests are these same names with `decoder/` in front, and the
 > appliance's own routes (`/api/play`, `/api/hold` and the rest) are the same
 > actions one machine further out. A control written against one is a small edit

@@ -41,6 +41,7 @@ far more than one that is two seconds behind and stutters.
 | Install, configure and operate in depth | [Operator guide](docs/OPERATOR.md) |
 | Choose between a PC and the Pi box | [Choosing a satellite](docs/SATELLITE.md) |
 | Send the event to YouTube or Facebook | [Streaming to the public](docs/STREAMING.md) |
+| Control it from a Stream Deck | [Companion module](https://github.com/stageaudioworks/companion-module-obs-multisite) |
 | Build, test or contribute | [Developer guide](docs/DEVELOPER.md) |
 | Read the design and storage protocol | [PROJECT-SCOPE.md](PROJECT-SCOPE.md) |
 
@@ -353,14 +354,14 @@ transcoder and a low-latency mode.</summary>
 - **Phase 7 — Extensions.** The public simulcast relay is built and has pushed
   live streams to YouTube; SRT in and out is in. Still to come: re-encoding,
   signing in to YouTube instead of pasting a stream key, and starting by itself.
-- **Phase 8 — External control API.** The vendor API is built: every command of
-  both halves is an obs-websocket vendor request (`obs-multisite.decoder/hold`
-  and the rest), with vendor events on state change and a `status` request for
-  polling, so Companion's OBS module can drive it today through *Custom Vendor
-  Request*. Still to come: a purpose-built Bitfocus Companion module for buttons
-  with feedbacks and variables, which is a separate deliverable. The thirteen
-  hotkeys the plugins already register can also be triggered from a Stream Deck
-  — without parameters or feedback.
+- **Phase 8 — External control API.** Both halves are built. Every command is an
+  obs-websocket vendor request (`obs-multisite.decoder/hold` and the rest), with
+  vendor events on state change and a `status` request for polling; and
+  [companion-module-obs-multisite](https://github.com/stageaudioworks/companion-module-obs-multisite)
+  puts them on a Stream Deck, with buttons that light up — on air, held, behind
+  live, link offline. The thirteen hotkeys the plugins already register can be
+  triggered from Companion as well, without parameters or feedback. Neither half
+  has been driven against a real OBS yet.
 - **Phase 9 — Redundant storage.** Two independent S3 targets: mirrored
   throughout, or holding the manifests only until a failover.
 - **Phase 10 — Tile layout and assigned outputs.** A 2×1 or 2×2 feed exposed as

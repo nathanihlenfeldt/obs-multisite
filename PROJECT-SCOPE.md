@@ -840,7 +840,30 @@ by construction rather than by discipline, and which a core test pins. It
 registers from `obs_module_post_load()` — the header's requirement, and the
 reason a vendor registered in `obs_module_load()` is never seen. With
 obs-websocket absent the plugin logs one line and everything else carries on.
-Still to come: sub-phase 2, the Bitfocus Companion module.
+
+**Built: sub-phase 2, the Companion module.** A Bitfocus Companion module lives
+at [stageaudioworks/companion-module-obs-multisite](https://github.com/stageaudioworks/companion-module-obs-multisite).
+It is an adapter in the same sense as sub-phase 1: every action is one vendor
+request and every feedback is one field of the status document, so a Stream Deck
+button and a keypress on the desk cannot disagree. It offers Go live, End and the
+marker buttons for a main site, the transport controls and timeslipping for a
+campus, feedbacks that light a button while an event is on air or a campus is
+held, behind live or offline, variables for both halves, and two preset banks
+with the feedbacks already attached. It also carries a pass-through action that
+calls any vendor request by name, so a command this plugin adds later is
+reachable without waiting for a module release.
+
+Two things about it are worth recording, because both were forced rather than
+chosen. It opens **its own obs-websocket connection**, so the operator types the
+host, port and password a second time — Companion modules each own their
+connection, and there is no way around it. And its **source is MIT** while the
+module is *distributed* under `GPL-3.0-only`: the Companion module store
+requires module source to be MIT, so the plugin's `-or-later` cannot be carried
+across. The manifest states the distribution licence, which is what an installer
+sees.
+
+Still to come: none of this has been driven against a real OBS yet, and the
+module has not been submitted to the Bitfocus store.
 
 **Two names still differ from the appliance's**, and are worth bringing together:
 the plugin's `decoder/return-to-live` and `decoder/load-event` against the
@@ -931,7 +954,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Re-encoding an HEVC feed for a streaming site | not built; an SRT destination carries HEVC unchanged instead (§8.2) |
 | Hosted streaming provider (Mux / Cloudflare Stream), persistent player embed, provider-side simulcast | planned (§8.2.1) |
 | External control API (obs-websocket vendor requests, §8.3) | built — every command of both halves, with vendor events |
-| Bitfocus Companion module (buttons, feedbacks, variables) | planned; the vendor API it needs is now built |
+| Bitfocus Companion module (buttons, feedbacks, variables) | built — [companion-module-obs-multisite](https://github.com/stageaudioworks/companion-module-obs-multisite); not yet submitted to the store |
 | Control from a Stream Deck via OBS hotkey triggers | available now, no parameters or feedback |
 | Web / mobile simulcast from the same files | planned; CMAF makes it feasible |
 | Scheduling / auto-go-live | planned — for the relay as well as the encoder |
@@ -955,7 +978,9 @@ Multi-bucket mirroring has graduated from a direction to explore into Phase 9
 
 Each phase leaves the project in a testable, usable state. Phases 1–5 are
 built and have been run end to end. Phases 6 and 7 are built but have not yet
-carried an event; phase 8 has not been started.
+carried an event. Phase 8 is built — the vendor API and the Companion module —
+though neither has been driven against a real OBS. Phases 9–14 have not been
+started.
 
 - **Phase 1 — Reliability core.** ✅ Durable upload queue, retry/backoff, checksums,
   resume-after-crash, decoder cache with verification, and stale detection. This
@@ -993,12 +1018,13 @@ carried an event; phase 8 has not been started.
   served from the bucket, scheduling and auto-go-live, redundancy, and local
   insertion.
 
-- **Phase 8 — External control API.** 🟡 The command surface of both plugins is
-  built as obs-websocket vendor requests, mirroring the control pages name for
-  name and driven through one shared command layer (§8.3). Remaining: the
-  Bitfocus Companion module for buttons with feedbacks and variables, a separate
-  deliverable. Hotkey-based control from Companion already works and needs
-  nothing.
+- **Phase 8 — External control API.** ✅ Both halves. The command surface of each
+  plugin is an obs-websocket vendor request, mirroring the control pages name for
+  name and driven through one shared command layer; and a Bitfocus Companion
+  module provides the buttons, feedbacks, variables and presets (§8.3). What is
+  left is not code: neither half has been driven against a real OBS, and the
+  module has not been submitted to the Bitfocus store. Hotkey-based control from
+  Companion works as well, and needs nothing.
 
 - **Phase 9 — Redundant storage.** ⬜ Upload to two independent S3 targets, so a
   provider outage, a regional failure, an account lockout or an accident in one
