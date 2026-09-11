@@ -938,6 +938,26 @@ and the tablet that set it is long since charged and put away.
 
 ---
 
+## 8.5 Headless encoder appliance (in progress)
+
+The sending end of a campus pair is OBS on a PC, which is the wrong shape for a
+church that wants a box on a shelf taking an HDMI feed. The hardware chosen is a
+**Mekotronics R58** (RK3588): its single HDMI input is the SoC's own receiver
+(`rk_hdmirx`, the multiplanar V4L2 node `stream_hdmirx`) and the same SoC's media
+processor (`librockchip_mpp`) does the encoding. The reuse boundary does not
+move — the appliance is one more user of `CmafMuxer` and `Session`, the same path
+the plugin's OBS encoder and the relay already take — but the capture and encode
+side needs Rockchip's vendor kernel, because mainline has no working hardware
+encoder for this SoC at all.
+
+Not started, and deliberately. The first step is a bring-up probe
+(`scripts/encoder/probe.sh`, run by a vendor on an Armbian image, one report
+back) whose answers decide what the appliance ships on and what it can be asked
+to capture. Phase 12 is the rest; the probe is what keeps Phase 12 from being
+written around a guess.
+
+---
+
 ## 9. Capability overview
 
 What this project does, and where each piece stands. Status is against the
