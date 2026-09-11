@@ -60,15 +60,12 @@
 #define DSP_DEVICE_NAME "Digisyn_vSndCard"
 #define DSP_DEVICE_PATH "/dev/" DSP_DEVICE_NAME
 
-// The module builds its mapping for the largest card it supports: 128 channels
-// at 48 kHz in 8 slots, page-aligned, plus one page for this header.
-#define MAX_CH_NUM 128
-#define SAMPLE_RATE_DEFAULT 48000
-#define DSP_MAX_MS 8
-#define DSP_BUF_SIZE(ch, rate, ms) ((ch) * ((rate) / 1000 * (ms)) * (int)sizeof(int32_t))
-#define DSP_BUF_SIZE_ALIGN \
-    ((DSP_BUF_SIZE(MAX_CH_NUM, SAMPLE_RATE_DEFAULT, DSP_MAX_MS) + 4095) / 4096 * 4096)
-#define MAP_SIZE (4096 + DSP_BUF_SIZE_ALIGN * 2)
+// How big the mapping is depends on the module's build (it is sized for the
+// largest card it supports) and on the kernel's page size, so it is not
+// computed here: the module writes its own size into mapSize, and that is what
+// gets mapped. On the bench box it reports 409600 bytes — a 16384-byte page
+// for this header plus two 196608-byte calendars — which is where a Pi running
+// 16K pages shows up. Assuming 4K there was the first bug in this program.
 
 typedef struct {
     uint64_t verifyCodeStart;
@@ -106,6 +103,10 @@ static inline int32_t *dsp_slot(const Dsp_t *d, uint64_t ms_index)
 static volatile sig_atomic_t g_stop = 0;
 static void on_signal(int sig) { (void)sig; g_stop = 1; }
 
+// Set by map_device() to the size the module asked us to map, so main() can
+// unmap the same region it mapped.
+static uint32_t g_map_size = 0;
+
 static int map_device(Dsp_t **out)
 {
     int fd = open(DSP_DEVICE_PATH, O_RDWR);
@@ -134,23 +135,27 @@ static int map_device(Dsp_t **out)
         close(fd);
         return -1;
     }
-    if (d->mapSize != MAP_SIZE) {
-        fprintf(stderr, "the module maps %u bytes but this program expected %d — the\n"
-                        "vendor package has changed; rebuild this against its Dsp.h.\n",
-                d->mapSize, MAP_SIZE);
+    // The module's own size is the authority. Sanity-check it against the
+    // header rather than a compiled-in constant, so a different page size or a
+    // differently built module is not mistaken for a broken vendor package.
+    if (d->mapSize < sizeof(Dsp_t) || d->mapSize > (1u << 24)) {
+        fprintf(stderr, "the module reports a %u-byte mapping, which cannot hold a\n"
+                        "header + calendars — refusing to map it.\n", d->mapSize);
         munmap(head, 4096);
         close(fd);
         return -1;
     }
+    uint32_t map_size = d->mapSize;
     munmap(head, 4096);
 
-    void *whole = mmap(NULL, MAP_SIZE, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    void *whole = mmap(NULL, map_size, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
     if (whole == MAP_FAILED) {
-        fprintf(stderr, "mmap(%d): %s\n", MAP_SIZE, strerror(errno));
+        fprintf(stderr, "mmap(%u): %s\n", map_size, strerror(errno));
         close(fd);
         return -1;
     }
     close(fd);   // the mapping outlives the descriptor
+    g_map_size = map_size;
     *out = (Dsp_t *)whole;
     return 0;
 }
@@ -267,6 +272,6 @@ int main(int argc, char **argv)
     if (map_device(&d) != 0) return 1;
 
     int rc = do_watch ? watch(d) : play_tone(d);
-    munmap(d, MAP_SIZE);
+    munmap(d, g_map_size);
     return rc;
 }
