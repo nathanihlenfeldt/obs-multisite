@@ -30,6 +30,39 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.10-alpha
+
+### Control it from a Stream Deck
+
+Every command the plugin offers is now also an **obs-websocket vendor request**
+under the vendor `obs-multisite`, and the plugin emits **vendor events** when the
+state changes. Any obs-websocket client can therefore drive it — a script, an
+automation system, or a Stream Deck through Bitfocus Companion.
+
+There is nothing to switch on. obs-websocket ships with OBS 28 and later and is
+enabled in Tools → WebSocket Server Settings; with it off, or absent, the plugin
+logs one line and everything else carries on exactly as before.
+
+The commands are the ones the plugin's own remote-control pages already use,
+under the same names, so the two cannot drift — the list lives in one place and a
+test pins it. Go live, End and the marker buttons for a main site; play, stop,
+hold, resume, catch up, jog, seek, delay, markers, recordings and return-to-live
+for a campus; a status request and events for everything watching.
+
+### A Companion module
+
+There is now a purpose-built Bitfocus Companion module —
+[companion-module-obs-multisite](https://github.com/stageaudioworks/companion-module-obs-multisite)
+— so those commands arrive as buttons that light up: on air, held, buffering,
+behind live, link offline, with variables for the same figures and two preset
+banks to drag straight onto a page.
+
+> **Alpha, and not in the Companion store yet.** Until it is listed, Companion
+> loads it as a *developer module* — the module's README has the steps. It needs
+> **Companion 4.0 or later**, and this release of the plugin.
+
+Tested against a real OBS, but not yet through a whole event.
+
 ## What's new in v0.1.9-alpha
 
 For v0.1.8's users: the Manage storage tool arrived in the previous

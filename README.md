@@ -360,8 +360,8 @@ transcoder and a low-latency mode.</summary>
   [companion-module-obs-multisite](https://github.com/stageaudioworks/companion-module-obs-multisite)
   puts them on a Stream Deck, with buttons that light up — on air, held, behind
   live, link offline. The thirteen hotkeys the plugins already register can be
-  triggered from Companion as well, without parameters or feedback. Neither half
-  has been driven against a real OBS yet.
+  triggered from Companion as well, without parameters or feedback. Both halves
+  have since been driven against a real OBS; neither has yet run a full event.
 - **Phase 9 — Redundant storage.** Two independent S3 targets: mirrored
   throughout, or holding the manifests only until a failover.
 - **Phase 10 — Tile layout and assigned outputs.** A 2×1 or 2×2 feed exposed as

@@ -862,8 +862,12 @@ requires module source to be MIT, so the plugin's `-or-later` cannot be carried
 across. The manifest states the distribution licence, which is what an installer
 sees.
 
-Still to come: none of this has been driven against a real OBS yet, and the
-module has not been submitted to the Bitfocus store.
+Since then the plugin has been driven against a real OBS, and the module is
+tagged **v0.1.0** in its own repository. Two things are still open, and neither
+is code: it has not run a whole event, and it is not in the Companion store yet —
+until it is, Companion loads it as a *developer module* (a directory set in the
+launcher's Developer section; each folder in it with a `companion/manifest.json`
+is one module), and that needs **Companion 4.0 or later**.
 
 **Two names still differ from the appliance's**, and are worth bringing together:
 the plugin's `decoder/return-to-live` and `decoder/load-event` against the
@@ -979,8 +983,8 @@ Multi-bucket mirroring has graduated from a direction to explore into Phase 9
 Each phase leaves the project in a testable, usable state. Phases 1–5 are
 built and have been run end to end. Phases 6 and 7 are built but have not yet
 carried an event. Phase 8 is built — the vendor API and the Companion module —
-though neither has been driven against a real OBS. Phases 9–14 have not been
-started.
+and has been driven against a real OBS, though not through a whole event.
+Phases 9–14 have not been started.
 
 - **Phase 1 — Reliability core.** ✅ Durable upload queue, retry/backoff, checksums,
   resume-after-crash, decoder cache with verification, and stale detection. This
@@ -1022,9 +1026,9 @@ started.
   plugin is an obs-websocket vendor request, mirroring the control pages name for
   name and driven through one shared command layer; and a Bitfocus Companion
   module provides the buttons, feedbacks, variables and presets (§8.3). What is
-  left is not code: neither half has been driven against a real OBS, and the
-  module has not been submitted to the Bitfocus store. Hotkey-based control from
-  Companion works as well, and needs nothing.
+  left is not code: it has been driven against a real OBS but not through a whole
+  event, and the module is not in the Bitfocus store yet. Hotkey-based control
+  from Companion works as well, and needs nothing.
 
 - **Phase 9 — Redundant storage.** ⬜ Upload to two independent S3 targets, so a
   provider outage, a regional failure, an account lockout or an accident in one
