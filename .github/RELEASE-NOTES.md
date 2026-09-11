@@ -51,9 +51,9 @@ frozen picture the screen no longer had.
 A held picture now outranks the idle screen whatever the idle mode is set to.
 An idle screen is for having nothing to show: waiting for the main site, or
 stopped, and both still put one up as before. **Stop** and waiting are
-unchanged; on *hold the last picture* with nothing ever decoded the identity
-screen still comes up, because there is no frame to hold and a blank screen says
-nothing about which box has come up empty.
+unchanged *in this respect*; on *hold the last picture* with nothing ever
+decoded the identity screen still comes up, because there is no frame to hold
+and a blank screen says nothing about which box has come up empty.
 
 The rule is now a function of four booleans rather than a chain of conditions
 inside the poll loop, and a new test checks all of its combinations — including
@@ -61,6 +61,43 @@ the default one on the identity screen — with no display, no decoder and no
 network. That combination could only be reproduced by hand with a live event and
 an HDMI socket attached, which is how it reached a congregation in the first
 place.
+
+### Stopping, and the header above it, say what they mean
+
+Two changes to the decode dock, both about a control or a readout reporting
+something other than what it was doing.
+
+**Stop now releases the picture.** It was already ending playback, but the
+source kept polling and kept pulling in flight, so a stopped decoder went on
+downloading. Now Stop cancels the requests already in flight, stops the poll
+loop issuing new ones, and lets go of the decoder. It deliberately keeps the
+cache: Play resumes from disk rather than sitting through the full start-up
+buffer again, which is what you want from a button you press and press back.
+The header reads **Stopped — nothing downloading**, and Hold is labelled **Hold
+picture (keeps recording)** so that its contrast with Stop is on the button.
+
+**The header no longer hides one answer behind another.** It had been a single
+label carrying three unrelated facts — what the main site is doing, what this
+decoder is doing, and how the link is — behind a precedence order, so only one
+could ever be visible. Playing a finished recording therefore read **BROADCAST
+ENDED**, which was true of the venue and silent about the playback, and holding
+a finished recording showed nothing about the hold at all. There are now two
+labels, each answering one question:
+
+- **Playback** — `STOPPED`, `LOADING…`, `BUFFERING…`, `HELD`, `PLAYING`,
+  `READY`
+- **Source** — `LIVE`, `BROADCAST ENDED`, `INTERRUPTED`, `RECORDING (not live)`,
+  `OFFLINE`, `CONNECTING`, `CONNECTION LOST`
+
+Playback sits first because it is what you are acting on. Neither can now
+misstate the other, because neither can express the other's facts. `READY` is
+new and names what **Load** leaves behind — buffered, not on air, waiting for
+**Play** on cue, which previously had no name and read as whatever the room
+happened to be doing.
+
+Neither is a setting and nothing moves; the strings are in both locale files,
+and the web remote — which already separated the two — needed only the stopped
+state to be added to its status.
 
 ## What's new in v0.1.11-alpha
 

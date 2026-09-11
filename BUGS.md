@@ -11,75 +11,42 @@ Last updated: 2026-09-11.
 
 ## Open
 
-### 0. v0.1.12-alpha is written but deliberately not tagged yet
+### 0. v0.1.12-alpha: notes written, tag not yet cut
 
-**Status: waiting on write-ups for the work merged after the last release. Do
-not tag `v*` from `main` until this is resolved.**
+**Status: ready to tag. Cutting the tag is the next action, not a pending
+decision.**
 
-`main` is 13 commits past `v0.1.11-alpha`. The Pi player's hold fix
-(`screen_action()`, a held picture outranks the idle screen) is one of them, at
-`96c5d8c`, and it is the only one with notes: a section under "What's new in
-v0.1.12-alpha" in `.github/RELEASE-NOTES.md`, alongside the `VERSION 0.1.12`
-bump. Every other change to the code merged since the last release has **no
-entry in `RELEASE-NOTES.md`** — its reasoning lives in the entries below, and
-this file is explicitly not a changelog.
+`main` is 17 commits past `v0.1.11-alpha`, and `CMakeLists.txt` already reads
+`VERSION 0.1.12`, so the bump is not outstanding either. Three changes an
+operator would notice are now written up under "What's new in v0.1.12-alpha" in
+`.github/RELEASE-NOTES.md`: the Pi player's hold fix (`96c5d8c`, a held picture
+outranks the idle screen), Stop releasing the picture (`814cacf`, `4baad6a`), and
+the decode dock's header split into playback and source (`61b03fd`) — the last
+two in one section, since the chip is where Stop becomes legible. Everything
+else merged since the last release is decoder/lipsync measurement — delivery
+queue bounding per stream, the playout clock and its test, and the drift
+measurement that replaced two misleading metrics — which changes no operator's
+day and is deliberately not in the notes. Its reasoning lives in the entries
+below; this file is explicitly not a changelog.
 
-Most of that is decoder/lipsync measurement (delivery queue bounding, playout
-clock, drift measurement, `test_playout_clock`), which changes no operator's day.
-Two commits do:
+The wording collision this entry used to flag is settled: the hold-fix section
+said "**Stop** and waiting are unchanged", which read as a claim about Stop and
+would have contradicted the new section in the same release. It now reads
+"unchanged *in this respect*", scoped to the screen rule it actually discusses.
 
-- `814cacf` **Make Stop actually stop the picture** and `4baad6a` **Stop returns
-  the source to a neutral state** — operator-visible, and not describable as a
-  fix to something that looked broken on screen. Stop now cancels in-flight
-  requests, stops the poll loop issuing new ones, and releases the decoder,
-  while deliberately keeping the cache so that Play re-enters from disk instead
-  of re-satisfying `start_buffer_seconds`. `stopped` became a state of its own
-  rather than a reading of `!playing`, because loading an event is also not
-  playing and loading has to download. `S3Transport::cancel_pending()` was
-  documented as one-way and now has a `resume_pending()`, without which a
-  stopped source could never download again. The decode dock leads with
-  "Stopped — nothing downloading", new strings are in `en-US.ini` and
-  `en-GB.ini`, and the Hold button's label — "Hold picture (keeps recording)" —
-  finally means what it implies by contrast.
+**The order matters when tagging.** The release body is `--notes-file
+.github/RELEASE-NOTES.md` as checked out *at the tag*, so the notes commit must
+be pushed and tagged in that order — writing the notes and tagging in one push
+would publish the previous release's body, with the new sections sitting in the
+tagged tree but not in the release anyone reads.
 
-- `d3cb13a` **Split the state chip** — operator-visible, and the second half of
-  the Stop change above: the decode dock's header was one label multiplexing the
-  main site's state, this decoder's playback state and the venue's link health
-  behind a precedence chain, so only one could show. Playing a finished
-  recording read "BROADCAST ENDED" with nothing to say it was playing, and
-  **Hold on a finished recording showed no indication at all** — `paused` was
-  only tested inside the room-state switch's Live branch, which an ended event
-  never reaches. Now two labels: playback (`STOPPED`/`LOADING…`/`BUFFERING…`/
-  `HELD`/`PLAYING`/`READY`) and source (`LIVE`/`BROADCAST ENDED`/…). `READY` is
-  new and names what Load leaves behind. New strings in both locale files; the
-  web remote already had the split and needed only `stopped` in the status JSON.
-
-One wording collision to settle while writing that up: the hold-fix note says
-"**Stop** and waiting are unchanged", which is true of the *screen rule* it is
-discussing and reads as a claim about Stop. Shipping both in one release without
-saying which is meant would contradict itself.
-
-Tagging `v0.1.12-alpha` from `main` right now would publish the release (a
-Windows plugin build and a relay container image) shipping that work while the
-notes mention only the hold fix — the discrepancy lands in front of anyone
-installing it.
-
-**To finish the release:** the decoder work is two separate decisions — the
-lipsync measurement, and the Stop behaviour. Write up whatever is ready under
-`v0.1.12-alpha` alongside the hold fix, then tag. If the Stop work is not ready
-to describe, hold the tag; the alternative is reverting it, as `0bc1036` did for
-a night's decoder UX, because a release whose notes omit a change to Stop is the
-discrepancy this entry exists to prevent. The hold fix alone is already
-delivered to anyone tracking `main`, which is what the appliance installer does.
-
-**If you do tag, tag the current `main`**, not the fix commit in isolation — the
-fix is not a branch and the tree only builds as a whole.
-
-A tag pushed from a commit that is not an ancestor of `main` builds the plugin
-and the container against that commit and creates the GitHub release as soon as
-the tag lands, so a mistake here is public before it is noticed: `gh release
-delete <tag> --yes --cleanup-tag` plus `git push origin :refs/tags/<tag>` is the
-way back, as happened once on 2026-09-11 before the tag was cut properly.
+Tag the current `main`, not a fix commit in isolation: the tree only builds as a
+whole. A tag pushed from a commit that is not an ancestor of `main` builds the
+plugin and the container against that commit and creates the GitHub release as
+soon as the tag lands, so a mistake here is public before it is noticed: `gh
+release delete <tag> --yes --cleanup-tag` plus `git push origin
+:refs/tags/<tag>` is the way back, as happened once on 2026-09-11 before the tag
+was cut properly.
 
 ---
 
