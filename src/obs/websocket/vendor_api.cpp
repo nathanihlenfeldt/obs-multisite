@@ -352,10 +352,16 @@ void emit_state(const char* event_name, const std::string& json_text) {
 }
 
 void poll_once(std::string& last_encoder, std::string& last_decoder) {
-    static const char* enc_keys[] = {"live", "event_id", "link_health"};
+    // A marker appearing is something an operator acts on, so it belongs here
+    // even though it is not "state" in the transport sense: without it, a cue
+    // the main site has just dropped reaches a client only on the next poll,
+    // up to five seconds later — which for a button is the difference between
+    // "it works" and "it didn't work".
+    static const char* enc_keys[] = {"live", "event_id", "link_health",
+                                     "marker_labels"};
     static const char* dec_keys[] = {"room_state", "playing", "paused",
                                      "event_id", "live_event_id",
-                                     "configured"};
+                                     "configured", "markers"};
     const Role role = plugin_role();
 
     if (role != Role::DecoderOnly) {

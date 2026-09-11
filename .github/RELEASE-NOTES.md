@@ -30,6 +30,23 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.11-alpha
+
+### Markers reach a control surface as they happen
+
+The vendor events the plugin pushes carried the transport state but not the
+markers, so a cue dropped at the main site reached an obs-websocket client only
+on the next poll — up to five seconds later. `markers` and `marker_labels` are
+now part of what the state event watches, so a cue reaches a Stream Deck's marker
+button as it is dropped rather than when something else happens to change.
+
+Nothing to configure, and nothing changes for a client that does not use it: the
+same events, carrying the same document.
+
+This is what the Companion module's generated marker buttons rely on. Every cue
+the main site is configured with becomes a button of its own, and a new cue is
+offered within about a second.
+
 ## What's new in v0.1.10-alpha
 
 ### Control it from a Stream Deck
