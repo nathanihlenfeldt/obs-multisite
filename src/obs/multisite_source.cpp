@@ -24,6 +24,7 @@
 #include "../core/decoder_session.h"
 #include "../core/event_catalog.h"
 #include "../core/cmaf_decoder.h"
+#include "../core/playout_clock.h"
 #include "../core/s3_transport.h"
 
 #include <algorithm>
@@ -589,7 +590,8 @@ static void deliver_video(SourceCtx* ctx, const DecodedVideoFrame& f) {
 
     PendingFrame item;
     item.is_video  = true;
-    item.timestamp = ctx->playout_base_ns.load() + (uint64_t)(f.pts_ns - first);
+    item.timestamp = multisite::playout_due_ns(
+        ctx->playout_base_ns.load(), f.pts_ns, first);
     ctx->last_video_pts_ns = f.pts_ns;
     item.video     = f;              // owns its plane buffer (deep copy)
 
@@ -645,7 +647,8 @@ static void deliver_audio(SourceCtx* ctx, const DecodedAudioFrame& f) {
                        f.channels);
     }
 
-    const uint64_t ts = ctx->playout_base_ns.load() + (uint64_t)(f.pts_ns - first);
+    const uint64_t ts = multisite::playout_due_ns(
+        ctx->playout_base_ns.load(), f.pts_ns, first);
 
     // Report the audio/video pts offset once: a large value here is the
     // signature of a stream-timing problem rather than a delivery problem.

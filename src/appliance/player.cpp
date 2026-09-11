@@ -2,6 +2,7 @@
 #include "player.h"
 #include "log.h"
 #include "sysinfo.h"
+#include "core/playout_clock.h"
 
 #include <algorithm>
 #include <chrono>
@@ -380,7 +381,8 @@ void Player::on_video(const DecodedVideoFrame& f) {
 
     PendingFrame item;
     item.is_video = true;
-    item.due_ns   = m_playout_base_ns.load() + (uint64_t)(f.pts_ns - first);
+    item.due_ns   = multisite::playout_due_ns(
+        m_playout_base_ns.load(), f.pts_ns, first);
     item.video    = f;                 // deep copy; owns its planes
     fix_planes(item.video);
     enqueue(std::move(item));
@@ -416,7 +418,8 @@ void Player::on_audio(const DecodedAudioFrame& f) {
 
     PendingFrame item;
     item.is_video = false;
-    item.due_ns   = m_playout_base_ns.load() + (uint64_t)(f.pts_ns - first);
+    item.due_ns   = multisite::playout_due_ns(
+        m_playout_base_ns.load(), f.pts_ns, first);
     item.audio    = f;
     enqueue(std::move(item));
 }

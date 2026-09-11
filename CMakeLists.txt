@@ -86,6 +86,12 @@ target_link_libraries(test_reliability PRIVATE multisite_core)
 add_executable(test_timebase tests/test_timebase.cpp)
 target_link_libraries(test_timebase PRIVATE multisite_core)
 add_test(NAME timebase COMMAND test_timebase)
+
+# When a decoded frame is due at the output. Header-only arithmetic, but it
+# decides lipsync, and it was wrong in four places at once.
+add_executable(test_playout_clock tests/test_playout_clock.cpp)
+target_link_libraries(test_playout_clock PRIVATE multisite_core)
+add_test(NAME playout_clock COMMAND test_playout_clock)
 add_test(NAME reliability COMMAND test_reliability)
 
 # The core is shared with the planned headless appliance, which links neither
