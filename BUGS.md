@@ -13,26 +13,51 @@ Last updated: 2026-09-11.
 
 ### 0. v0.1.12-alpha is written but deliberately not tagged yet
 
-**Status: waiting on the lipsync work. Do not tag `v*` from `main` until this
-is resolved.**
+**Status: waiting on write-ups for the work merged after the last release. Do
+not tag `v*` from `main` until this is resolved.**
 
-The Pi player's hold fix (`screen_action()`, a held picture outranks the idle
-screen) is merged on `main` at `96c5d8c`, along with its notes under "What's new
-in v0.1.12-alpha" in `.github/RELEASE-NOTES.md` and the `VERSION 0.1.12` bump.
-
-`main` also carries 8 commits of in-flight decoder/lipsync work (delivery queue
-bounding, playout clock, drift measurement, `test_playout_clock`) that has **no
+`main` is 13 commits past `v0.1.11-alpha`. The Pi player's hold fix
+(`screen_action()`, a held picture outranks the idle screen) is one of them, at
+`96c5d8c`, and it is the only one with notes: a section under "What's new in
+v0.1.12-alpha" in `.github/RELEASE-NOTES.md`, alongside the `VERSION 0.1.12`
+bump. Every other change to the code merged since the last release has **no
 entry in `RELEASE-NOTES.md`** — its reasoning lives in the entries below, and
 this file is explicitly not a changelog.
+
+Most of that is decoder/lipsync measurement (delivery queue bounding, playout
+clock, drift measurement, `test_playout_clock`), which changes no operator's day.
+Two commits do:
+
+- `814cacf` **Make Stop actually stop the picture** and `4baad6a` **Stop returns
+  the source to a neutral state** — operator-visible, and not describable as a
+  fix to something that looked broken on screen. Stop now cancels in-flight
+  requests, stops the poll loop issuing new ones, and releases the decoder,
+  while deliberately keeping the cache so that Play re-enters from disk instead
+  of re-satisfying `start_buffer_seconds`. `stopped` became a state of its own
+  rather than a reading of `!playing`, because loading an event is also not
+  playing and loading has to download. `S3Transport::cancel_pending()` was
+  documented as one-way and now has a `resume_pending()`, without which a
+  stopped source could never download again. The decode dock leads with
+  "Stopped — nothing downloading", new strings are in `en-US.ini` and
+  `en-GB.ini`, and the Hold button's label — "Hold picture (keeps recording)" —
+  finally means what it implies by contrast.
+
+One wording collision to settle while writing that up: the hold-fix note says
+"**Stop** and waiting are unchanged", which is true of the *screen rule* it is
+discussing and reads as a claim about Stop. Shipping both in one release without
+saying which is meant would contradict itself.
 
 Tagging `v0.1.12-alpha` from `main` right now would publish the release (a
 Windows plugin build and a relay container image) shipping that work while the
 notes mention only the hold fix — the discrepancy lands in front of anyone
 installing it.
 
-**To finish the release:** decide whether the lipsync work is ready. If it is,
-write it up in `RELEASE-NOTES.md` under `v0.1.12-alpha` alongside the hold fix,
-then tag. If it is not, hold the tag until it is; the hold fix is already
+**To finish the release:** the decoder work is two separate decisions — the
+lipsync measurement, and the Stop behaviour. Write up whatever is ready under
+`v0.1.12-alpha` alongside the hold fix, then tag. If the Stop work is not ready
+to describe, hold the tag; the alternative is reverting it, as `0bc1036` did for
+a night's decoder UX, because a release whose notes omit a change to Stop is the
+discrepancy this entry exists to prevent. The hold fix alone is already
 delivered to anyone tracking `main`, which is what the appliance installer does.
 
 **If you do tag, tag the current `main`**, not the fix commit in isolation — the
