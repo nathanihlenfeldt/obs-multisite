@@ -57,8 +57,43 @@
 #     report: board model, kernel, device lists, and any serial numbers the
 #     probes happened to print.
 #
-# Where that is not acceptable, --upload-url PUTs to a pre-signed URL instead
-# and nothing becomes public. Generate it beforehand:
+# ── On the file drops, before changing the list ───────────────────────────────
+#
+# These were chosen by trying them, not by reputation, and the obvious
+# candidates are the ones that failed. Tested 2026-09-11 from an ordinary
+# connection:
+#
+#   0x0.st          REJECTS UPLOADS. Answers "uploads disabled because it's
+#                   been almost nothing but AI botnet spam". Still the first
+#                   result everyone reaches for; it does not work.
+#   bashupload.com  does not resolve at all any more.
+#   temp.sh         answered with an HTML error page rather than a link.
+#   oshi.at         failed TLS here — but DO NOT simply re-add it if it comes
+#                   back. It replies with a download link AND a management link
+#                   that DELETES the file, in that order, and the management
+#                   token is only a path segment, so nothing in the URL marks
+#                   it as dangerous. Taking the wrong one hands the vendor the
+#                   power to delete their own report. Take the first link.
+#   litterbox       works, and expires (72h max), which is why it is tried
+#                   first. Intermittent: the identical request has both
+#                   succeeded and returned "No file!", most likely rate
+#                   limiting. Uploads to litterbox.catbox.moe and serves the
+#                   result back from litter.catbox.moe — a different host.
+#   catbox.moe      works, and is the reliable one, but an anonymous upload
+#                   CANNOT be deleted afterwards. Whatever lands there is
+#                   public permanently. Fallback for that reason, not first.
+#
+# Whatever the list becomes, keep the two guards in upload_to_paste(). They are
+# not defensive habit; each caught a real failure the first time it ran. curl's
+# exit code is checked before its output is read at all, because when the TLS
+# handshake against oshi.at failed, the URL inside curl's OWN error message
+# matched and the script reported success with a link to curl's documentation —
+# a wrong link nobody discovers until the report never arrives. And the link
+# must be at the host that service actually serves from, which then immediately
+# caught litterbox's two hostnames.
+#
+# Where a public drop is not acceptable, --upload-url PUTs to a pre-signed URL
+# instead and nothing becomes public. Generate it beforehand:
 #
 #   export MULTISITE_S3_KEY=...  MULTISITE_S3_SECRET=...
 #   scripts/encoder/presign.py --endpoint https://ACCOUNT.r2.cloudflarestorage.com \
