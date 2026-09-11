@@ -149,6 +149,25 @@ int main() {
         CHECK(!t.have_clock(), "a seek unpins it rather than carrying it over");
     }
 
+    std::printf("== adopting an id from another thread is the restart ==\n");
+    {
+        // The delivery loop owns the timeline but a seek happens on the UI
+        // thread, so the id lives in an atomic and is handed in each pass.
+        PlayoutTimeline t;
+        t.adopt(7);
+        t.set_restart_wall_ms(1000000);
+        CHECK(t.consider(7, 10 * S) == Action::Play, "a frame on id 7 plays");
+        CHECK(t.have_clock(), "and pins the clock");
+        CHECK(t.consider(6, 10 * S) == Action::Discard,
+              "a frame stamped with the previous id is discarded");
+        t.adopt(7);
+        CHECK(t.have_clock(), "re-adopting the SAME id is not a restart");
+        t.adopt(8);
+        CHECK(!t.have_clock(), "a new id is");
+        CHECK(t.consider(7, 10 * S) == Action::Discard,
+              "and frames from the old id no longer play");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL PLAYOUT TIMELINE TESTS PASSED"
                                       : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

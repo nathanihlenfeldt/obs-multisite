@@ -49,13 +49,22 @@ public:
 
     // A seek, a jump, or a decoder restart. Frames already in flight belong to
     // the position being left and must not be believed about anything.
-    void restart() {
-        ++m_epoch;
-        m_skip_base_pts = kUnset;
-        m_pin_base_pts  = kUnset;
+    void restart() { adopt(m_epoch + 1); }
+
+    // Adopt a timeline id maintained outside this object. The delivery loop
+    // owns a PlayoutTimeline but the seek that invalidates it happens on
+    // another thread, so the id is an atomic the loop reads and hands here; a
+    // value it has not seen before IS the restart. Keeping the counter outside
+    // is what lets this object stay lock-free and single-threaded while still
+    // reacting to a seek made anywhere.
+    void adopt(uint64_t timeline_id) {
+        if (timeline_id == m_epoch) return;
+        m_epoch = timeline_id;
+        m_skip_base_pts   = kUnset;
+        m_pin_base_pts    = kUnset;
         m_restart_wall_ms = 0;
-        m_offset_ms = kNoClock;
-        m_skip_ns = -1;
+        m_offset_ms       = kNoClock;
+        m_skip_ns         = -1;
     }
 
     // Stamp for frames leaving the queue now. Compare with what comes back.

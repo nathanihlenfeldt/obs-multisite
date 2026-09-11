@@ -26,6 +26,7 @@
 #include "../core/cmaf_decoder.h"
 #include "../core/playout_clock.h"
 #include "../core/position_interp.h"
+#include "../core/playout_timeline.h"
 #include "../core/s3_transport.h"
 
 #include <algorithm>
@@ -214,22 +215,10 @@ struct SourceCtx : DecoderControls {
     // mispairing being fixed.
     std::atomic<long long> restart_wall_ms{0};
     std::atomic<bool>      restart_wall_pending{true};
-    // Base for the sub-segment skip: reset per fragment by the feed loop and
-    // claimed by the first frame of that fragment to reach delivery. Per
-    // fragment is right for the skip — it bounds how far one can run.
-    std::atomic<long long> seg_first_pts_ns{-1};
-    // Base for the media-clock pin, which is a different question and needs a
-    // different answer. It pairs with restart_wall_ms — the wall time of the
-    // first fragment after a restart — so it must be that same fragment's first
-    // pts, and it is therefore reset only where restart_wall_ms is.
-    //
-    // It used to share seg_first_pts_ns, which the feed loop resets on every
-    // fragment while running seconds ahead of delivery. So the pin routinely
-    // matched fragment N's wall time against a pts from fragment N+k. Caught in
-    // the field: a seek anchored on pts 1290.008s and pinned on 1293.333s,
-    // putting every displayed clock time 3.3s out — and the pin is learned once
-    // and sticky, so nothing downstream corrects it.
-    std::atomic<long long> pin_base_pts_ns{-1};
+    // The skip's base and the media-clock pin's base used to live here as two
+    // more atomics. They belong to PlayoutTimeline now — they are written only
+    // by the delivery loop, and keeping them out here is what let the feed loop
+    // move one of them mid-use.
     // Which timeline the frames in flight belong to. Bumped by every seek and
     // decoder restart, under dq_mtx so it orders against the delivery loop's
     // pop.
@@ -518,6 +507,11 @@ static void enqueue_frame(SourceCtx* ctx, PendingFrame&& item) {
 // so audio and video are handed over together.
 static void deliver_loop(SourceCtx* ctx) {
     mlog_info("source: delivery loop started");
+    // Owned here, not shared: every piece of state it holds is written only by
+    // this thread. The seek that invalidates it happens elsewhere, and reaches
+    // this object as a timeline id read from an atomic below — which is what
+    // lets it stay lock-free on a path that runs ~124 times a second.
+    multisite::PlayoutTimeline tl;
     while (ctx->running.load()) {
         // While paused, deliver nothing: the picture holds on the last frame
         // OBS received and the queue stays put, so resume continues exactly
@@ -552,7 +546,8 @@ static void deliver_loop(SourceCtx* ctx) {
         // Checked here as well as after the wait below. The stall resync sits
         // between the two and re-bases the playout clock from this frame's
         // pts, so it must not see one from a timeline already left either.
-        if (item_epoch != ctx->timeline_epoch.load()) continue;
+        tl.adopt(ctx->timeline_epoch.load());
+        if (item_epoch != tl.epoch()) continue;
 
         // If a frame is far past due, the playout clock has drifted behind
         // wall time — normally because playback stalled waiting for a segment
@@ -606,61 +601,48 @@ static void deliver_loop(SourceCtx* ctx) {
         }
         if (!ctx->running.load()) break;
 
-        // Did the timeline move while this frame was in hand?
-        //
-        // It was popped before the wait above, and that wait is as long as a
-        // delivery lead, so a seek in the meantime leaves this frame belonging
-        // to a position the operator has already left. It must be dropped
-        // HERE, before anything reads it: everything below treats the frame as
-        // evidence about the current timeline — the skip measures from it, the
-        // media clock pins to it, the playing clock follows it, and then it
-        // goes to air. Checking further down was the first version of this
-        // guard and it was useless, because the pin had already happened.
-        if (item_epoch != ctx->timeline_epoch.load()) continue;
-
-        // Sub-segment seek: drop frames before the requested moment. Segments
-        // are the unit of transfer; they need not be the unit of seeking.
+        // One ordered decision: is this frame stale, is it before the moment a
+        // seek asked for, and only then may it define the clock and go to air.
+        // The order lives in PlayoutTimeline and is pinned by
+        // test_playout_timeline, because every bug in this area came from
+        // getting it wrong here — a staleness check below the pin guards
+        // nothing, and a frame dropped by the skip must not pin either.
+        tl.adopt(ctx->timeline_epoch.load());
         {
-            const long long skip = ctx->skip_until_pts_ns.load();
-            if (skip >= 0) {
-                long long base = ctx->seg_first_pts_ns.load();
-                const long long pts = item.is_video ? item.video.pts_ns
-                                                    : item.audio.pts_ns;
-                if (base < 0) { ctx->seg_first_pts_ns = pts; base = pts; }
-                if (pts - base < skip) continue;      // not there yet
-                ctx->skip_until_pts_ns = -1;          // arrived
-            }
+            // Inputs from the feed loop. A skip is only ever armed for the
+            // fragment a seek landed on, and the queue was cleared and the
+            // decoder restarted for that seek, so the frame that claims the
+            // base here is genuinely that fragment's first.
+            const long long armed = ctx->skip_until_pts_ns.exchange(-1);
+            if (armed >= 0) tl.begin_fragment(armed);
+            const long long w = ctx->restart_wall_ms.load();
+            if (w > 0) tl.set_restart_wall_ms(w);
         }
 
-        // Keep the playing clock in step with the frame going to air, so the
-        // displayed time advances continuously instead of once per segment.
-        {
-            const long long pts = item.is_video ? item.video.pts_ns
-                                                : item.audio.pts_ns;
+        const long long item_pts = item.is_video ? item.video.pts_ns
+                                                 : item.audio.pts_ns;
+        const bool had_clock = tl.have_clock();
+        switch (tl.consider(item_epoch, item_pts)) {
+            case multisite::PlayoutTimeline::Action::Discard:     continue;
+            case multisite::PlayoutTimeline::Action::DropForSkip: continue;
+            case multisite::PlayoutTimeline::Action::Play:        break;
+        }
 
-            long long off = ctx->pts_wall_offset_ms.load();
-            if (off == SourceCtx::kOffsetUnset) {
-                // Pin the media timeline to the wall clock, once, from the
-                // first frame delivered since the decoder restarted —
-                // pin_base_pts_ns, not the skip's base. restart_wall_ms is that
-                // same fragment's wall start, so the two describe one moment.
-                long long base = ctx->pin_base_pts_ns.load();
-                if (base < 0) { ctx->pin_base_pts_ns = pts; base = pts; }
-                const long long w = ctx->restart_wall_ms.load();
-                if (w > 0) {
-                    off = w - base / 1000000LL;
-                    ctx->pts_wall_offset_ms = off;
-                    // Every displayed clock time is built on this pairing, and
-                    // it is learned once and then sticky, so nothing downstream
-                    // can correct it. Logged to keep it checkable against the
-                    // fragment the seek asked for.
-                    mlog_info("source: media clock pinned — fragment wall %lld, "
-                              "first pts %.3fs (so pts 0 would be wall %lld)",
-                              w, (double)base / 1e9, off);
-                }
-            }
-            if (off != SourceCtx::kOffsetUnset)
-                ctx->playing_at_ms = off + pts / 1000000LL;
+        if (!had_clock && tl.have_clock()) {
+            // Every displayed clock time is built on this pairing, and it is
+            // learned once, so it is logged to stay checkable against the
+            // fragment the seek asked for. The pts here must match the one the
+            // playout anchored on in the line above it; when those two differ,
+            // the clock has been pinned to a position already left.
+            mlog_info("source: media clock pinned — fragment wall %lld, "
+                      "first pts %.3fs (so pts 0 would be wall %lld)",
+                      tl.pin_wall_ms(), (double)tl.pin_base_pts_ns() / 1e9,
+                      tl.clock_offset_ms());
+        }
+        // Publish for the dock and the web remote.
+        if (tl.have_clock()) {
+            ctx->pts_wall_offset_ms = tl.clock_offset_ms();
+            ctx->playing_at_ms      = tl.wall_ms_for(item_pts);
         }
 
         // Has playback actually ARRIVED where it was sent?
@@ -1242,12 +1224,10 @@ static void feed_loop(SourceCtx* ctx) {
         // frames — which is the bug this replaced.
         if (ctx->restart_wall_pending.exchange(false))
             ctx->restart_wall_ms = (long long)seg->starts_at_ms;
-        // The skip measures from the start of the fragment it was armed for,
-        // so this is reset per fragment. Removing it once, to stop it
-        // disturbing the media-clock pin, stopped seeks dead: the skip then
-        // measured against a base that never moved, never reached its target,
-        // and every frame was dropped. The pin has its own base instead.
-        ctx->seg_first_pts_ns = -1;              // set by the first frame
+        // Arming the skip is all the feed loop does here now. The base it
+        // measures from is claimed by the delivery loop when it picks this up,
+        // from a frame it has actually seen — rather than being reset from this
+        // thread, seconds ahead, which is how it used to move mid-skip.
         if (seg->skip_to_ms > 0)
             ctx->skip_until_pts_ns = seg->skip_to_ms * 1000000LL;
 
@@ -1825,6 +1805,9 @@ void SourceCtx::stop_playback() {
     {
         std::lock_guard<std::mutex> qlk(dq_mtx);
         dq.clear();
+        // Same invariant as a seek: a frame the delivery loop has already
+        // popped predates the stop and must not be believed about anything.
+        timeline_epoch++;
     }
 
     // Cancel whatever is in flight. Without this a poll that has just gone out
@@ -1853,8 +1836,6 @@ void SourceCtx::stop_playback() {
     // or Play would interpret the next fragment's pts against an anchor from
     // before the stop.
     first_pts_ns        = -1;
-    seg_first_pts_ns    = -1;
-    pin_base_pts_ns     = -1;
     pts_wall_offset_ms  = kOffsetUnset;
     restart_wall_ms     = 0;
     restart_wall_pending = true;
@@ -1884,8 +1865,6 @@ void SourceCtx::release_decoder_for_restart() {
     if (old) old->stop();            // blocks; outside the lock, flushing set
     decoder_started = false;
     first_pts_ns     = -1;           // re-anchor the playout clock
-    seg_first_pts_ns = -1;
-    pin_base_pts_ns     = -1;
     // The media timeline restarts with the new decoder, so the mapping from
     // pts to wall clock has to be learned again.
     pts_wall_offset_ms   = kOffsetUnset;
