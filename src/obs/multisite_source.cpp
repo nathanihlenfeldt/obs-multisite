@@ -25,6 +25,7 @@
 #include "../core/event_catalog.h"
 #include "../core/cmaf_decoder.h"
 #include "../core/playout_clock.h"
+#include "../core/position_interp.h"
 #include "../core/s3_transport.h"
 
 #include <algorithm>
@@ -242,6 +243,22 @@ struct SourceCtx : DecoderControls {
     // 2712.003s and pinned on 1933.464s, 778 seconds apart, because the frame
     // that got there first was from the previous position.
     std::atomic<uint64_t> timeline_epoch{0};
+
+    // ── Where the live edge is RIGHT NOW ─────────────────────────────────────
+    // "How far behind the main site am I" was (live_seq - head) * segment
+    // duration: two integers, so it could only ever move in whole segments and
+    // it visibly swung by six seconds as each side stepped. The playhead side
+    // is already frame-accurate from the media clock, so only the live edge
+    // needed fixing.
+    //
+    // The main site's content advances in real time; we just learn about it
+    // one segment at a time. So record where the edge was and when we saw it
+    // move, and carry it forward at real-time rate in between. That keeps the
+    // meaning identical — distance to the published live edge — while making
+    // the number continuous.
+    std::atomic<uint64_t>  live_edge_seq{0};
+    std::atomic<long long> live_edge_wall_ms{0};   // end of the newest segment
+    std::atomic<long long> live_edge_seen_ms{0};   // monotonic, when we saw it
     // After a timed seek, frames earlier than this point in the segment are
     // dropped, giving roughly one-second accuracy instead of six.
     std::atomic<long long> skip_until_pts_ns{-1};
@@ -875,6 +892,30 @@ static void poll_loop(SourceCtx* ctx) {
             if (!sess) break;
             // poll() does network I/O and can take seconds; never under a lock.
             RoomState st = sess->poll();
+
+            // Note where the live edge is and when we noticed it move, so the
+            // snapshot can carry it forward at real-time rate between polls
+            // instead of reporting a number that steps a segment at a time.
+            {
+                const uint64_t le = sess->live_edge();
+                if (le != ctx->live_edge_seq.load()) {
+                    const int64_t at = sess->wall_clock_ms(le);
+                    if (at > 0) {
+                        ctx->live_edge_seq     = le;
+                        // The START of the newest segment, which is what
+                        // live_wall_ms() reports and therefore what
+                        // set_delay_from_live() measures back from. Using the
+                        // end instead would be defensible — that content does
+                        // exist — but it would put the readout a segment out
+                        // from the delay the operator dialled in, and a
+                        // control that disagrees with its own display is worse
+                        // than a reference point chosen a beat early.
+                        ctx->live_edge_wall_ms = at;
+                        ctx->live_edge_seen_ms =
+                            (long long)(os_gettime_ns() / 1000000ULL);
+                    }
+                }
+            }
 
             // Is the chosen event actually READY, not merely selected?
             //
@@ -1572,7 +1613,13 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     out.head             = sess->playback_head();
     out.live_edge        = sess->live_edge();
     out.first_available  = sess->earliest_available();
-    out.behind_live_s    = sess->behind_live_s();
+    // Behind live, continuously rather than a segment at a time. Both ends are
+    // now real times: the playhead comes from the media clock, and the live
+    // edge is carried forward from the last time it was seen to move. The
+    // extrapolation is bounded by the same rule the dock's playhead uses — two
+    // segments, so a stalled poll settles just past the last known edge rather
+    // than running away and reporting a delay that is not there.
+    out.behind_live_s    = sess->behind_live_s();      // fallback below
     out.buffered_ahead_s = sess->buffered_ahead_s();
     out.cached           = sess->cache().count();
     out.last_error       = sess->last_error();
@@ -1629,6 +1676,29 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
     }
     out.live_ms     = sess->live_wall_ms();
     out.earliest_ms = sess->earliest_wall_ms();
+
+    // Now that the playhead is known and clamped, express "behind live" as the
+    // gap between two real times rather than a count of segments. Only done
+    // while there IS a live edge to be behind: a finished recording has none,
+    // and the dock does not show the number there anyway.
+    if (!out.ended) {
+        const long long edge = live_edge_wall_ms.load();
+        const long long seen = live_edge_seen_ms.load();
+        if (edge > 0 && seen > 0 && out.playhead_ms > 0) {
+            // Two segments of extrapolation. Past that the edge has stopped
+            // moving for longer than a stall explains, and standing still is a
+            // better answer than inventing delay that may not exist.
+            const long long cap =
+                (long long)(sess->segment_duration_s() * 2000.0);
+            const long long now_ms = (long long)(os_gettime_ns() / 1000000ULL);
+            const long long edge_now =
+                multisite::interpolate_position(edge, seen, now_ms, 0, cap);
+            const double behind = (double)(edge_now - out.playhead_ms) / 1000.0;
+            // Never report being ahead of live: at the edge the two clocks are
+            // within a frame of each other and noise can cross over.
+            out.behind_live_s = behind > 0.0 ? behind : 0.0;
+        }
+    }
 
     if (auto cur = sess->current_marker()) out.current_marker = cur->label;
     for (const auto& m : sess->markers())

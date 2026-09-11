@@ -203,6 +203,10 @@ public:
 
     // How far behind live the campus currently is, in seconds.
     double behind_live_s() const;
+    // Nominal segment length. Needed by callers that reason in wall time about
+    // where the live edge is, since the newest segment's content runs to its
+    // start plus this.
+    double segment_duration_s() const { return m_segment_duration_s.load(); }
 
     // Seconds of contiguous cached content ahead of the head — i.e. how long
     // playback could continue with no network at all.
