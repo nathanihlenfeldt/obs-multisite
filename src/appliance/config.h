@@ -82,6 +82,15 @@ struct Config {
     // Which audio track to put to air. OBS publishes up to six, and an event
     // carries every one it was told to; a campus plays one of them.
     int         audio_track = 0;
+    // How much audio the player keeps queued ahead of the sound card, in
+    // milliseconds. This is the jitter absorber between a decoder that hands
+    // over one ~21 ms frame at a time and a card whose driver will only hold
+    // 8 ms (`Open` in alsa_output.cpp, and BUGS.md point 5). Too small and the
+    // card runs dry every time the delivery thread looks at the picture; too
+    // large and the sound arrives late against the picture. It is a trade
+    // between continuity and lip sync, and the right number depends on the
+    // box, so it is here rather than compiled in.
+    int         audio_buffer_ms = 60;
 
     // ── Control surface ──────────────────────────────────────────────────────
     int         web_port = 8080;

@@ -184,12 +184,20 @@ site landing on a fixed address and port in an existing console will need.
 **Ask the vendor how the destination is specified**, before commissioning a
 site where the address matters.
 
-**2. Lip sync and PTP.** The card reports playback position from the daemon's
-millisecond counter and the player corrects from `snd_pcm_delay()`. Whether
-that holds sync over a two-hour event is not knowable from ten seconds of test
-tone. Separately, AES67 wants both ends within a millisecond and a Pi's NIC
-does no hardware timestamping, so the achievable PTP accuracy is whatever the
-software manages — measure it on the receiver, not on the Pi.
+**2. Lip sync and PTP.** Sync is done entirely by scheduling: both streams are
+stamped with a `due_ns` from `playout_due_ns()` (`src/core/playout_clock.h`) and
+the delivery loop holds each frame until its moment. Nothing reads the audio
+device's own latency — `AudioOutput::delay_s()` is declared, implemented, and
+**called from nowhere**, so the card's queue and the new feeder's queue are
+uncompensated and shift sound later against picture by however deep they are.
+That was true before the feeder too. It is only now measurable: the feeder makes
+the depth a chosen number (`audio_buffer_ms`, 60 ms by default) rather than
+whatever ALSA happened to grant, so it is a knob to be set from a measurement
+rather than a bug to be fixed blind. Whether sync holds over a two-hour event is
+still not knowable from ten seconds of test tone. Separately, AES67 wants both
+ends within a millisecond and a Pi's NIC does no hardware timestamping, so the
+achievable PTP accuracy is whatever the software manages — measure it on the
+receiver, not on the Pi.
 
 The two below were open questions when this script was first written, and the
 bench run has since answered them in the common case. They stay here because
@@ -232,8 +240,9 @@ bench, so the drop-in works in the simple case. Still unverified: that it wins
 the race on a machine slow to bring the daemon up under load.
 
 **5. The buffer under the picture is 8 ms; one decoded frame is 21, so it
-under-runs on every frame.** Root cause known from the vendor driver's own
-limits. No fix applied yet.
+under-runs on every frame.** Fixed in the player: a feeder thread with its own
+queue in front of the card, so the ALSA write is off the thread that presents the
+picture. Not yet confirmed on hardware.
 
 Seen on the bench box alongside the format error in point 3, playing a 48 kHz
 eight-channel feed:
@@ -271,44 +280,72 @@ sound card that cannot keep up. And `snd_pcm_delay()` is what the player uses
 for lip sync (point 2), so a queue that empties every frame is a poor basis for
 it.
 
-Order of preference for a fix:
+**The fix, as built.** A feeder thread with a queue of its own, which is the
+right shape regardless of the vendor: it takes the ALSA write off the thread that
+presents the picture, and it lets the card be fed a period at a time rather than
+a frame at a time.
 
-1. **A feeder thread** holding a software ring, writing one-millisecond periods
-   as space frees, so the card is never written faster than it drains and is
-   never written *slower* than it drains either. Player-side, needs nothing from
-   the vendor, and is the right shape anyway: it takes the write off the thread
-   that presents the picture, where it should never have been. Not done here —
-   it is a threading change to the delivery path, and it wants a bench to tune
-   the ring depth against a real event.
-2. **Ask the vendor to raise the buffer.** Since `bufMs` is what sets `periods`,
-   and the driver clamps both ends, nothing on the ALSA side can widen it. This
-   is a question for them, not a knob we have; it is the same conversation as
-   point 1.
-3. Writing in ≤8 ms chunks from the existing thread keeps the card fed while
-   audio remains queued, but the queue still empties between frames — it changes
-   the shape of the failure, not the failure.
+- `src/appliance/audio_ring.h` — the queue, a circular buffer of bytes.
+  Deliberately no ALSA and no locking, so its arithmetic can be tested without a
+  sound card (`tests/test_audio_ring.cpp`).
+- `src/appliance/alsa_output.cpp` — `write()` converts and hands the samples to
+  the queue, then returns. A feeder thread (`feed()`) drains it one card period
+  at a time. The queue is engaged only when the granted buffer is smaller than a
+  decoded frame (under 40 ms); HDMI grants half a second, so every existing HDMI
+  install keeps the old path unchanged.
+- `Config::audio_buffer_ms` — how deep the queue is, default 60 ms. It is the
+  trade between continuity and lip sync, and the right value depends on the box,
+  so it is a setting rather than a constant.
 
-`scripts/player/aes67.sh` already takes `--buf-ms`, but validates it to 2–8
-because that is what the daemon takes, so it is not a workaround today.
+Three things it had to get right, each of which was wrong in the first draft:
 
-A warning was added to `alsa_output.cpp` that prints the granted buffer against
-the requested one, so the next run says this in one line instead of eight
-thousand counts:
+1. **Only the feeder calls into ALSA** while the queue is in use. `write()` never
+   blocks on the card, which is the point.
+2. **A full queue drops the OLDEST audio** rather than blocking the producer.
+   Blocking there would make the stall that filled the queue worse, and the audio
+   that goes is the audio already furthest behind the picture.
+3. **`flush()` re-primes the feeder.** A seek empties the queue; without this the
+   feeder would still believe playback had started, write one millisecond into an
+   empty card, and under-run before the next frame arrived — a gap you can hear on
+   every jump, and a fresh batch of the counts this exists to remove.
+
+A lifecycle hazard was found while writing it and fixed: `reconfigure()` closes
+the audio output from the **HTTP thread** (switching audio off in the web
+interface) while the delivery loop also closes it. Two threads that both found
+the feeder joinable would both call `join()` on the same `std::thread`, which is
+undefined behaviour. `open()` and `close()` now serialise on `m_lifecycle_mtx`,
+so the second caller finds nothing to join.
+
+Two things are deliberately not done. The queue depth is not tuned — 60 ms is a
+considered starting point, not a measurement, and the bench should settle it. And
+the vendor should still be asked to widen the buffer, because a queue in front of
+an 8 ms card is a workaround for their clamp rather than a reason to leave it.
+
+The alternative — writing in ≤8 ms chunks from the existing thread — was
+rejected: it keeps the card fed while audio is queued, but the queue still empties
+between frames, so it changes the shape of the failure and not the failure.
+
+`scripts/player/aes67.sh` takes `--buf-ms` but validates it to 2–8, because that
+is what the daemon takes, so it is not a workaround.
+
+A warning in `alsa_output.cpp` still prints the granted buffer against the
+requested one, so the next run says this in one line instead of eight thousand
+counts:
 
 ```
 … gave a 8 ms buffer, not the 500 ms asked for (1 ms of it per period, 8 periods) …
 ```
 
-**Next step:** the feeder thread (1), which needs the bench to tune and a real
-event to confirm.
-
-**Next step:** watch a full-length service through it, on the picture and the
-sound together — that is the one thing a bench cannot stand in for, and it is
-what settles points 2 and 3 above. The under-run in point 5 wants its feeder
-thread before that run is worth much, because audio that gaps every frame makes
-the lip-sync question unanswerable. Point 1 is a question for the vendor rather
-than a test, and decides whether a receiver at a real site can be aimed at the
-stream. The script writes a report of everything it could check to
+**Next step:** rebuild the player on the bench and confirm two things — that the
+counts stop, and that `audio queue: 60 ms …` is logged as the card opens. If they
+fall but do not stop, the number to change is `audio_buffer_ms`, and the thing to
+look at is how the delivery thread is paced. Then watch a full-length service
+through it, on the picture and the sound together — that is the one thing a bench
+cannot stand in for, and the queue depth above wants tuning on the bench first,
+because audio that still gaps would make the lip-sync question unanswerable.
+Point 1 is a question for the vendor rather than a test, and
+decides whether a receiver at a real site can be aimed at the stream. The script
+writes a report of everything it could check to
 `/var/tmp/multisite-aes67-<timestamp>/report.txt` and says out loud which
 checks it could not make.
 
