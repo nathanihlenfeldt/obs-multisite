@@ -117,5 +117,6 @@ fixed because somebody took the time to paste a log.
 
 ---
 
-Full documentation: [README](README.md) · design and protocol:
+Website: [stageaudioworks.github.io/obs-multisite](https://stageaudioworks.github.io/obs-multisite/)
+· full documentation: [README](README.md) · design and protocol:
 [PROJECT-SCOPE](PROJECT-SCOPE.md) · GPL-3.0-or-later.

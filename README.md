@@ -4,10 +4,11 @@ Distribute a live church event from a main campus to any number of satellite
 campuses, reliably, over ordinary venue internet — using nothing but an
 S3-compatible bucket you control.
 
-**New here? [QUICKSTART.md](QUICKSTART.md) gets you broadcasting in twenty
-minutes.** This README is the overview: what this is, how far along it is, and
-where it falls short. The long-form material lives under
-[Where to go next](#where-to-go-next).
+**New here?** The [project website](https://stageaudioworks.github.io/obs-multisite/)
+is the readable introduction, and [QUICKSTART.md](QUICKSTART.md) gets you
+broadcasting in twenty minutes. This README is the technical overview: what
+this is, how far along it is, and where it falls short. The long-form material
+lives under [Where to go next](#where-to-go-next).
 
 Two OBS Studio plugins in one module: an **encoder** at the main site that
 publishes the programme as CMAF segments, and a **decoder** at each satellite
@@ -37,6 +38,7 @@ far more than one that is two seconds behind and stutters.
 
 | You want to… | Start here |
 |---|---|
+| Read the readable introduction | [Project website](https://stageaudioworks.github.io/obs-multisite/) |
 | Get broadcasting in about twenty minutes | [QUICKSTART.md](QUICKSTART.md) |
 | Install, configure and operate in depth | [Operator guide](docs/OPERATOR.md) |
 | Choose between a PC and the Pi box | [Choosing a satellite](docs/SATELLITE.md) |
