@@ -532,6 +532,11 @@ static void deliver_loop(SourceCtx* ctx) {
         }
         ctx->dq_cv.notify_all();        // let the decoder push again
 
+        // Checked here as well as after the wait below. The stall resync sits
+        // between the two and re-bases the playout clock from this frame's
+        // pts, so it must not see one from a timeline already left either.
+        if (item_epoch != ctx->timeline_epoch.load()) continue;
+
         // If a frame is far past due, the playout clock has drifted behind
         // wall time — normally because playback stalled waiting for a segment
         // (a network hiccup) rather than an explicit pause. Re-anchor instead
@@ -583,6 +588,18 @@ static void deliver_loop(SourceCtx* ctx) {
             std::this_thread::sleep_for(std::chrono::nanoseconds(wait_ns));
         }
         if (!ctx->running.load()) break;
+
+        // Did the timeline move while this frame was in hand?
+        //
+        // It was popped before the wait above, and that wait is as long as a
+        // delivery lead, so a seek in the meantime leaves this frame belonging
+        // to a position the operator has already left. It must be dropped
+        // HERE, before anything reads it: everything below treats the frame as
+        // evidence about the current timeline — the skip measures from it, the
+        // media clock pins to it, the playing clock follows it, and then it
+        // goes to air. Checking further down was the first version of this
+        // guard and it was useless, because the pin had already happened.
+        if (item_epoch != ctx->timeline_epoch.load()) continue;
 
         // Sub-segment seek: drop frames before the requested moment. Segments
         // are the unit of transfer; they need not be the unit of seeking.
@@ -658,13 +675,6 @@ static void deliver_loop(SourceCtx* ctx) {
                 ctx->awaiting_frames = false;
             }
         }
-
-        // Did the timeline move while this frame was in hand? It was popped
-        // before the wait above and the wait is as long as a delivery lead, so
-        // a seek in that window leaves this frame belonging to a position the
-        // operator has already left. Dropping it here is what stops it reaching
-        // air and, worse, defining the media clock for everything after it.
-        if (item_epoch != ctx->timeline_epoch.load()) continue;
 
         // Stop means stop. Checked again here, after the wait above, because
         // a frame can pass the check in deliver_* microseconds before Stop
