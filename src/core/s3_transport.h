@@ -84,10 +84,20 @@ public:
     // source down while it happened to be mid-request blocked the OBS UI
     // thread for as long as that single request had left — long enough that
     // an operator quitting OBS saw it stop responding and force-quit, which
-    // is indistinguishable from a crash on the next launch. One-way and safe
-    // to call from any thread; the caller discards this instance afterwards
-    // rather than reusing it, so there is nothing to "un-cancel".
+    // is indistinguishable from a crash on the next launch. Safe to call from
+    // any thread.
+    //
+    // This was originally one-way, because the only caller was teardown and
+    // it discarded the instance afterwards. Stop now uses it too — it cancels
+    // downloads to return the source to a neutral state and then expects Play
+    // to work on the same transport — so resume_pending() exists to re-arm it.
+    // Without that, a stopped source could never download again.
     void cancel_pending();
+
+    // Clears the cancel flag so this transport can be used again. Call it
+    // before issuing new requests, never while one is in flight: a request
+    // already running would quietly lose its ability to be cancelled.
+    void resume_pending();
 
     // Where the last response came from, and how fast the link has been.
     // Populated by ordinary traffic, so during an event these reflect the

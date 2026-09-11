@@ -139,6 +139,11 @@ struct DecoderSnapshot {
     // Wall-clock times, so the UI never has to mention sequence numbers.
     long long   playhead_ms = 0, live_ms = 0, earliest_ms = 0, started_ms = 0;
     bool        playing = false;
+    // Stopped is narrower than !playing: a source that is loading an event is
+    // also not playing, but it is downloading hard. Stopped means idle all the
+    // way down — no downloads, no decoder, nothing on air — so the UI can say
+    // so instead of showing a stale "behind live" that will never move.
+    bool        stopped = false;
     bool        locked = false;
     // A finished recording is video-on-demand: it has an end and a position
     // within it, and "behind live" means nothing.

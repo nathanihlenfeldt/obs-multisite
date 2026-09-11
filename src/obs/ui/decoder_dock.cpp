@@ -858,7 +858,15 @@ void DecoderDock::refresh() {
     // Lead with the clock time being shown — the thing an operator can match
     // against what is happening in the room — and express the offset in plain
     // language rather than as a signed number.
-    if (s.seek_target_ms > 0) {
+    if (s.stopped) {
+        // First, ahead of everything else: a stopped source is not downloading,
+        // so every other line here would be describing a position that cannot
+        // move. Showing "2 minutes behind" under a stopped button is the kind
+        // of stale number an operator reasonably acts on.
+        m_behind->setText(tr_("Dock.Stopped"));
+        m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #8b9198;");
+        m_behind->setToolTip(QString());
+    } else if (s.seek_target_ms > 0) {
         // A jog or a timeline click. The position updates instantly; the
         // wording makes clear the picture has not caught up yet, so the
         // operator is neither left wondering nor misled.

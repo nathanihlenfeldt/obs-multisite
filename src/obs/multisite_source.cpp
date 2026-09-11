@@ -221,6 +221,19 @@ struct SourceCtx : DecoderControls {
     // An operator loads an event, lets it buffer, then presses Play on cue.
     // Auto-playing as soon as enough is buffered is wrong for an event.
     std::atomic<bool> playing{false};
+    // Stopped is NOT merely "not playing". Loading an event is also not
+    // playing, and loading must keep downloading — filling the buffer before
+    // the operator goes to air is the entire point of Load. `stopped` is the
+    // narrower state Stop puts the source into: nothing downloading, no
+    // decoder, nothing on air, waiting for Play or for a recording to be
+    // loaded.
+    //
+    // What it deliberately does NOT discard is the cache. Emptying it would
+    // make Play re-satisfy start_buffer_seconds, 60s by default, turning Stop
+    // into a minute to undo — and an expensive Stop is the thing that would
+    // then need a confirmation dialog in front of it. Keeping the cache means
+    // Play re-enters from disk and Stop stays cheap to change your mind about.
+    std::atomic<bool> stopped{false};
     // Guards against accidental clicks mid-event.
     std::atomic<bool> controls_locked{false};
     // Set while the queue is being torn down (seek, stop, decoder restart) so
@@ -299,6 +312,12 @@ struct SourceCtx : DecoderControls {
     // none of this, so it moved the picture with nothing on the dock to say
     // it had been asked to.
     void after_jump(long long to_wall_ms);
+
+    // Leave the stopped state: clear the flag and re-arm the transport, which
+    // Stop cancelled. Anything that should start downloading again calls this
+    // — Play, and loading an event — because the cancel flag is sticky and a
+    // source that stayed armed would abort every request the instant it began.
+    void resume_downloads();
 
     // Marker chosen in the properties dialog, acted on by the Jump button.
     std::string pending_marker_id;
@@ -772,6 +791,18 @@ static void poll_loop(SourceCtx* ctx) {
     mlog_info("source: poll loop started");
     int64_t next_poll = 0;
     while (ctx->running.load()) {
+        // Stopped means stopped all the way down. The thread stays alive so
+        // Play can start it again in milliseconds, but it issues no requests:
+        // this is what makes Stop stop consuming bandwidth and filling disk,
+        // rather than only taking the picture off air. Note this is `stopped`
+        // and not `!playing` — loading an event is also not playing, and
+        // loading has to download.
+        if (ctx->stopped.load()) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+            next_poll = 0;        // poll immediately on the way out
+            continue;
+        }
+
         const int64_t now = (int64_t)(os_gettime_ns() / 1000000ULL);
 
         // An operator action (pinning an event, reconfiguring) sets poll_now so
@@ -1501,6 +1532,7 @@ void SourceCtx::snapshot(DecoderSnapshot& out) const {
         }
     }
     out.playing = playing.load();
+    out.stopped = stopped.load();
     out.locked  = controls_locked.load();
     {
         // The convention in this file: take the reference under obj_mtx and
@@ -1568,6 +1600,9 @@ void SourceCtx::pin_event(const std::string& event_id) {
     // discontinuity counter makes the host rebuild its decoder.
     sess->pin_event(event_id);
     playing = false;                  // an operator presses Play on cue
+    // Loading is the other way out of a stopped source: it must download to
+    // fill the buffer, even though it deliberately does not go to air.
+    resume_downloads();
     playing_at_ms = 0;
     // Say so before any network work starts. The dock reads these on its very
     // next tick (500 ms), so the click is acknowledged whatever the store does
@@ -1586,6 +1621,7 @@ void SourceCtx::unpin_event() {
     if (!sess) return;
     sess->unpin();
     playing = false;
+    resume_downloads();
     playing_at_ms = 0;
     loading_event     = true;
     seek_target_ms    = 0;
@@ -1609,11 +1645,20 @@ void SourceCtx::jump_to_marker(const std::string& id) {
               (unsigned long long)sess->playback_head());
 }
 
+void SourceCtx::resume_downloads() {
+    if (!stopped.exchange(false)) return;   // idempotent: nothing to undo
+    std::shared_ptr<S3Transport> tx;
+    { std::lock_guard<std::mutex> lk(obj_mtx); tx = transport; }
+    if (tx) tx->resume_pending();
+    poll_now = true;        // refill now rather than waiting out the interval
+}
+
 void SourceCtx::play() {
     auto sess = get_session(this);
     if (!sess) { mlog_warn("source: play ignored — not configured"); return; }
     pause_started_ns = 0;
     paused = false;
+    resume_downloads();
     playing = true;
     // Going to air takes as long as it takes to decode the first fragment, so
     // say so until a frame has actually landed rather than looking inert.
@@ -1642,17 +1687,54 @@ void SourceCtx::play() {
 // the refill.
 void SourceCtx::stop_playback() {
     playing = false;
+    stopped = true;
     paused = false;
     pause_started_ns = 0;
+
+    // `flushing` stays set across the decoder teardown below, not just the
+    // queue sweep. stop() joins the decoder's worker thread, and that thread
+    // may be parked inside enqueue_frame waiting for queue space; flushing is
+    // what releases it. Clearing the flag before the join would be a deadlock
+    // on the UI thread — exactly the shape of hang 658cd5f fixed for poll().
     flushing = true;
+    dq_cv.notify_all();
     {
         std::lock_guard<std::mutex> qlk(dq_mtx);
         dq.clear();
     }
+
+    // Cancel whatever is in flight. Without this a poll that has just gone out
+    // sits on its curl timeout — up to 30s — so a stopped source would carry
+    // on holding a connection open and land one more segment after the
+    // operator took it off air. Re-armed in play().
+    {
+        std::shared_ptr<S3Transport> tx;
+        { std::lock_guard<std::mutex> lk(obj_mtx); tx = transport; }
+        if (tx) tx->cancel_pending();
+    }
+
+    // Drop the decoder. It is the expensive thing to leave running — threads,
+    // codec contexts, and a frame buffer per stream — and Play rebuilds it
+    // from the next fragment's init segment anyway. Taken out from under the
+    // lock and stopped outside it, the same order the restart path uses,
+    // because stop() blocks.
+    std::shared_ptr<CmafDecoder> old;
+    { std::lock_guard<std::mutex> lk(obj_mtx); old = decoder; decoder.reset(); }
+    if (old) old->stop();
+    decoder_started = false;
+
     flushing = false;
-    first_pts_ns = -1;
-    seek_target_ms  = 0;
-    awaiting_frames = false;
+
+    // Everything the media timeline is derived from goes with the decoder,
+    // or Play would interpret the next fragment's pts against an anchor from
+    // before the stop.
+    first_pts_ns        = -1;
+    seg_first_pts_ns    = -1;
+    pts_wall_offset_ms  = kOffsetUnset;
+    restart_wall_ms     = 0;
+    restart_wall_pending = true;
+    seek_target_ms      = 0;
+    awaiting_frames     = false;
     dq_cv.notify_all();
 
     // Take the picture off air. OBS holds the last frame handed to an async
@@ -1662,7 +1744,10 @@ void SourceCtx::stop_playback() {
     // frame" is what Hold is for, and it is a separate control.
     if (source) obs_source_output_video(source, nullptr);
 
-    mlog_info("source: STOPPED (still downloading, ready to play again)");
+    mlog_info("source: STOPPED — downloads cancelled, decoder released, "
+              "cache kept (%llu segments)",
+              (unsigned long long)(get_session(this)
+                                       ? get_session(this)->cache().count() : 0));
 }
 
 void SourceCtx::after_jump(long long to_wall_ms) {
