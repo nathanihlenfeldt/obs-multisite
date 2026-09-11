@@ -199,10 +199,15 @@ function drawStatus() {
 
   if (!s.have_source) return;
 
-  const shown = s.seek_target_ms || s.playhead_ms;
+  // Buffering means the decoder has started but no frame has decoded yet —
+  // exactly the window where playhead_ms is still the segment-duration
+  // ESTIMATE, not the frame-accurate clock, and about to visibly snap once
+  // the real one arrives. hhmmss(0) already reads as "--:--:--"; showing
+  // that rather than a number about to be wrong is the whole fix.
+  const shown = s.seek_target_ms || (s.buffering ? 0 : s.playhead_ms);
   const clock = $('#clock');
   clock.textContent = hhmmss(shown);
-  clock.className = 'clock' + (s.seek_target_ms ? ' provisional' : '');
+  clock.className = 'clock' + (s.seek_target_ms || s.buffering ? ' provisional' : '');
 
   // Feed tickSmooth() from this exact, authoritative sample. Everything that
   // freezes the clock/timeline below (loading, a pending seek, buffering,

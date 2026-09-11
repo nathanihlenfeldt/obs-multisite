@@ -178,11 +178,16 @@ function drawStatus() {
   $('#lock').className = 'lock' + (s.locked ? ' on' : '');
 
   // ── The reading that matters ───────────────────────────────────────────
+  // Buffering means the decoder has started but no frame has decoded yet —
+  // exactly the window where playhead_ms is still the segment-duration
+  // ESTIMATE, not the frame-accurate clock, and about to visibly snap once
+  // the real one arrives. hhmmss(0) already reads as "--:--:--"; showing
+  // that rather than a number about to be wrong is the whole fix.
   const clock = $('#clock');
-  clock.textContent = hhmmss(s.playhead_ms);
+  clock.textContent = hhmmss(s.buffering ? 0 : s.playhead_ms);
   // While a jump is in flight the time shown is where playback is GOING, not
   // where the picture is. Say so rather than letting it read as fact.
-  clock.classList.toggle('provisional', !!s.seek_target_ms);
+  clock.classList.toggle('provisional', !!s.seek_target_ms || !!s.buffering);
 
   // Feed tickSmooth() from this exact, authoritative sample. Everything that
   // freezes the clock/timeline/position below (loading, a pending seek,

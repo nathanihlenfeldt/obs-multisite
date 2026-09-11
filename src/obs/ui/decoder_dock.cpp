@@ -876,6 +876,17 @@ void DecoderDock::refresh() {
     } else if (s.loading) {
         m_behind->setText(tr_("Dock.LoadingRecording"));
         m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #3b82c4;");
+    } else if (s.buffering) {
+        // The decoder has started and the head is seated, but no frame has
+        // been decoded yet — which is exactly the window where playhead_ms
+        // is still the SEGMENT-DURATION ESTIMATE (wall_clock_ms's fallback),
+        // not the frame-accurate clock. Showing that number here was the
+        // "incorrect time on load" complaint: a position that was about to
+        // visibly snap once the real one arrived a moment later. The state
+        // badge already says BUFFERING for this same window; the big number
+        // now agrees with it instead of contradicting it.
+        m_behind->setText(tr_("Dock.Buffering"));
+        m_behind->setStyleSheet("font-size: 18px; font-weight: 500; color: #3b82c4;");
     } else if (s.ended) {
         // A finished recording: show where you are in it and how much is left.
         // "Behind live" is meaningless once there is no live edge to be behind.
@@ -914,10 +925,11 @@ void DecoderDock::refresh() {
 
     // Feed tickSmooth()'s interpolation from this exact, authoritative
     // sample. Active only where the text just set above is a genuinely
-    // moving number — never mid-seek, mid-load, paused, at the live edge
-    // with nothing new yet, or once a recording has run out, all of which
-    // freeze here exactly as refresh() already freezes them.
-    m_smoothActive = s.playing && !s.paused && s.seek_target_ms == 0 &&
+    // moving number — never mid-seek, mid-load, mid-buffer, paused, at the
+    // live edge with nothing new yet, or once a recording has run out, all
+    // of which freeze here exactly as refresh() already freezes them.
+    m_smoothActive = s.playing && !s.paused && !s.buffering &&
+                     s.seek_target_ms == 0 &&
                      !s.loading && !(s.ended && s.at_end) &&
                      !(s.head > s.live_edge && s.live_edge > 0) &&
                      (s.ended || s.behind_live_s >= 1.0);
