@@ -229,6 +229,19 @@ struct SourceCtx : DecoderControls {
     // putting every displayed clock time 3.3s out — and the pin is learned once
     // and sticky, so nothing downstream corrects it.
     std::atomic<long long> pin_base_pts_ns{-1};
+    // Which timeline the frames in flight belong to. Bumped by every seek and
+    // decoder restart, under dq_mtx so it orders against the delivery loop's
+    // pop.
+    //
+    // Clearing the queue is not enough on its own: the delivery loop pops a
+    // frame into a local and then waits up to a full delivery lead for it to
+    // fall due, so a frame taken from the queue BEFORE a seek is still
+    // processed after it — past the clear, past the decoder teardown, and with
+    // no trace left that it belongs to the position just left. It then claimed
+    // the media-clock pin's base. Seen in the field: a seek anchored on pts
+    // 2712.003s and pinned on 1933.464s, 778 seconds apart, because the frame
+    // that got there first was from the previous position.
+    std::atomic<uint64_t> timeline_epoch{0};
     // After a timed seek, frames earlier than this point in the segment are
     // dropped, giving roughly one-second accuracy instead of six.
     std::atomic<long long> skip_until_pts_ns{-1};
@@ -498,6 +511,7 @@ static void deliver_loop(SourceCtx* ctx) {
         }
 
         PendingFrame item;
+        uint64_t item_epoch = 0;
         {
             std::unique_lock<std::mutex> lk(ctx->dq_mtx);
             ctx->dq_cv.wait_for(lk, std::chrono::milliseconds(50), [ctx] {
@@ -514,6 +528,7 @@ static void deliver_loop(SourceCtx* ctx) {
                 });
             item = std::move(*it);
             ctx->dq.erase(it);
+            item_epoch = ctx->timeline_epoch.load();
         }
         ctx->dq_cv.notify_all();        // let the decoder push again
 
@@ -643,6 +658,13 @@ static void deliver_loop(SourceCtx* ctx) {
                 ctx->awaiting_frames = false;
             }
         }
+
+        // Did the timeline move while this frame was in hand? It was popped
+        // before the wait above and the wait is as long as a delivery lead, so
+        // a seek in that window leaves this frame belonging to a position the
+        // operator has already left. Dropping it here is what stops it reaching
+        // air and, worse, defining the media clock for everything after it.
+        if (item_epoch != ctx->timeline_epoch.load()) continue;
 
         // Stop means stop. Checked again here, after the wait above, because
         // a frame can pass the check in deliver_* microseconds before Stop
@@ -1457,6 +1479,10 @@ void SourceCtx::resume() {
         std::lock_guard<std::mutex> qlk(dq_mtx);
         dropped = dq.size();
         dq.clear();
+        // Same reason as a seek: a frame already popped into the delivery
+        // loop's hand is from before the hold, and re-anchoring the clock on it
+        // would put the picture back where the hold started.
+        timeline_epoch++;
     }
     first_pts_ns = -1;             // next frame re-anchors the playout clock
     dq_cv.notify_all();            // release the decoder if it was blocked
@@ -1770,6 +1796,9 @@ void SourceCtx::stop_playback() {
 }
 
 void SourceCtx::release_decoder_for_restart() {
+    // Bump first, under the queue lock, so any frame the delivery loop has
+    // already popped is stamped with the old timeline and will be discarded.
+    { std::lock_guard<std::mutex> qlk(dq_mtx); timeline_epoch++; }
     std::shared_ptr<CmafDecoder> old;
     { std::lock_guard<std::mutex> lk(obj_mtx); old = decoder; decoder.reset(); }
     if (old) old->stop();            // blocks; outside the lock, flushing set
