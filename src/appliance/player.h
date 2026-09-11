@@ -294,6 +294,11 @@ private:
     std::condition_variable  m_dq_cv;
 
     std::atomic<uint64_t> m_frames_out{0}, m_frames_dropped{0};
+    // Split by stream. A dropped picture repeats the last one; a dropped audio
+    // frame is audible. The total could not say which was happening, and which
+    // one climbs is the difference between the card stalling and the decoder
+    // falling behind.
+    std::atomic<uint64_t> m_dropped_video{0}, m_dropped_audio{0};
     // How long present() actually takes. The delivery thread scales the
     // picture and waits for the vertical blank inline, so if the display path
     // is slow it does not just make the picture late — it throttles the whole

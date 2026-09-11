@@ -53,6 +53,17 @@ diagnosis.
 `sound has broken up 10 times` / `20 times` (ALSA xrun warnings, from
 `src/appliance/alsa_output.cpp`) appears right as each stall begins.
 
+**Since this was written**, the delivery queue is bounded per stream rather
+than as one total (`kMaxQueuedVideo` / `kMaxQueuedAudio`) and the status line
+now splits drops — `dropped=N (V v / A a)`. The reasoning above that ruled out
+the drop path still holds, and the split makes the next repro say which stream
+is affected. It also removes one contributor worth knowing about: the delivery
+thread both presents the picture and calls `snd_pcm_writei`, which blocks, and
+under the old flat bound audio could take every slot while it was blocked,
+leaving no room for a picture. That is the mechanism behind the ALSA xruns
+correlating with each stall, so it may or may not have been part of this — the
+thread dump is still what decides.
+
 **Next step, the moment this reproduces again** (box still up, stall
 ongoing):
 ```sh

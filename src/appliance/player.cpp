@@ -30,10 +30,33 @@ long long now_ms() {
 // How far ahead of its due time a frame may be released. Small, because the
 // output has nowhere to buffer it — unlike OBS, which had its own queue.
 constexpr uint64_t kMaxDeliveryLeadNs = 20000000ULL;      // 20 ms
-// Frames waiting to go out. Video and audio arrive in decode order and are
-// released in presentation order, so this only has to smooth small jitter. At
-// 1080p an I420 frame is 3 MB, so 16 caps out around 50 MB.
-constexpr size_t   kMaxQueuedFrames = 16;
+// Frames waiting to go out, bounded PER STREAM rather than as one total.
+//
+// A flat count sounds equivalent and is not, because the thread that drains
+// this queue also presents the picture and writes to ALSA — and snd_pcm_writei
+// blocks until the card takes the samples. While it is blocked the queue fills
+// with whatever the decoder happens to be producing, and under a flat bound
+// audio can take every slot: audio frames outnumber video ones, and there is
+// nothing reserving space for a picture. Video frames then wait out the 250 ms
+// in enqueue() and are dropped.
+//
+// This is not hypothetical on this box. A six-track event once put six tracks
+// into a stereo device, ALSA applied the back-pressure it should, and video
+// starved behind it — a few frames a second and a playout clock that could
+// never catch up (see on_audio, which now drops the other tracks). That fixed
+// the six-track case; it did not reserve video any room for the next thing
+// that makes the card block, and an xrun is enough.
+//
+// Bounding each stream separately means video's allowance never depends on
+// what audio is doing. 12 video frames is 400 ms at 30fps, far more than the
+// 20 ms lead this player releases on, so it is headroom for a stall rather than
+// pacing. Audio frames are small, so 48 costs almost nothing.
+//
+// Memory is also predictable now, which matters more here than on a desktop:
+// the cap is 12 video frames whatever audio does, so at 1080p (~3 MB an I420
+// frame) about 36 MB rather than up to 50.
+constexpr size_t   kMaxQueuedVideo = 12;
+constexpr size_t   kMaxQueuedAudio = 48;
 // Past this much lateness the playout clock has drifted behind — normally a
 // stall waiting for a segment. Re-anchor rather than dumping a backlog.
 constexpr uint64_t kClockResyncThresholdNs = 2000000000ULL;   // 2 s
@@ -353,13 +376,30 @@ void Player::enqueue(PendingFrame&& f) {
     // thread block inside this callback whenever delivery stopped draining,
     // and CmafDecoder::stop() would then join a thread that could never
     // finish. Dropping a frame is far better than hanging the appliance.
+    // Counted on demand rather than kept in parallel counters: the queue is at
+    // most 60 items and counters would have to stay in step with every drain,
+    // flush and clear, which is how they drift and stall the decoder against a
+    // queue that is not actually full.
+    const bool want_video = f.is_video;
     const bool space = m_dq_cv.wait_for(lk, std::chrono::milliseconds(250),
-        [this] {
-            return m_dq.size() < kMaxQueuedFrames || !m_running.load() ||
-                   m_flushing.load();
+        [this, want_video] {
+            if (!m_running.load() || m_flushing.load()) return true;
+            const size_t n = (size_t)std::count_if(
+                m_dq.begin(), m_dq.end(),
+                [want_video](const PendingFrame& q) {
+                    return q.is_video == want_video;
+                });
+            return n < (want_video ? kMaxQueuedVideo : kMaxQueuedAudio);
         });
     if (!m_running.load() || m_flushing.load()) return;
-    if (!space) { m_frames_dropped++; return; }
+    if (!space) {
+        // Split by stream: a dropped picture repeats the last one, a dropped
+        // audio frame is a hole you can hear, and the totals could not tell
+        // them apart. Which one is climbing says where to look.
+        m_frames_dropped++;
+        if (want_video) m_dropped_video++; else m_dropped_audio++;
+        return;
+    }
     m_dq.push_back(std::move(f));
     lk.unlock();
     m_dq_cv.notify_all();
@@ -856,7 +896,7 @@ void Player::poll_loop() {
                                                                : "playing";
                 plog_info("%s head=%llu live=%llu behind=%.0fs buffered=%.0fs "
                           "cached=%zu downloaded=%llu frames_out=%llu "
-                          "fps=%.1f dropped=%llu",
+                          "fps=%.1f dropped=%llu (%llu v / %llu a)",
                           state,
                           (unsigned long long)sess->playback_head(),
                           (unsigned long long)sess->live_edge(),
@@ -864,7 +904,9 @@ void Player::poll_loop() {
                           sess->cache().count(),
                           (unsigned long long)s.downloaded,
                           (unsigned long long)out, fps,
-                          (unsigned long long)m_frames_dropped.load());
+                          (unsigned long long)m_frames_dropped.load(),
+                          (unsigned long long)m_dropped_video.load(),
+                          (unsigned long long)m_dropped_audio.load());
 
                 // Where the delivery thread's time actually goes. A mean that
                 // approaches the frame interval means the display path, not
