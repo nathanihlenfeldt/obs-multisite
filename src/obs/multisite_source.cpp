@@ -313,6 +313,12 @@ struct SourceCtx : DecoderControls {
     // it had been asked to.
     void after_jump(long long to_wall_ms);
 
+    // Release the decoder and everything derived from the media timeline, so
+    // the next fragment rebuilds both. Shared by the seek path and the poll
+    // loop's discontinuity handler: they were separate copies, and the seek
+    // path was missing the decoder teardown entirely.
+    void release_decoder_for_restart();
+
     // Leave the stopped state: clear the flag and re-arm the transport, which
     // Stop cancelled. Anything that should start downloading again calls this
     // — Play, and loading an event — because the cancel flag is sticky and a
@@ -580,6 +586,16 @@ static void deliver_loop(SourceCtx* ctx) {
                 if (w > 0) {
                     off = w - base / 1000000LL;
                     ctx->pts_wall_offset_ms = off;
+                    // This pairing is what every displayed clock time is built
+                    // on, and it is learned once and then sticky. If the wall
+                    // time belongs to one fragment and the pts to another, the
+                    // whole readout is offset by the gap between them — and
+                    // nothing downstream can tell. Log the pairing so it can be
+                    // checked against the fragment the seek actually asked for
+                    // rather than inferred from the result.
+                    mlog_info("source: media clock pinned — fragment wall %lld, "
+                              "first pts %.3fs (so pts 0 would be wall %lld)",
+                              w, (double)base / 1e9, off);
                 }
             }
             if (off != SourceCtx::kOffsetUnset)
@@ -1078,25 +1094,10 @@ static void feed_loop(SourceCtx* ctx) {
                 ctx->seen_discontinuity = d;
                 if (ctx->decoder_started.load()) {
                     mlog_info("source: playback jumped — restarting decoder");
-                    std::shared_ptr<CmafDecoder> old;
-                    { std::lock_guard<std::mutex> lk(ctx->obj_mtx);
-                      old = ctx->decoder; ctx->decoder.reset(); }
-                    if (old) old->stop();      // stop() blocks: outside the lock
-                    ctx->decoder_started = false;
-                    ctx->first_pts_ns = -1;      // re-anchor the playout clock
-                    // The media timeline restarts with the new decoder, so
-                    // the offset has to be learned again.
-                    ctx->pts_wall_offset_ms   = SourceCtx::kOffsetUnset;
-                    ctx->restart_wall_ms      = 0;
-                    ctx->restart_wall_pending = true;
-                    // The lead window measures the current clock, and the
-                    // clock is about to be re-anchored.
-                    ctx->lead_video_sum_ns = 0;
-                    ctx->lead_video_count  = 0;
-                    ctx->lead_video_min_ns = INT64_MAX;
-                    ctx->lead_audio_sum_ns = 0;
-                    ctx->lead_audio_count  = 0;
-                    ctx->lead_audio_min_ns = INT64_MAX;
+                    // Same teardown the seek path performs; shared so the two
+                    // cannot drift apart. A seek reaches this having already
+                    // done it, and it is idempotent.
+                    ctx->release_decoder_for_restart();
                     {
                         std::lock_guard<std::mutex> qlk(ctx->dq_mtx);
                         ctx->dq.clear();         // stale frames from the old timeline
@@ -1750,18 +1751,49 @@ void SourceCtx::stop_playback() {
                                        ? get_session(this)->cache().count() : 0));
 }
 
+void SourceCtx::release_decoder_for_restart() {
+    std::shared_ptr<CmafDecoder> old;
+    { std::lock_guard<std::mutex> lk(obj_mtx); old = decoder; decoder.reset(); }
+    if (old) old->stop();            // blocks; outside the lock, flushing set
+    decoder_started = false;
+    first_pts_ns     = -1;           // re-anchor the playout clock
+    seg_first_pts_ns = -1;
+    // The media timeline restarts with the new decoder, so the mapping from
+    // pts to wall clock has to be learned again.
+    pts_wall_offset_ms   = kOffsetUnset;
+    restart_wall_ms      = 0;
+    restart_wall_pending = true;
+    // The lead window measures the current clock, and the clock is about to be
+    // re-anchored.
+    lead_video_sum_ns = 0; lead_video_count = 0; lead_video_min_ns = INT64_MAX;
+    lead_audio_sum_ns = 0; lead_audio_count = 0; lead_audio_min_ns = INT64_MAX;
+}
+
 void SourceCtx::after_jump(long long to_wall_ms) {
     // Treat as a discontinuity: drop what is queued and re-anchor. `flushing`
     // releases the decoder if it is waiting for queue space, so the restart
     // that follows can never block.
+    // `flushing` is held across the decoder teardown as well as the queue
+    // sweep, because stop() joins a worker that may be parked waiting for
+    // queue space and flushing is what releases it.
     flushing = true;
+    dq_cv.notify_all();
     {
         std::lock_guard<std::mutex> qlk(dq_mtx);
         dq.clear();
     }
-    dq_cv.notify_all();
+
+    // Release the decoder HERE, not three seconds later when the poll loop
+    // notices the discontinuity. Clearing the queue alone left the old decoder
+    // running and still holding decoded frames from the position just left, so
+    // those frames were delivered immediately after the seek — the log showed
+    // "playout anchored on first video frame" in the same millisecond as the
+    // jump, at the OLD pts. The operator saw the picture carry on playing from
+    // where they had just left, for as long as it took the poll loop to catch
+    // up, and only then cut to where they had asked for.
+    release_decoder_for_restart();
+
     flushing = false;
-    first_pts_ns = -1;
     pause_started_ns = 0;
     paused = false;
     dq_cv.notify_all();
