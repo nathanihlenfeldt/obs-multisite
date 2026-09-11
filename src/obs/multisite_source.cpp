@@ -213,6 +213,19 @@ struct SourceCtx : DecoderControls {
     // mispairing being fixed.
     std::atomic<long long> restart_wall_ms{0};
     std::atomic<bool>      restart_wall_pending{true};
+    // First pts delivered since the last seek or decoder restart. Two things
+    // measure from it: the sub-segment skip, and the pin that maps media pts to
+    // wall clock.
+    //
+    // It is reset ONLY on a seek or restart. It used to be reset by the feed
+    // loop on every fragment pushed, which looked like "this fragment's first
+    // pts" and was not: the feed loop runs seconds ahead of delivery, so it
+    // moved the base out from under both consumers mid-use. Measured in the
+    // field on a 5.089s sub-segment seek — the skip started measuring from
+    // 1290.008s, a later fragment reset the base, and the clock pinned against
+    // 1293.333s, putting every displayed time 3.3s out and landing the seek
+    // short of where it was asked for. Both consumers want a per-SEEK base, and
+    // this is that.
     std::atomic<long long> seg_first_pts_ns{-1};
     // After a timed seek, frames earlier than this point in the segment are
     // dropped, giving roughly one-second accuracy instead of six.
@@ -571,28 +584,26 @@ static void deliver_loop(SourceCtx* ctx) {
         // Keep the playing clock in step with the frame going to air, so the
         // displayed time advances continuously instead of once per segment.
         {
-            long long base = ctx->seg_first_pts_ns.load();
             const long long pts = item.is_video ? item.video.pts_ns
                                                 : item.audio.pts_ns;
+            long long base = ctx->seg_first_pts_ns.load();
             if (base < 0) { ctx->seg_first_pts_ns = pts; base = pts; }
 
             long long off = ctx->pts_wall_offset_ms.load();
             if (off == SourceCtx::kOffsetUnset) {
-                // First frame since the decoder started. `base` is this
-                // fragment's first pts and restart_wall_ms is that same
-                // fragment's wall start, because the queue was cleared and
-                // this is the first frame to come out.
+                // Pin the media timeline to the wall clock, once, from the
+                // first frame delivered since the decoder restarted.
+                // restart_wall_ms is that same fragment's wall start, so the
+                // two describe the same moment — see the note on
+                // seg_first_pts_ns for what used to break that.
                 const long long w = ctx->restart_wall_ms.load();
                 if (w > 0) {
                     off = w - base / 1000000LL;
                     ctx->pts_wall_offset_ms = off;
-                    // This pairing is what every displayed clock time is built
-                    // on, and it is learned once and then sticky. If the wall
-                    // time belongs to one fragment and the pts to another, the
-                    // whole readout is offset by the gap between them — and
-                    // nothing downstream can tell. Log the pairing so it can be
-                    // checked against the fragment the seek actually asked for
-                    // rather than inferred from the result.
+                    // Every displayed clock time is built on this pairing, and
+                    // it is learned once and then sticky, so nothing downstream
+                    // can correct it. Logged to keep it checkable against the
+                    // fragment the seek asked for.
                     mlog_info("source: media clock pinned — fragment wall %lld, "
                               "first pts %.3fs (so pts 0 would be wall %lld)",
                               w, (double)base / 1e9, off);
@@ -1157,7 +1168,9 @@ static void feed_loop(SourceCtx* ctx) {
         // frames — which is the bug this replaced.
         if (ctx->restart_wall_pending.exchange(false))
             ctx->restart_wall_ms = (long long)seg->starts_at_ms;
-        ctx->seg_first_pts_ns = -1;              // set by the first frame
+        // The base the skip measures from is NOT reset here. It belongs to the
+        // seek, not to each fragment, and resetting it per fragment is what
+        // used to move it mid-skip.
         if (seg->skip_to_ms > 0)
             ctx->skip_until_pts_ns = seg->skip_to_ms * 1000000LL;
 
