@@ -266,18 +266,22 @@ so the whole thing can be run without a terminal.
   same conversion one layer down. The driver gives the card no id, so ALSA
   truncates its name to fifteen characters (`Digisyn_vSndCar`); the script reads
   the real name back from `/proc/asound/cards` rather than guessing.
-- **Expect "sound has broken up" lines, and know why.** The vendor driver fixes
-  the card's buffer at one millisecond per period and only as many periods as
-  `bufMs` — eight, by default — so the queue behind the picture is 8 ms while a
-  single decoded frame is about 21 ms. The log will report under-runs several
-  times a second, and it is not the power supply, the SD card or the network,
-  though the message suggests all three. It is the one real defect left in this
-  path and it is known and written up as
-  [BUGS.md point 5](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event);
-  the player now also prints the buffer the card actually granted, next to the
-  one it asked for, so the line reads `gave a 8 ms buffer, not the 500 ms asked
-  for`. It is untuned rather than unfixable, and needs the feeder thread
-  described there.
+- **The card's own buffer is 8 ms and cannot be widened — the player no longer
+  uses it.** The vendor driver fixes the card's buffer at one millisecond per
+  period and only as many periods as `bufMs` — eight, by default — so an ALSA
+  ring behind the picture is 8 ms while a single decoded frame is about 21 ms.
+  Writing frames through ALSA therefore under-ran on every frame, and the log
+  said `sound has broken up` several times a second; it blamed the power
+  supply, the SD card and the network, none of which were at fault. The driver
+  also exposes the daemon's shared buffer, and the player now writes the audio
+  into that directly — one millisecond at a time, at the slot the daemon is
+  about to read — whenever it recognises this card. So on an AES67 box the
+  `sound has broken up` lines should not appear at all. If they do, the player
+  failed to recognise the card and fell back to ALSA; the log says so on the
+  line before, and the detail is in
+  [BUGS.md point 5](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event).
+  The player also prints the buffer the card actually granted, next to the one
+  it asked for, when it is on the ALSA path.
 - **The order of two processes decides whether there is sound at all.** The card
   has no rate and no channel count of its own; both are read out of a page of
   shared memory that the *daemon* fills in. A player that starts first opens a
@@ -305,15 +309,18 @@ so the whole thing can be run without a terminal.
   building looks exactly like a broken driver. Confirm how the destination is
   specified before trusting an install that only reports the card appeared.
 - **What is verified, and what is not.** On a bench Pi the module built, the
-  daemon came up, the card appeared, the player opened it, and eight channels of
-  audio arrived — continuously broken up, for the buffer reason above. Not yet
-  verified: that the picture and the sound stay together across a two-hour
-  service — the card reports its playback position from the daemon's
-  millisecond counter and the player corrects from `snd_pcm_delay()`, which ten
-  seconds of test tone cannot settle, and a queue that empties every frame is
-  not a fair test of it — and how accurate PTP becomes, since a Pi's network
-  interface does no hardware timestamping, so it is whatever the software
-  manages. Measure that at the receiver, not on the Pi. The detail is in
+  daemon came up, the card appeared, the player recognised it, and eight
+  channels of clean audio arrived — no break-up, because the player writes the
+  card's calendar directly rather than through ALSA. Not yet verified: that the
+  picture and the sound stay together across a two-hour service. The player
+  writes audio a fixed 3 ms ahead of the daemon's clock (`kDigisynLeadMs`), and
+  nothing actively steers it thereafter — `AlsaOutput::delay_s()` exists and
+  reads the card's position but nothing calls it — so whether that fixed lead
+  holds, or drifts as the daemon's clock and the player's decode rate move
+  apart, is what a full-length service settles; ten seconds of test tone cannot.
+  Also not verified: how accurate PTP becomes, since a Pi's network interface
+  does no hardware timestamping, so it is whatever the software manages. Measure
+  that at the receiver, not on the Pi. The detail is in
   [BUGS.md entry 3](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event).
 
 ## Remote control from a phone

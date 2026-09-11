@@ -150,10 +150,10 @@ than inside `Program Files`, where writing needs elevation.
 
 ### 3. AES67 audio: works on the bench, unproven over an event
 
-**Status: installed and passing audio on a bench Pi, but the sound is broken up
-continuously and the cause is known (point 5) — no fix applied yet. Points 1 and
-2 still need a real event; points 3 and 4 were open questions the bench run has
-answered and are kept for the edges they do not cover.**
+**Status: working on a bench Pi — eight channels of clean AES67 audio, with the
+under-run solved (point 5). Points 1 and 2 still need a real event; points 3 and
+4 were open questions the bench run has answered and are kept for the edges they
+do not cover.**
 
 `scripts/player/aes67.sh` installs Digisynthetic's virtual sound card so the
 player's audio goes onto the network as AES67 instead of staying inside the
@@ -161,11 +161,12 @@ HDMI picture. It builds their kernel module, registers it with DKMS so a
 kernel update rebuilds it, installs their `DigiAes67Proc` daemon under
 systemd, stores the licence, and points the player at the new card. It has now
 been run on a bench Pi: the module built, the daemon came up, the card appeared,
-the player opened it, and eight channels of audio arrived — but broken up on
-every frame, for a reason now known (point 5). That settles the questions about
-whether the pieces fit together; what it does not settle is anything that needs
-a real service, which is the first two points below. The operator-facing version
-of this is
+the player opened it, and eight channels of clean audio arrived. Getting there
+took two things: the format negotiation in point 3, and the calendar write in
+point 5 that stopped the audio gapping once per frame. That settles the
+questions about whether the pieces fit together; what it does not settle is
+anything that needs a real service, which is the first two points below. The
+operator-facing version of this is
 [docs/SATELLITE.md](docs/SATELLITE.md#aes67-audio-on-the-network).
 
 The vendor package it was written against is
@@ -184,12 +185,20 @@ site landing on a fixed address and port in an existing console will need.
 **Ask the vendor how the destination is specified**, before commissioning a
 site where the address matters.
 
-**2. Lip sync and PTP.** The card reports playback position from the daemon's
-millisecond counter and the player corrects from `snd_pcm_delay()`. Whether
-that holds sync over a two-hour event is not knowable from ten seconds of test
-tone. Separately, AES67 wants both ends within a millisecond and a Pi's NIC
-does no hardware timestamping, so the achievable PTP accuracy is whatever the
-software manages — measure it on the receiver, not on the Pi.
+**2. Lip sync and PTP.** The player's own contribution to audio latency is now
+known exactly: `kDigisynLeadMs` in `digisyn_calendar.h` is 3 ms, so audio is
+written into the calendar 3 ms ahead of the daemon's clock — small enough that
+it should not read as a lip-sync error, but it is the number to check against
+the picture on a real service. There is **no active correction** either way:
+`AlsaOutput::delay_s()` exists and reads the card's playback position, but
+nothing calls it, so the audio is not steered from the card's reported delay —
+the earlier note here claiming it was has been corrected. Whether a fixed 3 ms
+lead holds over a two-hour event (the daemon's clock and the player's decode rate
+are independent, so they can drift apart) is not knowable from ten seconds of
+test tone; Monday's lip-sync check over a full run is what settles it. Separately,
+AES67 wants both ends within a millisecond and a Pi's NIC does no hardware
+timestamping, so the achievable PTP accuracy is whatever the software manages —
+measure it on the receiver, not on the Pi.
 
 The two below were open questions when this script was first written, and the
 bench run has since answered them in the common case. They stay here because
@@ -232,8 +241,11 @@ bench, so the drop-in works in the simple case. Still unverified: that it wins
 the race on a machine slow to bring the daemon up under load.
 
 **5. The buffer under the picture is 8 ms; one decoded frame is 21, so it
-under-runs on every frame.** Root cause known from the vendor driver's own
-limits. No fix applied yet.
+under-runs on every frame — solved by writing the card's calendar directly.**
+This was the whole of the "sound is broken up" problem. The root cause is in the
+vendor driver's own limits, below; the fix was to stop using ALSA on this card
+at all and address the daemon's shared buffer the way the vendor does. It now
+plays clean on the bench (see **The fix** at the end of this point).
 
 Seen on the bench box alongside the format error in point 3, playing a 48 kHz
 eight-channel feed:
@@ -291,21 +303,52 @@ Three consequences, all of which matter:
 So the one under-run per frame is **structural**: one 21 ms frame written into
 an 8 ms ring, with no working recovery behind it.
 
-**A feeder thread was written, tested on the bench, and reverted — do not
-retry it.** The reasoning was sound (write 1 ms periods from a ring so the card
-is never over- or under-fed, and take the write off the thread that presents the
-picture) but it depends on `snd_pcm_prepare()` resynchronising after an
-under-run, and on this driver that can never work. The bench log said so
-plainly: under-runs went from ~30/second to ~200/second, and kept climbing after
-playback had already `STOPPED` — the feeder's retry loop re-entering
-`recover()` and incrementing the counter without ever returning to check its
-stop flag. It was committed as `2f6fcb0` and reverted in the commit immediately
-after this one; the history is kept rather than rewritten so the next person can
-see what was tried and why it failed.
+**The fix: write the calendar, not ALSA.** The mmap path is the one this landed
+on. `DigiAes67Proc` and the driver share a page of memory the daemon transmits
+from: a header of card facts (`sampleRate`, `chNum`, `bufMs`, and `msIndex`, a
+free-running millisecond clock) followed by a calendar of `bufMs` one-millisecond
+slots, which the daemon reads one slot per millisecond. There is no ring to
+over- or under-run — only "write the slot for the millisecond you want heard,
+before the daemon reaches it." So the player does exactly that:
 
-What survives from that work, and is worth keeping: the format negotiation and
-the granted-buffer warning (both from `29e0971`), and a reworded under-run
-message that now points at this cause instead of at the feed:
+- **`digisyn_calendar.h`** describes the header and computes the slot addresses,
+  with no ALSA and no threads in it. `tests/test_digisyn_calendar.cpp` covers the
+  slot arithmetic, including the wraparound — an off-by-one there loses a
+  millisecond every time the calendar turns over, which is a click every 60 ms.
+- **`audio_queue.h`** is the buffer the ALSA ring would otherwise have been: the
+  decoded frame goes in there and the delivery thread returns, so it never waits
+  on the card. `tests/test_audio_queue.cpp` covers it.
+- **`alsa_output.cpp`** detects the AES67 card in `open()` and switches to this
+  path for it alone, then runs a feeder thread that takes one millisecond out at
+  a time and copies it into the slot `kDigisynLeadMs` (3 ms) ahead of the clock.
+
+**Detection is by card identity, not by the config string**, so every way of
+naming the card takes the branch — `hw:`, `plughw:`, `sysdefault:`, `default` —
+and every other device, HDMI included, is left on the untouched ALSA path. This
+part cost a whole bench session: the first attempt asked the PCM for its *name*
+and the vendor driver sets that to `"Dummy PCM"` (`Digisyn-vSndCard.c`), so it
+never matched and fell through to ALSA silently. It now matches on the card's id
+and driver (`card_id_is_digisyn`), and logs the reason either way, so it cannot
+fail silently again. If the calendar cannot be used it warns and falls back to
+ALSA rather than going quiet — broken-up audio beats none.
+
+**A feeder thread was written against ALSA first, tested on the bench, and
+reverted — do not retry that shape of it.** Its reasoning was sound (feed 1 ms
+periods from a ring so the card is never over- or under-fed, and take the write
+off the thread that presents the picture) but it depends on `snd_pcm_prepare()`
+resynchronising after an under-run, and on this driver that can never work. The
+bench log said so plainly: under-runs went from ~30/second to ~200/second, and
+kept climbing after playback had already `STOPPED` — the feeder's retry loop
+re-entering `recover()` and incrementing the counter without ever returning to
+check its stop flag. It was committed as `2f6fcb0` and reverted in the commit
+immediately after; the history is kept rather than rewritten so the next person
+can see what was tried and why it failed. The lesson carried into the calendar
+path: it does **no** threading against ALSA and needs **no** xrun recovery — it
+is a memcpy into the slot the daemon reads next.
+
+What survives from that earlier work and is worth keeping: the format
+negotiation and the granted-buffer warning (both from `29e0971`), and a reworded
+under-run message that points at the real cause instead of at the feed:
 
 ```
 sound has broken up N times — the board reports neither under-voltage nor
@@ -316,37 +359,37 @@ the feed or a burst of seeking
 
 **What is actually left, in order:**
 
-1. **Ask the vendor.** Two questions, and both are theirs to answer: can the
-   card's buffer exceed `bufMs` (the daemon binary rejects `bufMs` outside 0 and
-   2–8 — `invalid bufMs=%d, use 0 or 2-8` — the driver makes the ALSA buffer
-   `bytes_1ms * bufMs`, and their README says the same, so it is capped at 8 ms
-   in three places), and is the mmap-plus-`ioctl` path their supported one for an
-   application that is not the daemon? Given `.prepare` is a no-op, the ALSA PCM
-   interface looks like something a customer asked for rather than the path they
-   design for.
-2. **If they confirm the mmap path**, that is the real fix: write into their
-   shared buffer directly and pace against the daemon's own millisecond counter,
-   which is what the vendor does. It bypasses ALSA entirely and so bypasses the
-   8 ms ring. It is also considerably more invasive than an ALSA output, and
-   needs the daemon's headers and lifecycle — not something to guess at.
-3. **Do nothing else in C++.** Chunked writes, bigger rings, and higher
-   `audio_buffer_ms` were each considered; none of them change the fact that the
-   card consumes from an 8 ms window it will not widen, and none fix a recovery
-   path that cannot resync.
+1. **Ask the vendor about the destination.** Unchanged and still theirs to
+   answer: `--setup` never asks for a multicast address, port, payload type or
+   channel map — those live behind their separate route tool. Audio arrives on
+   the bench, so a receiver can find the stream as it comes; what a site landing
+   on a *fixed* address and port will need is how to choose it.
+2. **Watch it over a full event**, on the picture and the sound together — the
+   one thing a bench cannot stand in for, and what settles the lip-sync question
+   in point 2 (the 3 ms lead, and whether it drifts over two hours).
+3. **Do nothing else in C++ to the ALSA path.** Chunked writes, bigger rings and
+   higher `audio_buffer_ms` were each considered; none change the fact that the
+   card consumes from an 8 ms window it will not widen. The calendar write is
+   the answer, and it is in.
 
-**Next step:** watch a full-length service through it, on the picture and the
-sound together — that is the one thing a bench cannot stand in for, and it is
-what settles points 2 and 3 above. The under-run in point 5 wants its feeder
-thread before that run is worth much, because audio that gaps every frame makes
-the lip-sync question unanswerable. Point 1 is a question for the vendor rather
-than a test, and decides whether a receiver at a real site can be aimed at the
-stream. The script writes a report of everything it could check to
-`/var/tmp/multisite-aes67-<timestamp>/report.txt` and says out loud which
-checks it could not make.
+**Next step:** Monday's lip-sync check over a full-length service, which is
+point 2 above. The under-run that made that question unanswerable is fixed.
 
 ---
 
 ## Recently landed (context, not action items)
+
+- **AES67 audio plays clean — v0.1.14-alpha.** The card was under-running on
+  every decoded frame (`sound has broken up` climbing by ten several times a
+  second) because an 8 ms ALSA buffer cannot hold a ~21 ms frame, and the
+  vendor's `.prepare` is a no-op so ALSA's xrun recovery can never resync. Fixed
+  by writing the daemon's shared calendar directly instead of through ALSA, and
+  detecting the card by its id and driver so every way of naming it takes that
+  branch while HDMI and every other device stay on the untouched ALSA path.
+  Full account in point 5 below. Confirmed on the bench: clean eight-channel
+  audio out of the network. **Still open: lip sync over a full event** (the write
+  leads the daemon by a fixed 3 ms; whether that holds over two hours is
+  Monday's check) and the vendor's multicast destination question.
 
 - **Decoder seek accuracy and the timeline readout** — released in
   `v0.1.13-alpha`. Two parts are operator-visible. **Seeking now lands on the moment asked for and says
