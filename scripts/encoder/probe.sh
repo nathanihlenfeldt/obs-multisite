@@ -42,8 +42,13 @@
 # and asking them to find and email a tarball is how reports go missing. So the
 # script can send it itself, to a URL you generate beforehand:
 #
-#   aws s3 presign s3://BUCKET/encoder-probe/BOARD-DATE.tar.gz \
-#       --expires-in 604800 --endpoint-url https://YOUR-ENDPOINT
+#   export MULTISITE_S3_KEY=...  MULTISITE_S3_SECRET=...
+#   scripts/encoder/presign.py --endpoint https://ACCOUNT.r2.cloudflarestorage.com \
+#       --bucket BUCKET --key encoder-probe/BOARD-DATE.tar.gz
+#
+# (standard library only, because there is no aws CLI on the machines this is
+# run from and a bring-up task should not start by installing a toolchain. It
+# prints the whole command to send; --get signs a URL to fetch the report back.)
 #
 # That is a pre-signed PUT: it needs no account at the other end, no server of
 # yours running anywhere, and it carries no credentials — it is permission to
