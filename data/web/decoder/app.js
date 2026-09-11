@@ -195,7 +195,12 @@ function drawStatus() {
   clock.textContent = hhmmss(shown);
   clock.className = 'clock' + (s.seek_target_ms ? ' provisional' : '');
 
-  $('#position').textContent = s.loading
+  // Stopped first: a stopped source downloads nothing, so every line below it
+  // describes a position that cannot move. "2 minutes behind the main site"
+  // under a stopped decoder is a stale number someone would act on.
+  $('#position').textContent = s.stopped
+    ? 'Stopped — nothing downloading'
+    : s.loading
     ? 'Loading…'
     : s.ended
       ? 'A finished recording, ' + spoken((s.total_ms || (s.end_ms - s.started_ms)) / 1000) + ' long'

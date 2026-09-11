@@ -99,7 +99,10 @@ private:
     void refreshEvents(const DecoderSnapshot& s);
 
     QLabel* m_room = nullptr;
+    // What the main site is doing (LIVE, BROADCAST ENDED, OFFLINE…).
     QLabel* m_state = nullptr;
+    // What this box is doing with it (PLAYING, HELD, STOPPED, LOADING…).
+    QLabel* m_playback = nullptr;
     QLabel* m_behind = nullptr;
     QLabel* m_buffered = nullptr;
     QLabel* m_cached = nullptr;

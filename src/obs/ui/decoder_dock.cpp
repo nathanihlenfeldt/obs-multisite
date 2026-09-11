@@ -262,13 +262,21 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     root->setContentsMargins(8, 8, 8, 8);
     root->setSpacing(8);
 
-    // header: room + state
+    // header: room, then what THIS box is doing, then what the MAIN SITE is
+    // doing. Two labels, because they are two different facts and one label
+    // could only ever show whichever happened to win a precedence chain — so
+    // playing a finished recording read "BROADCAST ENDED" with nothing to say
+    // it was playing, and Hold on that same recording showed nothing at all.
+    // Playback first: it is the one the operator is acting on.
     auto* head = new QHBoxLayout();
     m_room = new QLabel(tr_("Dock.NoSource"), this);
     m_room->setStyleSheet("font-weight: bold;");
+    m_playback = new QLabel(QString(), this);
     m_state = new QLabel(QString(), this);
     head->addWidget(m_room);
     head->addStretch(1);
+    head->addWidget(m_playback);
+    head->addSpacing(10);
     head->addWidget(m_state);
     root->addLayout(head);
 
@@ -763,6 +771,7 @@ void DecoderDock::refresh() {
     if (!decoder_snapshot(s)) {
         m_room->setText(tr_("Dock.NoSource"));
         m_state->setText(QString());
+        m_playback->setText(QString());
         m_behind->setText("—");
         m_net->setText("—");
         m_net->setStyleSheet(QString());
@@ -801,20 +810,42 @@ void DecoderDock::refresh() {
         m_lock->blockSignals(false);
     }
 
-    // The chip and the readout below must agree, so both key off `ended`
-    // rather than one reading the raw room_state and the other a flag: they
-    // disagreed once, and the dock showed "RECORDING (not live)" above
-    // "1 min 10 sec behind".
-    // An action in progress outranks the settled state. The dock ticks every
-    // 500 ms, so this is what turns a click into something visible long before
-    // the network has finished answering it.
-    if (s.loading) {
-        m_state->setText(tr_("Dock.Loading"));
-        m_state->setStyleSheet("color: #3b82c4; font-weight: bold;");
-    } else if (s.buffering || s.seek_target_ms > 0) {
-        m_state->setText(tr_("Dock.Buffering"));
-        m_state->setStyleSheet("color: #3b82c4; font-weight: bold;");
-    } else if (s.link_known && s.link_health == 2) {
+    // ── What THIS box is doing ───────────────────────────────────────────────
+    // Playback state only. An action in progress outranks the settled state:
+    // the dock ticks every 500 ms, so this is what turns a click into
+    // something visible long before the network has finished answering it.
+    // Every branch is a state of this decoder — nothing about the main site
+    // appears here, which is the whole point of the split.
+    if (s.stopped) {
+        m_playback->setText(tr_("Dock.Pb.Stopped"));
+        m_playback->setStyleSheet("color: #8b9198; font-weight: bold;");
+    } else if (s.loading) {
+        m_playback->setText(tr_("Dock.Loading"));
+        m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
+    } else if (s.seek_target_ms > 0 || s.buffering) {
+        m_playback->setText(tr_("Dock.Buffering"));
+        m_playback->setStyleSheet("color: #3b82c4; font-weight: bold;");
+    } else if (s.paused) {
+        // Previously only reachable while the room was live, because it lived
+        // inside the room-state switch — so holding a finished recording showed
+        // no indication whatsoever that it was held.
+        m_playback->setText(tr_("Dock.Held"));
+        m_playback->setStyleSheet("color: #e0a020; font-weight: bold;");
+    } else if (s.playing) {
+        m_playback->setText(tr_("Dock.Pb.Playing"));
+        m_playback->setStyleSheet("color: #8fd3b4; font-weight: bold;");
+    } else {
+        // Configured and buffering ahead, but not on air: what Load leaves
+        // behind, waiting for Play on cue.
+        m_playback->setText(tr_("Dock.Pb.Ready"));
+        m_playback->setStyleSheet("color: #8b9198; font-weight: bold;");
+    }
+
+    // ── What the MAIN SITE is doing ──────────────────────────────────────────
+    // Source state only. The readout below keys off `ended` the same way this
+    // does, so the two cannot disagree — they did once, and the dock showed
+    // "RECORDING (not live)" above "1 min 10 sec behind".
+    if (s.link_known && s.link_health == 2) {
         // The venue's connection to the bucket is gone — which is NOT the same
         // as the main site going off air. Say so specifically, because the box
         // may still be playing the buffer while this is shown.
@@ -823,9 +854,8 @@ void DecoderDock::refresh() {
     } else
     switch (s.ended ? 3 : s.room_state) {
         case 2:  // Live
-            m_state->setText(s.paused ? tr_("Dock.Held") : tr_("Dock.Live"));
-            m_state->setStyleSheet(s.paused ? "color: #e0a020; font-weight: bold;"
-                                            : "color: #e5484d; font-weight: bold;");
+            m_state->setText(tr_("Dock.Live"));
+            m_state->setStyleSheet("color: #e5484d; font-weight: bold;");
             break;
         case 3:
             // Three different situations, and an operator needs to tell them

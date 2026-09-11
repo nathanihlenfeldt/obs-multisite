@@ -236,6 +236,7 @@ std::string decoder_status_json() {
     j["live_event_id"]   = s.live_event_id;
 
     j["playing"]    = s.playing;
+    j["stopped"]    = s.stopped;
     j["paused"]     = s.paused;
     j["buffering"]  = s.buffering;
     j["loading"]    = s.loading;
