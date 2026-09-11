@@ -165,3 +165,50 @@ somebody deploys on a Sunday morning:
 | `stream_plan` | what may be sent onward and what must be refused — HEVC into FLV, AV1 anywhere, packed multi-channel audio, a sound feed that has vanished, a manifest whose track positions do not line up; that HEVC over SRT is allowed where it is not over RTMP; that a pasted SRT address is pulled apart with the secrets taken out of it; and that no secret survives redaction for the log |
 | `relay_state` | the awkward cases without a destination or a wait: a stall ridden out and then given up on, an unexpected exit and its backoff, ending cleanly versus being cut short, an edit that rebuilds a stream without counting as a fault, and an SRT listener with nobody attached waiting indefinitely rather than being treated as broken |
 | `config_store` | destinations and storage settings survive a restart, an invalid one is refused before it reaches the database, and an SRT destination's stream id, passphrase and latency round-trip intact |
+
+## Working in the same repository as another session
+
+More than one agent works on this repository at a time, on the same `main`, and
+both ways that goes wrong are silent: a push is rejected, or a release is cut
+from a tree nobody expected. Neither is hypothetical — on 2026-09-11 a docs
+commit was written, committed, and rejected on push because two other commits
+had landed on `main` while it was being written.
+
+**Fetch before you start, and fetch again before you push.** The only window in
+which a rebase is needed at all is work that is committed but not pushed, so
+committing in small pieces and pushing each one closes it. A rejected push is
+information, not an obstacle to be worked around:
+
+```sh
+git fetch origin
+git log --oneline HEAD..origin/main                      # what landed
+git log --name-only HEAD..origin/main -- <your files>    # does it touch yours?
+git rebase origin/main
+```
+
+An empty overlap listing means the other session changed something else and the
+rebase will be clean. A non-empty one means read their commit before rebasing:
+two sessions describing the same problem is a duplication to merge, not a
+conflict to settle by picking a side.
+
+**Never force-push `main`, or rewrite it.** Everything in `BUGS.md` about
+tagging assumes a commit only ever gains descendants: a release is cut from a
+commit, and its notes have to describe the tree that commit names. Rewriting
+`main` detaches a tag from the work it points at, and a tag is public the moment
+it lands.
+
+**Four files are edited by nearly every piece of work** — `BUGS.md`,
+`README.md`, `PROJECT-SCOPE.md` and `.github/RELEASE-NOTES.md`. Expect a rebase
+to reach them, and when it does, prefer appending your section to rewriting
+somebody else's paragraph to make room for it. `BUGS.md` entry 0 is shared
+state: it records what is on `main` and what is not yet written up in the
+release notes, so re-read it after fetching rather than trusting the copy read
+at the start of a session, and check whether the commit it describes is still
+the newest one.
+
+**Nothing here is local to one session.** A tag publishes a Windows plugin
+build and a container image to everyone who installs it, and a release deleted
+and re-cut is public twice. That is why `BUGS.md` entry 0 says to tag the
+current `main` and to check `gh release list` and `git tag -l` first — worth
+running in every session, not only one that intends to tag.
+
