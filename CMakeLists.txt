@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(obs_multisite VERSION 0.1.11 LANGUAGES CXX)
+project(obs_multisite VERSION 0.1.12 LANGUAGES CXX)
 
 set(CMAKE_CXX_STANDARD 17)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
@@ -303,6 +303,16 @@ else()
     message(STATUS "skipping CMAF muxer targets")
 endif()
 
+# The rule that decides who owns the appliance's screen on a given tick: a
+# picture being held outranks the idle screen. Deliberately portable and outside
+# the appliance's feature guard, because the combination that failed — Hold
+# pressed on a box left on its default identity screen, so the held frame was
+# replaced by the box's own address — needed a live event, a running decoder and
+# an HDMI socket to reproduce by hand. Here it needs none of them.
+add_executable(test_idle_screen tests/test_idle_screen.cpp src/appliance/screen.cpp)
+target_include_directories(test_idle_screen PRIVATE src/appliance)
+add_test(NAME idle_screen COMMAND test_idle_screen)
+
 # ── Optional: the satellite appliance (headless player) ───────────────────────
 # The Raspberry Pi / mini-PC receive box: the same core, with its own video and
 # audio output and a browser-based operator interface instead of OBS.
@@ -331,6 +341,7 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         src/appliance/config.cpp
         src/appliance/log.cpp
         src/appliance/player.cpp
+        src/appliance/screen.cpp
         src/appliance/api.cpp
         src/appliance/sysinfo.cpp
         src/appliance/preview.cpp

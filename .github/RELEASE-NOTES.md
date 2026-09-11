@@ -30,6 +30,38 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.12-alpha
+
+### Holding the picture no longer hands the screen to the box's own address
+
+On a campus player, pressing **Hold picture** could be followed a second or two
+later by the identity screen — hostname, IP, room — appearing in place of the
+picture the operator had just frozen. On the screen in the room it reads as the
+player having died at the exact moment somebody asked it to hold.
+
+The cause was a collision between two things that meant different things by the
+same word. Holding the picture was recognised only when the box's own idle mode
+was set to *Hold the last picture*, so on a box left on the default idle screen
+the poll loop found neither frames arriving nor a reason to leave the picture
+alone, and fell through to drawing the identity screen. Everything else was
+working: the hold itself, the audio, the cache, and — reassuringly — the
+preview, which is rendered from the last decoded frame and so kept showing the
+frozen picture the screen no longer had.
+
+A held picture now outranks the idle screen whatever the idle mode is set to.
+An idle screen is for having nothing to show: waiting for the main site, or
+stopped, and both still put one up as before. **Stop** and waiting are
+unchanged; on *hold the last picture* with nothing ever decoded the identity
+screen still comes up, because there is no frame to hold and a blank screen says
+nothing about which box has come up empty.
+
+The rule is now a function of four booleans rather than a chain of conditions
+inside the poll loop, and a new test checks all of its combinations — including
+the default one on the identity screen — with no display, no decoder and no
+network. That combination could only be reproduced by hand with a live event and
+an HDMI socket attached, which is how it reached a congregation in the first
+place.
+
 ## What's new in v0.1.11-alpha
 
 ### Markers reach a control surface as they happen

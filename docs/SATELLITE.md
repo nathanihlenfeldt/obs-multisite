@@ -172,6 +172,15 @@ transport controls during an event.
   with a picker in Settings; combining several tracks onto output channels
   there is not built, and packed is the answer for a campus that needs more
   than one.
+- **Hold beats the idle screen.** `idle_mode` says what the box shows when
+  there is nothing to play — the box's own details, black, or a holding slide.
+  Pressing **Hold picture** is not that: it is an operator asking for the frame
+  in front of them to stay, so the held frame stays up whatever `idle_mode` is
+  set to, and changing the idle screen mid-event cannot replace a picture that
+  was deliberately frozen. **Stop** and waiting for the main site are the
+  deliberate acts the idle screen is for, and both still show it. On
+  `idle_mode: "hold"` with nothing ever decoded there is no frame to hold, so
+  the identity screen comes up rather than a blank nobody can explain.
 - **The preview is a copy, not a second output.** The web UI shows the picture
   going out, refreshed at a rate the browser chooses. Watching it does not
   change or interrupt what is on the screen in the room — it is the same moment,

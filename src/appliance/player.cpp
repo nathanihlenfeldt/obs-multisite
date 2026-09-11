@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "player.h"
 #include "log.h"
+#include "screen.h"
 #include "sysinfo.h"
 #include "core/playout_clock.h"
 
@@ -680,21 +681,28 @@ void Player::update_screen() {
         m_idle_showing = false;
     }
 
-    // Frames are reaching the display: there is an event on, and nothing
-    // here should touch the screen.
+    // What the screen should be doing is decided in screen_action(), where the
+    // rule lives and is tested without a display, a decoder or a network — see
+    // screen.h. The one thing worth knowing here is that a picture being held
+    // outranks the idle screen: the operator asked for it to stay.
     const uint64_t last = m_last_frame_ns.load();
-    if (last != 0 && now_ns() - last < 2000000000ULL) {
-        m_idle_showing = false;
+    const bool frames_arriving = last != 0 && now_ns() - last < 2000000000ULL;
+
+    const Config cfg = config();
+    const ScreenAction wanted = screen_action(cfg.idle_mode, frames_arriving,
+                                              m_playing.load() && m_paused.load(),
+                                              m_frames_out.load() > 0);
+
+    if (wanted == ScreenAction::Leave) {
+        // Either a picture is arriving, in which case any idle screen it
+        // interrupted is over and done with, or one is being held — in which
+        // case the screen is deliberately left exactly as it is, because that
+        // is what holding means.
+        if (frames_arriving) m_idle_showing = false;
         return;
     }
 
-    const Config cfg = config();
-
-    // Holding the last picture is the pause behaviour, so there is by
-    // definition nothing to draw: leave the screen exactly as it is.
-    if (cfg.idle_mode == IdleMode::HoldFrame && m_frames_out.load() > 0) return;
-
-    if (cfg.idle_mode == IdleMode::Black) {
+    if (wanted == ScreenAction::Blank) {
         if (!m_idle_showing) { m_video.blank(); m_idle_showing = true; }
         return;
     }
@@ -702,7 +710,7 @@ void Player::update_screen() {
     int width = 1920, height = 1080;
     m_video.size(width, height);
 
-    if (cfg.idle_mode == IdleMode::Image) {
+    if (wanted == ScreenAction::Still) {
         if (m_idle_showing) return;      // a still does not change
         Canvas canvas(width, height);
         std::string err;
