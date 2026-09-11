@@ -248,10 +248,16 @@ install_deps() {
     export DEBIAN_FRONTEND=noninteractive
     apt-get update -qq
 
+    # `linux-sound-base` and `alsa-base` are in the project's own list and are
+    # deliberately not here: Debian removed both in Bookworm, and Raspberry Pi
+    # OS followed. They were meta-packages that only pulled in alsa-utils and
+    # the sound modules, both of which are asked for below or are already in the
+    # Pi's kernel. Naming a package apt does not have is not a warning — it
+    # fails the entire install, which is how this list first stopped on the Pi.
     local pkgs=(
         build-essential clang git cmake pkg-config
         libboost-all-dev
-        alsa-utils libasound2-dev linux-sound-base alsa-base
+        alsa-utils libasound2-dev
         linuxptp
         libavahi-client-dev
         libsystemd-dev
@@ -274,7 +280,31 @@ install_deps() {
     fi
 
     note "apt: ${pkgs[*]}"
-    apt-get install -y -qq "${pkgs[@]}"
+
+    # Install only what this distribution actually has. A name apt cannot
+    # resolve makes the whole transaction fail, so one stale entry from the
+    # project's list would stop the install outright — which is exactly what
+    # `linux-sound-base` did before it was removed above. Checking first turns
+    # that failure into a line in the log.
+    local have=() absent=()
+    for p in "${pkgs[@]}"; do
+        if apt-cache show "$p" >/dev/null 2>&1; then
+            have+=("$p")
+        else
+            absent+=("$p")
+        fi
+    done
+    if [ ${#absent[@]} -gt 0 ]; then
+        warn "not in this distribution's repositories, skipping: ${absent[*]}"
+    fi
+    # `apt-get install` with no names is an error, and under `set -e` that
+    # would end the run with a message about apt rather than about the real
+    # problem, which is that this distribution has none of what is needed.
+    if [ ${#have[@]} -eq 0 ]; then
+        die "this distribution has none of the packages the build needs"
+    fi
+
+    apt-get install -y -qq "${have[@]}"
     note "dependencies in place"
 }
 
@@ -468,6 +498,19 @@ build_daemon() {
     cd "$dir"
     make clean >/dev/null 2>&1 || true
     note "cmake (this takes a few minutes on a Pi)"
+
+    # upstream links libfaac and libasound when WITH_STREAMER is on, and CMake
+    # treats a library it could not find as a hard error rather than a warning.
+    # libfaac has left recent Debian, so ask for it only when it is really here.
+    # Nothing is lost: the streamer feeds a file or URL *into* AES67, while the
+    # player's audio comes out of the card and needs none of it.
+    local streamer=ON
+    if ! dpkg -s libfaac-dev >/dev/null 2>&1; then
+        streamer=OFF
+        warn "libfaac-dev is not installed — building without the daemon's streamer"
+        note "that is its file/URL-to-AES67 feature; AES67 output is unaffected"
+    fi
+
     cmake \
         -DBoost_NO_WARN_NEW_VERSIONS=1 \
         -DCPP_HTTPLIB_DIR="$top/3rdparty/cpp-httplib" \
@@ -476,7 +519,7 @@ build_daemon() {
         -DWITH_AVAHI=ON \
         -DFAKE_DRIVER=OFF \
         -DWITH_SYSTEMD=ON \
-        -DWITH_STREAMER=ON \
+        -DWITH_STREAMER="$streamer" \
         -DWITH_NMOS=OFF \
         . >/dev/null || die "cmake failed — see the output above"
     make -j"$(nproc 2>/dev/null || echo 2)" || die "the daemon build failed"
