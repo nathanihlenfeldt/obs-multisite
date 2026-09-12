@@ -203,6 +203,38 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **The silence that the idle keep-alive writes was not silence, and Stop stopped
+  nothing.** Both found on `rpi5-nathan` within a minute of playing an event, and
+  both worth writing down because neither looked like what it was.
+
+  **The noise** was an out-of-bounds read, and the giveaway was that it was
+  *loud*: the keep-alive thread that holds the sound card up while nothing is
+  playing feeds it a buffer of zeros, and on this box that buffer was sized from
+  the card's **period** while the write made from it was a 20 ms **cushion**. The
+  RAVENNA card's period is one millisecond, so the buffer held 1,536 bytes and the
+  top-up asked ALSA to play 30,720 — 29,184 bytes of heap, read as IEEE-754 floats.
+  Arbitrary bytes read as float are almost never small, so a function whose entire
+  job is to be inaudible was instead putting digital hash at 0 dBFS onto the AES67
+  stream every time the box went idle. The two numbers are now decided in one
+  place (`src/appliance/idle_keepalive.h`), the buffer is sized for the largest
+  write that can be made from it, and `keep_fed()` refuses any write longer than
+  the buffer it holds — a future drift is a missed top-up rather than a read past
+  the end. `tests/test_idle_keepalive.cpp` checks the property that actually
+  matters (the buffer is never shorter than the write, for any geometry a driver
+  might grant) and carries the geometry that found it as a row in its table.
+
+  **Stop** cleared the delivery queue and set the playing flag, but nothing in the
+  delivery path ever consulted that flag: `deliver_loop()` gated on Hold alone, and
+  `enqueue()` did not check either one. So the queue was refilled by the decoder as
+  fast as it was cleared and played out anyway — a stop that stopped the head and
+  nothing else. It was invisible in the log because the status line derived its
+  state from the *session*, which has no idea the operator pressed anything, so a
+  stopped box went on reporting `playing` while the frames kept flowing. Delivery
+  now refuses to dispatch unless the box is playing, `enqueue()` drops decoded
+  frames rather than holding them for the next play, and the status line reports
+  the operator's state first. Hold deliberately keeps its queue (Continue resumes
+  in place); Stop deliberately discards it.
+
 - **The sound card is opened at the right width, stays open, and is metered.**
   Three faults that all presented as a silent room, and none of which said so.
   **The width** was the worst: a box with the network audio output on opened its

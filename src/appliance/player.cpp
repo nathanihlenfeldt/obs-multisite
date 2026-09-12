@@ -463,6 +463,12 @@ void Player::enqueue(PendingFrame&& f) {
     const bool space = m_dq_cv.wait_for(lk, std::chrono::milliseconds(250),
         [this, want_video] {
             if (!m_running.load() || m_flushing.load()) return true;
+            // Stopped: nothing is going to be delivered, so nothing should be
+            // queued either. Checked in the predicate as well as below so this
+            // returns at once rather than sitting out the full wait — a decoder
+            // callback that blocks here is a callback that cannot be joined, and
+            // push_fragment would then back up behind it.
+            if (!m_playing.load()) return true;
             const size_t n = (size_t)std::count_if(
                 m_dq.begin(), m_dq.end(),
                 [want_video](const PendingFrame& q) {
@@ -471,6 +477,12 @@ void Player::enqueue(PendingFrame&& f) {
             return n < (want_video ? kMaxQueuedVideo : kMaxQueuedAudio);
         });
     if (!m_running.load() || m_flushing.load()) return;
+    // Stopped. Frames decoded before the operator pressed Stop must not be held
+    // for the next play: they belong to where playback used to be, and the queue
+    // has been flushed and the clock re-anchored for exactly that reason. Holding
+    // them would also re-fill the queue for as long as the decoder runs, which is
+    // the fault that made Stop look like it did nothing.
+    if (!m_playing.load()) return;
     if (!space) {
         // Split by stream: a dropped picture repeats the last one, a dropped
         // audio frame is a hole you can hear, and the totals could not tell
@@ -826,6 +838,31 @@ void Player::deliver_loop() {
     plog_info("delivery started");
 
     while (m_running.load()) {
+        // Stopped. This is not the same state as held, and the difference is the
+        // queue: Hold keeps it, so Continue resumes exactly where the operator
+        // left off, and Stop discards it, because those frames belong to where
+        // playback used to be. Delivering them anyway is the fault this branch
+        // exists for — a stopped box that carried on playing out everything the
+        // decoder had already produced, which is a stop that stops nothing.
+        //
+        // Checked here, before the queue is looked at, because the frames are
+        // already in the queue by the time Stop is pressed: flushing them once is
+        // not enough while dispatch does not care whether the box is playing.
+        if (!m_playing.load()) {
+            {
+                std::lock_guard<std::mutex> lk(m_dq_mtx);
+                m_dq.clear();
+            }
+            m_dq_cv.notify_all();
+            // The card stays open and fed. Stopping the picture is not switching
+            // the sound off, and on a box whose sound is on the network a stream
+            // that stops when somebody presses Stop is a stream that receivers
+            // drop — the same reasoning as the held case below.
+            ensure_audio_open(config(), 0, 0);
+            std::this_thread::sleep_for(std::chrono::milliseconds(20));
+            continue;
+        }
+
         // While held, deliver nothing: the picture stays on the last frame the
         // output received and the queue stays put, so Continue resumes exactly
         // where the operator stopped.
@@ -1302,10 +1339,22 @@ void Player::poll_loop() {
                 // which in that line looked exactly like keeping up. The
                 // head sitting one past the live edge was the only evidence,
                 // and it takes someone who knows the code to read it.
+                //
+                // The operator's own state is asked FIRST, and that is the
+                // correction here. This line used to read from the session
+                // alone, and the session has no idea the operator pressed Stop:
+                // stopping holds the head where it is (the feed loop stops
+                // pulling) without moving the session out of Playing, so the
+                // line went on saying "playing" for as long as the box was
+                // stopped. A box that reports the wrong state is worse than one
+                // that reports nothing, because the wrong state is believed —
+                // it is what sent somebody looking at the decoder for a fault
+                // that was in this function.
                 const char* state =
-                      sess->at_end()                          ? "at-end"
-                    : sess->play_state() == PlayState::Paused  ? "held"
-                    : sess->play_state() == PlayState::Stopped ? "stopped"
+                      !m_playing.load()                      ? "stopped"
+                    : m_paused.load()                        ? "held"
+                    : sess->at_end()                         ? "at-end"
+                    : sess->play_state() == PlayState::Stopped ? "starting"
                                                                : "playing";
                 plog_info("%s head=%llu live=%llu behind=%.0fs buffered=%.0fs "
                           "cached=%zu downloaded=%llu frames_out=%llu "

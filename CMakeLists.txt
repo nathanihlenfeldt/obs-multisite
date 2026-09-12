@@ -380,6 +380,19 @@ add_executable(test_audio_plan tests/test_audio_plan.cpp)
 target_include_directories(test_audio_plan PRIVATE src/appliance)
 add_test(NAME audio_plan COMMAND test_audio_plan)
 
+# How much silence the keep-alive thread keeps in the card, and how big the
+# buffer it writes from has to be. Two numbers, computed in two places once, and
+# on a card with a one millisecond period they came apart — so the top-up read
+# past the end of its own buffer and fed the card uninitialised heap. Read as
+# float that is not quiet: it is full-scale digital noise at 0 dBFS, on the
+# AES67 stream, for as long as the box sits idle. The assertion that matters is
+# not that a number is right but that the buffer is never shorter than the write
+# made from it, for any geometry a driver might grant, which is why the card
+# that found the fault is one of the rows in the table.
+add_executable(test_idle_keepalive tests/test_idle_keepalive.cpp)
+target_include_directories(test_idle_keepalive PRIVATE src/appliance)
+add_test(NAME idle_keepalive COMMAND test_idle_keepalive)
+
 # The AES67 daemon's REST interface, as shapes: the source body the player
 # sends, the JSON it reads back, and the SDP the daemon publishes. All text, all
 # easy to get quietly wrong — a channel map naming the wrong eight channels is
