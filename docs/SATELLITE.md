@@ -188,7 +188,12 @@ transport controls during an event.
   going out, refreshed at a rate the browser chooses. Watching it does not
   change or interrupt what is on the screen in the room — it is the same moment,
   sampled a few times a second. There is one playhead, so the preview cannot
-  look ahead of the picture it mirrors.
+  look ahead of the picture it mirrors. The one place it can differ from the
+  screen is the crop: with a `tile_index` set the screen shows one region, so
+  the interface offers both — *what's going out* (that region, and the whole
+  picture when no tile is selected) and *the whole feed* (everything the box
+  received, tiles and all). There is a fallback frame per view, so switching
+  between them never blanks the picture.
 - **The cache belongs on a USB SSD.** It writes roughly 3 GB an hour, which
   will wear an SD card out. The installer looks for a USB drive and uses it;
   if there is none, both it and the interface say so.

@@ -209,7 +209,10 @@ public:
     const VideoOutput& video() const { return m_video; }
     const AudioOutput& audio() const { return m_audio; }
 
-    bool latest_frame(multisite::DecodedVideoFrame& out, uint64_t& version) const;
+    // `show_tile` returns the region that is being sent to the output rather
+    // than the whole frame that arrived, so the browser can be shown either.
+    bool latest_frame(multisite::DecodedVideoFrame& out, uint64_t& version,
+                      bool show_tile = false) const;
     uint64_t frame_version() const { return m_frame_version.load(); }
 
 private:

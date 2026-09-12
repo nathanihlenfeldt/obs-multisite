@@ -77,12 +77,21 @@
     <summary>Preview picture</summary>
     <p class="hint">
       A low-rate copy of the picture, for watching the event from a phone.
-      It shows the same moment as the screen in the room — looking at it does
-      not change what is on the screen.
+      Looking at it does not change what is on the screen, and it is the same
+      moment — not a second output. <em>What's going out</em> is what the
+      screen has, including a single split when one is chosen; <em>the whole
+      feed</em> is everything the box received, splits and all.
     </p>
     <div class="preview-frame">
       <img id="preview-img" alt="Preview of the incoming feed">
       <div class="preview-none" id="preview-none">Nothing decoded yet</div>
+    </div>
+    <div class="row">
+      <label for="preview-view">Show</label>
+      <select id="preview-view">
+        <option value="out" selected>What's going out</option>
+        <option value="feed">The whole feed</option>
+      </select>
     </div>
     <div class="row">
       <label for="preview-rate">Refresh</label>

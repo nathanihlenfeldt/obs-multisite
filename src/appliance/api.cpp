@@ -10,6 +10,7 @@
 #include "../vendor/nlohmann/json.hpp"
 
 #include <cmath>
+#include <array>
 
 using json = nlohmann::json;
 
@@ -674,17 +675,30 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
     // must not each start their own. The last frame that encoded successfully
     // is kept so a transient failure — nothing decoded yet, or an encode that
     // hiccuped — serves the last good picture instead of blanking the preview.
+    // There is one such cache per view, because the two views are different
+    // pictures: handing one back where the other was asked for would be a
+    // quiet lie about what is on the screen in the room.
     {
+        // `view=out` is the region being sent to the output — which is the
+        // whole picture when no tile is selected — and `view=feed` is
+        // everything the box received, tiles and all. Absent means "out", so a
+        // bare /preview.jpg shows what the room is showing.
+        struct PreviewCache {
+            std::vector<uint8_t> jpeg;
+            uint64_t             version = 0;
+            bool                 have = false;
+        };
         auto encoder = std::make_shared<JpegEncoder>();
         auto encoder_mtx = std::make_shared<std::mutex>();
-        auto last_jpeg = std::make_shared<std::vector<uint8_t>>();
-        auto last_version = std::make_shared<uint64_t>(0);
-        auto have_jpeg = std::make_shared<bool>(false);
+        auto cache = std::make_shared<std::array<PreviewCache, 2>>();
         auto logged_fail = std::make_shared<bool>(false);
         server.route("GET", "/preview.jpg",
-                     [&player, encoder, encoder_mtx, last_jpeg, last_version,
-                      have_jpeg, logged_fail](const HttpRequest& req,
-                                              HttpResponse& res) {
+                     [&player, encoder, encoder_mtx, cache, logged_fail](
+                         const HttpRequest& req, HttpResponse& res) {
+            const std::string view = req.param("view");
+            const bool whole_feed = (view == "feed" || view == "whole");
+            const int slot = whole_feed ? 1 : 0;
+
             multisite::DecodedVideoFrame frame;
             uint64_t version = 0;
             const int width = std::max(
@@ -694,30 +708,27 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
 
             bool ok = false;
             std::string err;
-            if (player.latest_frame(frame, version)) {
+            if (player.latest_frame(frame, version, !whole_feed)) {
                 std::vector<uint8_t> jpeg;
                 std::lock_guard<std::mutex> lk(*encoder_mtx);
                 ok = encoder->encode(frame, width, quality, jpeg, err);
                 if (ok) {
-                    *last_jpeg = jpeg;
-                    *last_version = version;
-                    *have_jpeg = true;
+                    (*cache)[slot].jpeg = std::move(jpeg);
+                    (*cache)[slot].version = version;
+                    (*cache)[slot].have = true;
                 } else if (!*logged_fail) {
                     *logged_fail = true;
                     plog_warn("preview: %s", err.c_str());
                 }
             }
 
-            if (ok) {
+            if (ok || (*cache)[slot].have) {
+                // A failed encode serves the last good frame rather than a
+                // bare error page, so the preview never blanks.
+                const PreviewCache& c = (*cache)[slot];
                 res.content_type = "image/jpeg";
-                res.headers["X-Frame-Version"] = std::to_string(version);
-                res.body.assign(last_jpeg->begin(), last_jpeg->end());
-            } else if (*have_jpeg) {
-                // Serve the last good frame rather than a bare error page, so
-                // the preview never blanks.
-                res.content_type = "image/jpeg";
-                res.headers["X-Frame-Version"] = std::to_string(*last_version);
-                res.body.assign(last_jpeg->begin(), last_jpeg->end());
+                res.headers["X-Frame-Version"] = std::to_string(c.version);
+                res.body.assign(c.jpeg.begin(), c.jpeg.end());
             } else {
                 res.status = 503;
                 res.content_type = "text/plain; charset=utf-8";

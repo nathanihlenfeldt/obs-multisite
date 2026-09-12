@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
-// test_tile_crop.cpp — one tile of a composited feed, as a view.
+// test_tile_crop.cpp — one tile of a composited feed, as a view, and as a copy.
 //
 // tile_view() is the appliance's half of Phase 10: the OBS source gets a tile
 // by offsetting obs_source_frame's plane pointers, and the appliance — which
@@ -8,6 +8,12 @@
 // wrong is quiet: a view that starts half a cell off still shows a picture, of
 // the wrong region, and one that dropped the original stride still shows a
 // picture, sheared.
+//
+// tile_copy() is the same rectangle for callers that walk `data` instead of
+// plane pointers — the JPEG encoder behind the web preview is the one that
+// exists. Quiet in the same way: a copy of the wrong region is still a picture,
+// and one that took the chroma at luma resolution is still a picture, in the
+// wrong colours.
 #include "../src/core/tile_crop.h"
 
 #include <cstdio>
@@ -91,6 +97,76 @@ int main() {
         CHECK(oor.width == 1920 && oor.height == 1080,
               "an out-of-range tile is the whole picture");
         CHECK(oor.plane[0] == f.plane[0], "and starts at the top-left");
+    }
+
+    std::printf("== a copied tile owns its own pixels ==\n");
+    {
+        DecodedVideoFrame f = make_frame(1920, 1080);
+        // A pattern that changes with both x and y, so a copy taken from the
+        // wrong row or column is a visibly wrong byte rather than the same
+        // zero the buffer was already full of.
+        for (int y = 0; y < f.height; ++y)
+            for (int x = 0; x < f.width; ++x)
+                f.plane[0][(size_t)y * f.stride[0] + x] =
+                    (uint8_t)(x * 7 + y * 13);
+        for (int y = 0; y < 540; ++y)
+            for (int x = 0; x < 960; ++x) {
+                f.plane[1][(size_t)y * f.stride[1] + x] = (uint8_t)(x + y * 3);
+                f.plane[2][(size_t)y * f.stride[2] + x] = (uint8_t)(x * 5 + y);
+            }
+
+        const DecodedVideoFrame c = tile_copy(f, TileLayout::parse("2x2"), 3);
+        CHECK(c.width == 960 && c.height == 540, "the copy is the tile's size");
+        CHECK(!c.data.empty(), "the copy owns a buffer, where a view has none");
+        CHECK(c.stride[0] == 960 && c.stride[1] == 480 && c.stride[2] == 480,
+              "packed tight, so the whole frame is not carried along");
+        CHECK(c.data.size() == (size_t)960 * 540 + 2 * (size_t)480 * 270,
+              "and exactly big enough, with nothing to share");
+        CHECK(c.plane[0] == c.data.data(), "its planes point into its own buffer");
+
+        bool luma_ok = true;
+        for (int y = 0; y < c.height && luma_ok; ++y)
+            for (int x = 0; x < c.width; ++x)
+                if (c.plane[0][(size_t)y * c.stride[0] + x] !=
+                    (uint8_t)((x + 960) * 7 + (y + 540) * 13)) {
+                    luma_ok = false;
+                    break;
+                }
+        CHECK(luma_ok, "every luma sample came from the right place");
+
+        // Chroma is half resolution, so the tile's top-left is sample (480, 270)
+        // of the source — not (960, 540). Taking it at luma resolution is the
+        // mistake this catches, and it shows as colour dragged into the picture.
+        bool chroma_ok = true;
+        for (int y = 0; y < 270 && chroma_ok; ++y)
+            for (int x = 0; x < 480; ++x) {
+                if (c.plane[1][(size_t)y * c.stride[1] + x] !=
+                        (uint8_t)((x + 480) + (y + 270) * 3) ||
+                    c.plane[2][(size_t)y * c.stride[2] + x] !=
+                        (uint8_t)((x + 480) * 5 + (y + 270))) {
+                    chroma_ok = false;
+                    break;
+                }
+            }
+        CHECK(chroma_ok, "and every chroma sample, at half resolution");
+
+        CHECK(f.plane[0][0] == 0 &&
+                  f.plane[0][(size_t)540 * f.stride[0] + 960] ==
+                      (uint8_t)(960 * 7 + 540 * 13),
+              "the frame it was copied from is left alone");
+    }
+
+    std::printf("== a copy of the whole picture, for an encoder ==\n");
+    {
+        DecodedVideoFrame f = make_frame(1280, 720);
+
+        const DecodedVideoFrame w = tile_copy(f, TileLayout::parse("2x1"), 5);
+        CHECK(w.width == 1280 && w.height == 720,
+              "an out-of-range tile copies the whole picture");
+        CHECK(w.stride[0] == 1280 && w.stride[1] == 640 && w.stride[2] == 640,
+              "at the same size, packed tight");
+        CHECK(w.plane[0] != f.plane[0],
+              "but still its own buffer, not the frame it came from");
     }
 
     if (g_fail) { std::printf("\n%d check(s) FAILED\n", g_fail); return 1; }

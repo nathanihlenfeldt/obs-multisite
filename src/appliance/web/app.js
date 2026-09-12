@@ -946,6 +946,10 @@ $('#btn-log-refresh').onclick = refreshLog;
 // sampled a few times a second. Each frame is fetched off-screen and only
 // swapped in once it has arrived, so a slow box or a dropped request never
 // blanks a picture that is already showing on the tablet.
+//
+// Two views of the same instant: what is going out (which is one split, when a
+// tile is selected) and the whole feed that arrived. The server keeps a
+// fallback frame per view, so switching the selector never blanks the picture.
 
 let previewTimer = null;     // the setTimeout that schedules the next fetch
 let previewRate = 0;         // frames per second, from the selector
@@ -975,7 +979,9 @@ async function fetchPreview() {
   if (!previewRate || !$('#preview-box').open || previewInFlight) return;
   previewInFlight = true;
   try {
-    const res = await fetch('/preview.jpg?t=' + Date.now());
+    const view = $('#preview-view').value || 'out';
+    const res = await fetch('/preview.jpg?view=' + encodeURIComponent(view) +
+                            '&t=' + Date.now());
     if (!res.ok) throw new Error('HTTP ' + res.status);
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
@@ -996,6 +1002,7 @@ async function fetchPreview() {
 }
 
 $('#preview-rate').addEventListener('change', startPreview);
+$('#preview-view').addEventListener('change', startPreview);
 $('#preview-box').addEventListener('toggle', startPreview);
 
 /* ── Tabs and the poll loop ──────────────────────────────────────────────── */

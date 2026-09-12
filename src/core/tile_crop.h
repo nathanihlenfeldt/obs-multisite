@@ -19,6 +19,8 @@
 #include "model.h"
 #include "cmaf_decoder.h"
 
+#include <cstring>
+
 namespace multisite {
 
 // The rectangle tile_rect() picks out of `frame`, as a frame that aliases the
@@ -42,6 +44,46 @@ inline DecodedVideoFrame tile_view(const DecodedVideoFrame& frame,
     v.plane[1] = frame.plane[1] + (size_t)(r.y / 2) * frame.stride[1] + (r.x / 2);
     v.plane[2] = frame.plane[2] + (size_t)(r.y / 2) * frame.stride[2] + (r.x / 2);
     return v;
+}
+
+// The same rectangle, copied out into a frame that owns its buffer. A view is
+// enough for an output, which reads plane pointers, but not for everything:
+// JpegEncoder::encode() walks `data` and rejects a frame whose `data` is empty.
+// This is the copy that is. Tightly packed, because the buffer is new and there
+// is nothing to share it with.
+inline DecodedVideoFrame tile_copy(const DecodedVideoFrame& frame,
+                                   const TileLayout& layout, int index) {
+    const TileLayout::Rect r = layout.tile_rect(index, frame.width, frame.height);
+    DecodedVideoFrame out;
+    out.width      = r.w;
+    out.height     = r.h;
+    out.pts_ns     = frame.pts_ns;
+    out.full_range = frame.full_range;
+    // tile_rect rounds every edge to an even number, so these are exact and
+    // there is never a half-sample left over at the right or bottom edge.
+    const int cw = r.w / 2, ch = r.h / 2;
+    out.stride[0] = r.w;
+    out.stride[1] = cw;
+    out.stride[2] = cw;
+    const size_t ysz = (size_t)r.w * (size_t)r.h;
+    const size_t csz = (size_t)cw * (size_t)ch;
+    out.data.assign(ysz + 2 * csz, 0);
+    for (int y = 0; y < r.h; ++y)
+        std::memcpy(out.data.data() + (size_t)y * r.w,
+                    frame.plane[0] + (size_t)(r.y + y) * frame.stride[0] + r.x,
+                    (size_t)r.w);
+    for (int y = 0; y < ch; ++y) {
+        std::memcpy(out.data.data() + ysz + (size_t)y * cw,
+                    frame.plane[1] + (size_t)(r.y / 2 + y) * frame.stride[1] +
+                        r.x / 2, (size_t)cw);
+        std::memcpy(out.data.data() + ysz + csz + (size_t)y * cw,
+                    frame.plane[2] + (size_t)(r.y / 2 + y) * frame.stride[2] +
+                        r.x / 2, (size_t)cw);
+    }
+    out.plane[0] = out.data.data();
+    out.plane[1] = out.plane[0] + ysz;
+    out.plane[2] = out.plane[1] + csz;
+    return out;
 }
 
 } // namespace multisite

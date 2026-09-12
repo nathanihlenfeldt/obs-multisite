@@ -1293,10 +1293,25 @@ void Player::event_listing(EventListing& out) const {
     out.loading = m_events_refreshing.load();
 }
 
-bool Player::latest_frame(DecodedVideoFrame& out, uint64_t& version) const {
+// `show_tile` returns the region that is going to the output rather than the
+// whole frame that arrived, so the browser can be shown either. The layout and
+// the selection are read here, under the same lock as the frame, so the two are
+// always the same instant rather than a frame and a tile from different ones.
+bool Player::latest_frame(DecodedVideoFrame& out, uint64_t& version,
+                          bool show_tile) const {
     std::lock_guard<std::mutex> lk(m_frame_mtx);
     if (m_last_frame.data.empty()) return false;
-    out = m_last_frame;
+    const int sel = m_tile_sel.load();
+    TileLayout lay;
+    lay.cols = m_tile_cols.load();
+    lay.rows = m_tile_rows.load();
+    if (show_tile && sel >= 0 && lay.is_split() && sel < lay.count())
+        // Copied, not viewed: the JPEG encoder walks `data`, and a view has
+        // none. Preview requests only, so this cost is an operator's, not the
+        // thirty-times-a-second path's.
+        out = tile_copy(m_last_frame, lay, sel);
+    else
+        out = m_last_frame;
     fix_planes(out);
     version = m_frame_version.load();
     return true;

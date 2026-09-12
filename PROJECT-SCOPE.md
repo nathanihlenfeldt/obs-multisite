@@ -585,7 +585,10 @@ HTML with a WebSocket for live updates. It should carry the same plain language
   watch from a phone without changing what is on the screen in the room. There
   is one playhead, so the preview mirrors it rather than looking ahead; a
   genuinely decoupled look-ahead preview would need a second decode path and is
-  deliberately out of scope for the single-box appliance.
+  deliberately out of scope for the single-box appliance. Where the crop makes
+  the two genuinely different pictures — a `tile_index` set on a composited
+  feed — the interface lets the operator pick: the region going out, or the
+  whole feed as received (`/preview.jpg?view=feed`). The default is the output.
 
 ## 8.2 Public simulcast relay
 
@@ -1123,8 +1126,11 @@ event. Phases 9–15 have not been started.
   exposes each region as its own source, and the headless campus player can put
   one chosen region on its single screen — a `tile_index` setting (`-1` whole
   picture, `0..3` in reading order) crops in the present path as a non-owning
-  view, so no frame is copied and the audio is left where it is. Assigning tiles
-  to several outputs from one box is what remains, and that is Phase 11.
+  view, so no frame is copied and the audio is left where it is. The web
+  preview offers both views of the same instant — the region going out and the
+  whole feed — because once a tile is selected those are no longer the same
+  picture, and an operator checking the crop needs to see the edges. Assigning
+  tiles to several outputs from one box is what remains, and that is Phase 11.
 - **Phase 11 — Appliance hardware tiers.** ⬜ The receive appliance beyond the
   Raspberry Pi: an x86_64 build, DeckLink SDI output, two displays from one box,
   hardware decode, and one installer that copes with all of it. Two displays is
