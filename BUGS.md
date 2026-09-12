@@ -141,7 +141,7 @@ dependencies"), which matches the legacy layout and not the recommended one. So
 the staging step and the guide move together, and the release notes should say
 so for anyone currently installed the old way.
 
-**Worth doing before the update work in Phase 15** (README roadmap), because the
+**Worth doing before the update work in Phase 13** (README roadmap), because the
 recommended layout is what makes updating a Windows install tractable at all: it
 puts the files an updater must replace into application data it can own, rather
 than inside `Program Files`, where writing needs elevation.

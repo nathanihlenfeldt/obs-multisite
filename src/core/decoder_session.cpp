@@ -171,6 +171,30 @@ RoomState DecoderSession::poll(int64_t now_override) {
         return m_room;
     }
 
+    // 3a. Is this a protocol we still understand?
+    //
+    // Checked here rather than at live.json because this is the document whose
+    // misreading does damage: segment sequence, checksums and timing all come
+    // from it, and a field that changed meaning would show as a stutter or a
+    // failed checksum long after the cause. live.json yields only an event id,
+    // and getting that wrong is caught here anyway.
+    //
+    // Refusing plainly is the whole point of the field. Offline is the honest
+    // state — there is nothing to play — and the error says why, because "the
+    // picture never came up" and "this build is too old" need different
+    // answers from whoever is standing in the room.
+    if (!protocol_readable(fetched.protocol_version)) {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        { std::lock_guard<std::mutex> elk(m_err_mtx);
+          m_last_error = "this event needs a newer version of the plugin — it was "
+                         "recorded with storage protocol " +
+                         std::to_string(fetched.protocol_version) +
+                         " and this build reads " +
+                         std::to_string(kProtocolVersion); }
+        m_room = RoomState::Offline;
+        return m_room;
+    }
+
     // 4. Markers (small, and only every few seconds), also unlocked.
     MarkerList markers;
     bool have_markers = false;

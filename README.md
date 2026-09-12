@@ -246,6 +246,13 @@ only *after* the bucket has confirmed it stored. If a decoder can see an entry,
 the object exists. Everything else — retries, crash resume, deep buffering —
 builds on that.
 
+Every one of those JSON documents carries a `protocol_version`. A decoder goes
+on reading anything it once wrote — a recording from last year is exactly what
+someone wants to play back — and refuses a bucket from a protocol it does not
+know, saying so, rather than half-reading it and stuttering. A document without
+the field is version 1, so nothing already in a bucket has to change. See
+[PROJECT-SCOPE.md §4.8](PROJECT-SCOPE.md#48-protocol-version).
+
 For the full design, see [PROJECT-SCOPE.md](PROJECT-SCOPE.md).
 
 ---
@@ -359,7 +366,7 @@ out of scope, and the relay cannot re-encode.</summary>
   exists, and there is no OBS-level mechanism to add one — no update or upgrade
   entry point exists in `libobs` or `obs-frontend-api`. The Windows instructions
   also still use the install-directory layout OBS has said it will stop reading.
-  Both are Phase 15 in the [Roadmap](#roadmap), and the second is written up as
+  Both are Phase 13 in the [Roadmap](#roadmap), and the second is written up as
   [BUGS.md entry 2](BUGS.md).
 - **Not yet used for a real event.** A six-hour soak has been run (see
   [Status](#status)) but no congregation has watched anything through this. The
@@ -375,10 +382,10 @@ out of scope, and the relay cannot re-encode.</summary>
 ## Roadmap
 
 <details>
-<summary>What is planned next: phases 6 to 15, from the appliance's SDI and
+<summary>What is planned next: phases 6 to 14, from the appliance's SDI and
 x86 hardware tiers to storage redundancy, satellite output routing, headless
-appliances, an ABR transcoder, a low-latency mode and keeping installations
-current.</summary>
+appliances, keeping installations current and an easier way to connect a
+bucket — plus two things that have been dropped, and why.</summary>
 
 - **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
   tier and proven on a Pi 5, though not yet through an event — that tier is done.
@@ -407,14 +414,13 @@ current.</summary>
   region as its own source, and the campus player can show one chosen region
   full-screen on its single display.
 - **Phase 11 — Appliance hardware tiers.** x86_64, DeckLink SDI, two displays
-  from one box, hardware decode, and one installer for all of it.
+  from one box, hardware decode, and one installer for all of it. The tiers
+  above the Raspberry Pi are boxes Stage Audio Works intends to build and sell;
+  the source stays GPLv3 like everything here, and nothing in the phase may
+  require a purchase to run.
 - **Phase 12 — Headless encoder appliance.** The main site without OBS: DeckLink
-  or HDMI input, on x86_64 or an RK3588 board.
-- **Phase 13 — ABR transcoder.** "Relay plus": an HLS/DASH ladder written to a
-  bucket that becomes its own origin.
-- **Phase 14 — End-to-end low latency.** An early concept, over ZeroTier with
-  WebRTC or SRT.
-- **Phase 15 — Keeping installations current.** Today the plugin is a set of
+  or HDMI input, on x86_64 or an RK3588 board. Same note as Phase 11.
+- **Phase 13 — Keeping installations current.** Today the plugin is a set of
   files an operator replaces by hand, and the only way anyone learns a newer
   build exists is to go and look. Notifying them is the small half: the plugin
   already speaks HTTPS through the libcurl it links for uploads — and already
@@ -426,6 +432,31 @@ current.</summary>
   nothing, and a Flatpak install has to go through Flatpak. The prerequisite for
   any of it is packaging into the directory layout OBS now recommends rather than
   the one it has said will stop working.
+- **Phase 14 — Storage credentials and pairing.** A second way to answer "which
+  bucket, and with what keys": pair the plugin to a credential service with a
+  short code, the way a television signs in, beside the typed keys that exist
+  now and never instead of them. Creating a cloud account, scoping a token
+  correctly and writing a lifecycle rule are the three steps that decide whether
+  a church can deploy this unaided, and they are the three this removes. The
+  service address is a setting, not a constant — anyone can run their own — and
+  nothing contacts anything until an operator asks it to. Designed in
+  [PROJECT-SCOPE.md §8.6](PROJECT-SCOPE.md#86-storage-credentials-direct-or-brokered-planned).
+
+Phases 13 and 14 are where the work goes once the plugins are finished. Between
+them they are most of the distance between something a technician can deploy and
+something an ordinary church can, and neither depends on phases 9 to 12.
+
+Two things that used to be on this list are not any more. **The ABR transcoder**
+is no longer part of this project: a rendition ladder exists to serve an audience
+on the open internet, which is a different question from carrying an event
+between sites a church runs, and it has moved to a hosted service Stage Audio
+Works intends to build separately. The existing relay stays here, free and
+undiminished. **End-to-end low latency** is dropped outright — it inverted the
+design priority this project is built on, timeslipping could not survive it, and
+it would have generated support calls on exactly the connections this project
+exists to tolerate; where a site genuinely needs conversational latency, SRT is
+already in OBS. Neither was built. Both are written up with the reasoning in
+[PROJECT-SCOPE.md §10](PROJECT-SCOPE.md#10-delivery-phases).
 
 Each phase is described in full in
 [PROJECT-SCOPE.md §10](PROJECT-SCOPE.md#10-delivery-phases), which is also where

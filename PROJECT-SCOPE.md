@@ -315,6 +315,52 @@ A segment is never listed in the manifest until it is durably in storage:
 PUT manifest`. If a decoder can see a manifest entry, the segment is guaranteed
 to exist.
 
+### 4.8 Protocol version
+
+Every document the encoder writes carries `protocol_version`, a single integer.
+`live.json`, `event.json`, the room index entry, `manifest.json` and
+`markers.json` all have it, so any one of them can be judged on its own by
+whatever reads it first.
+
+One integer rather than a semver, because a reader has exactly one question —
+*can I still understand this?* — and one number answers it. It starts at **1**.
+
+**It is bumped only for a change that would make an older reader misread a
+bucket.** Never for an addition an older reader can safely ignore, which is what
+every field added so far has been: `name`, `layout`, `channel_labels` and the
+rest all arrived as optional fields with defaults, and an older decoder meeting
+one simply does not see it. Growing the format is not the same as breaking it,
+and only breaking it moves this number.
+
+**An absent version is version 1.** Every bucket written before the field
+existed goes on working untouched, exactly as an absent tile layout parses as
+1x1. There is no migration and no flag day. So does a version that is present
+but unclear — a string, a null, a zero, a negative, a float — because this
+arrives from a bucket that any encoder version may have written, and the oldest
+protocol is the safest assumption under which to read an unclear document.
+Parsing never throws on it: a malformed version must not be the thing that stops
+an event playing.
+
+**Older is readable; newer is refused.** A decoder goes on reading everything it
+once wrote, because a recording from last year is exactly what somebody wants to
+play back. A document from a protocol it does not know is refused with a message
+that says so — *"this event needs a newer version of the plugin"* — rather than
+half-read.
+
+That refusal is the entire point of the field. The failure it prevents is not a
+decoder that stops; it is a decoder that carries on: a newer bucket half-read as
+an older one shows up as a stutter, a failed checksum, or a clock time that is
+wrong by an hour, and every one of those sends an operator to look at the
+network when the answer is that the plugin is out of date. The check is made
+against `manifest.json`, because that is the document whose misreading does the
+damage — segment sequence, checksums and timing all come from it — and because
+`live.json` yields only an event id, which being wrong is caught at the manifest
+anyway.
+
+The event listing is deliberately **not** filtered by version. An unreadable
+event stays in the list and explains itself when someone tries to play it, which
+is more use to an operator than an event that silently is not there.
+
 ---
 
 ## 5. Reliability
@@ -745,54 +791,6 @@ because events start late — the intended trigger is `live.json` actually
 going live, optionally bounded by a time window, and `markers.json` makes
 "start the public stream at Sermon Start" possible.
 
-## 8.2.1 A hosted streaming provider (planned)
-
-A church that wants a player on its own website currently has to put the
-event on YouTube or Facebook and embed theirs. The alternative is a hosted
-video API — **Mux** and **Cloudflare Stream** are the two worth supporting,
-and the point of naming both is that neither becomes the answer: the relay
-would carry a provider interface, and a church would choose.
-
-What it would buy, in the order it is worth having:
-
-- **A persistent player embed.** A hosted provider issues one playback
-  identifier that outlives every broadcast. A church embeds it once, and the
-  relay can change what is behind it — this week's event, a replay, a
-  holding card — without anybody editing the website again. That is the whole
-  feature; everything else is machinery for it. The page itself would live in
-  the bucket the church already has rather than on the relay, so the public
-  page does not depend on the $5 VPS being up and the relay gains no public,
-  unauthenticated surface.
-- **A control panel** in the relay's own page: stream state as the provider
-  reports it, the playback identifier, past recordings, and a way to reset the
-  key.
-- **Provider-side simulcast.** Both providers will push onward to YouTube,
-  Facebook and the rest on the church's behalf. The VPS then sends *one*
-  stream out however many places the event goes, instead of one ffmpeg child
-  and one full upload per destination — which on a small VPS is the difference
-  between two destinations and six.
-
-What it would cost, stated here because it is the part that would otherwise be
-discovered late:
-
-- **Per-destination audio selection and per-destination delay cannot survive
-  provider-side simulcast.** The provider resends what it received, so every
-  onward destination carries the same track and the same delay. Today a church
-  can send the main mix to one place and a different feed to another. So this
-  would be a per-destination choice — "sent by this relay" or "sent by the
-  provider" — with our own remaining the default, rather than a switch that
-  quietly flattens the two.
-- **Failure reporting moves off the ffmpeg child** and onto polling the
-  provider's API, so §8.2's supervision story does not cover it and would need
-  its own equivalent before it could be trusted unattended.
-- **It is not free, and the rest of this project is.** Both providers bill per
-  minute ingested and per minute delivered. That has to be said on the page
-  where the credentials are typed, not in a document.
-- **The provider's access token is a different class of secret** from a stream
-  key: it outlives the session and grants far more than one broadcast. It
-  belongs with §8.2's OAuth note — encrypted at rest — rather than with the
-  stream keys.
-
 ## 8.3 External control API (planned)
 
 Operators reach for a physical button, not a dock. A volunteer running a
@@ -972,6 +970,78 @@ back) whose answers decide what the appliance ships on and what it can be asked
 to capture. Phase 12 is the rest; the probe is what keeps Phase 12 from being
 written around a guess.
 
+## 8.6 Storage credentials: direct or brokered (planned)
+
+Setting this up asks a volunteer to create a cloud account, mint an API token
+with exactly the right scope — `s3:ListBucket` included, which the obvious
+object-scoped token omits — and write a lifecycle rule that is also, without
+saying so, the DVR depth. Those three steps are the wall. Everything else in
+QUICKSTART is copying files.
+
+So there should be a second way to answer "which bucket, and with what keys",
+without removing the first.
+
+**Two providers, one `S3Config`.** Today one thing builds the `S3Config` the
+transport takes: the fields an operator typed. A second producer is added
+beside it, and nothing downstream learns which one it got.
+
+- **Direct** — endpoint, bucket, key, secret, region. What exists now, unchanged
+  and never deprecated. Somebody running MinIO in their own rack is a first-class
+  user of this project, not a legacy case.
+- **Brokered** — the plugin holds a device identity and a service URL, and
+  fetches short-lived credentials from a broker that manages the bucket on the
+  operator's behalf.
+
+**Pairing is a device-code flow**, the one a television uses to sign into a
+video service — not a password typed into OBS, and not a key pasted from an
+email:
+
+```
+1. First run, offline. The plugin mints a device id locally. No network.
+2. The operator presses "Connect to a storage service".
+3. The plugin asks the broker for a code and shows it:   JNB-4K7M
+4. The operator opens the broker's page on any device and enters the code.
+5. The plugin polls, receives credentials, and caches them.
+```
+
+The same flow serves the appliance, which is the reason to prefer it over
+anything bespoke: a headless player with no keyboard shows the code on its own
+screen and is paired from a phone, using the code path the plugin already has.
+
+**What holds this honest.** A brokered mode is a place where a plugin could
+quietly start working for somebody other than the person running it, so the
+constraints matter more than the mechanism and belong here rather than in a
+commit message:
+
+- **Inert until asked.** Nothing contacts anything but the configured bucket
+  until an operator presses Connect. No registration on first run, no version
+  check riding along, no telemetry. A fresh install that is never paired must
+  produce no traffic a packet capture would surprise anyone with.
+- **The broker URL is a field, not a constant.** It may ship with a default,
+  and it must be editable. Anyone can run a broker — an integrator looking
+  after a dozen churches has better reason to than most — and the protocol
+  between plugin and broker is documented here for that reason.
+- **Cached credentials are never a precondition.** If the broker cannot be
+  reached, the last good credentials are used and the event goes live. A
+  service that can stop a Sunday is not one this project will depend on.
+- **Always visible.** Mode, bucket, endpoint and expiry are shown in the dock.
+  Brokered must not come to mean opaque.
+- **Disconnect is a real button**, and it offers the underlying bucket details
+  on the way out. The promise that nothing here can be taken away is worth
+  little if leaving is undocumented, and the code path that proves it should
+  exist whether or not it is ever used.
+
+One side effect worth stating, because it runs against the intuition that
+managed means less safe: a brokered credential is short-lived, where today a
+long-lived key sits in the settings in plain text. The managed path is the more
+defensible of the two at rest, not the less.
+
+**Not settled.** What a broker owes a plugin when a subscription lapses — the
+answer must not be "the event stops" — and whether a decoder pairs
+independently or inherits from the encoder that already knows the room. Both are
+design questions, not details, and neither should be answered by the first
+implementation that happens to work.
+
 ---
 
 ## 9. Capability overview
@@ -1003,7 +1073,6 @@ is the better answer for a given church, section 12 says so plainly.
 | Replay a finished event to a destination | proof of concept — one at a time, by hand (§8.2) |
 | Per-channel routing of packed audio at an OBS satellite | out of scope — use [atkAudio's OBS plugins](https://github.com/atkAudio/PluginForObsRelease) (§4.3.1) |
 | Re-encoding an HEVC feed for a streaming site | not built; an SRT destination carries HEVC unchanged instead (§8.2) |
-| Hosted streaming provider (Mux / Cloudflare Stream), persistent player embed, provider-side simulcast | planned (§8.2.1) |
 | External control API (obs-websocket vendor requests, §8.3) | built — every command of both halves, with vendor events |
 | Bitfocus Companion module (buttons, feedbacks, variables) | built — [companion-module-obs-multisite](https://github.com/stageaudioworks/companion-module-obs-multisite), driving OBS or a campus player; not yet in the store |
 | Control from a Stream Deck via OBS hotkey triggers | available now, no parameters or feedback |
@@ -1014,9 +1083,10 @@ is the better answer for a given church, section 12 says so plainly.
 | Fullscreen / SDI output assignment driven by the decoder plugin | planned (§10 Phase 10) |
 | Appliance hardware tiers: x86_64, DeckLink SDI, two displays, hardware decode, one installer | planned (§10 Phase 11) |
 | Headless encoder appliance (DeckLink SDI or HDMI input; x86_64 or RK3588) | planned (§10 Phase 12) |
-| ABR transcoder ("relay plus"): a ladder written to a bucket that is its own HLS/DASH origin | planned (§10 Phase 13) |
-| End-to-end low latency (`obs-multisite-ll`) over ZeroTier, with WebRTC or SRT | early concept (§10 Phase 14) |
-| Knowing a newer build exists, and applying it without a manual reinstall | planned — notification first; whether an update applies itself is undecided (§10 Phase 15) |
+| ABR transcoder ("relay plus"): a ladder written to a bucket that is its own HLS/DASH origin | **not part of this project** — moved to a separate hosted service (§10) |
+| End-to-end low latency over ZeroTier, with WebRTC or SRT | **dropped** — use SRT, already in OBS (§10) |
+| Knowing a newer build exists, and applying it without a manual reinstall | planned — notification first; whether an update applies itself is undecided (§10 Phase 13) |
+| Connecting a bucket by pairing rather than by pasting keys, against a broker anyone can run | planned (§8.6, §10 Phase 14) |
 
 Further directions to explore: web/mobile simulcast served directly from the
 bucket (which needs no relay at all — the CMAF objects are already the right
@@ -1035,7 +1105,17 @@ hardware-decode selection — moved to Phase 11 rather than being built here.
 Phase 7 is built but has not yet carried an event. Phase 8 is built — the vendor
 API and the Companion module — and both have been driven against a real OBS, the
 module also against a real campus player, though nothing has yet run a whole
-event. Phases 9–15 have not been started.
+event. Phases 9–14 have not been started.
+
+**Phases 13 and 14 are the two that carry weight now.** Between them they are
+most of the distance between a project a technician can deploy and one an
+ordinary church can — knowing a new build exists and installing it without a
+manual reinstall, and connecting a bucket without minting a token by hand.
+Neither depends on 9 through 12, and both were written as late phases when the
+list assumed the hardest problem was features rather than deployment.
+
+Two things that used to be on this list are not any more. They are written up
+after the phases, with the reasoning, rather than deleted.
 
 - **Phase 1 — Reliability core.** ✅ Durable upload queue, retry/backoff, checksums,
   resume-after-crash, decoder cache with verification, and stale detection. This
@@ -1133,7 +1213,19 @@ event. Phases 9–15 have not been started.
   tiles to several outputs from one box is what remains, and that is Phase 11.
 - **Phase 11 — Appliance hardware tiers.** ⬜ The receive appliance beyond the
   Raspberry Pi: an x86_64 build, DeckLink SDI output, two displays from one box,
-  hardware decode, and one installer that copes with all of it. Two displays is
+  hardware decode, and one installer that copes with all of it.
+
+  A note on what this is, since it is the first phase here that is as much a
+  product as a piece of software. The Raspberry Pi tier is a build anyone can
+  make from this repository, and stays that way. The tiers above it are boxes
+  Stage Audio Works intends to assemble, test and sell — SDI, genlock and a
+  professional signal path are for installations with a budget, and the work of
+  sourcing and supporting hardware is worth paying for. **The source is GPLv3
+  like everything else here**, and a site that would rather build its own from
+  it is welcome to; what is being sold is the box, the testing and somebody to
+  call, not permission. Nothing in this phase may require a purchase to run.
+
+  Two displays is
   Phase 10 applied to hardware — a 3840×1080 feed is a `2x1` layout with tile 0
   on the first output and tile 1 on the second. Hardware decode is VAAPI or QSV
   with a software fallback, which the core's FFmpeg path already allows for; the
@@ -1154,43 +1246,14 @@ event. Phases 9–15 have not been started.
   would have to be written: an input abstraction, an encode stage in front of
   the muxer, and honest answers on clocking, genlock and where the audio comes
   from. The largest new surface of any phase here. An early concept.
-- **Phase 13 — ABR transcoder, "relay plus".** ⬜ The relay copies; this
-  re-encodes. Decode the incoming feed once, produce a ladder of renditions
-  (1080p, 720p, 480p), package it as CMAF for **both HLS and DASH**, and write
-  it to a bucket that is then the origin — so a browser or a phone plays ABR
-  straight from object storage with no origin server running anywhere. Encoders:
-  NVENC, VAAPI and x264, behind a capability probe, the way the relay already
-  probes ffmpeg for SRT. Input stays the bucket as now, but SRT and RTMP input
-  as well, which is what makes the container useful outside this project.
-  The hard part is not the encode. It is ladder *alignment* — closed GOPs, one
-  IDR per segment, identical boundaries across renditions — or ABR switching
-  glitches at every switch. That should be proven before anything else is built.
-  Note that the target hardware changes with the job: a $5 VPS has no encoder,
-  so this wants a small box with a usable iGPU, and the documentation should say
-  so rather than inherit the relay's VPS story. Built as a library first, the way
-  `relay_logic` is, so the same engine can later become an in-OBS multi-bitrate
-  encoder uploading resiliently from the machine that already has the picture.
-- **Phase 14 — End-to-end low latency (`obs-multisite-ll`).** ⬜ An early concept
-  for a second delivery path with latency in fractions of a second rather than
-  tens of seconds, running on the same plugins and the same appliances. ZeroTier
-  would carry it, so there is nothing to port-forward and no static address to
-  arrange — the promise this project already makes about a venue's network, and
-  the appliance already ships ZeroTier for remote access, so the ground is
-  partly prepared. Above that, WebRTC for the lowest latency or SRT for a
-  slightly higher one with far less machinery; past three or four sites WebRTC
-  needs a forwarding server rather than a mesh. A master instance would act as
-  the ZeroTier controller, so a church runs one node with a public address and
-  nothing else.
-  Two things must be settled before any of it is built. First, §1 ranks latency
-  **last**: this is therefore a parallel path, with the bucket pipeline staying
-  the durable record and the DVR, not a replacement for it. Second, timeslipping
-  — hold, resume, scrub — is what makes this worth using, and it does not survive
-  a sub-second path intact, so what the low-latency path does about a campus
-  that wants to hold the picture is a design question and not a footnote.
-  Licensing needs checking rather than assuming, as it was for the codecs and for
-  atkAudio. It would sit as a sub-project depending on the core and never
-  depended on by it, exactly as `relay/` does.
-- **Phase 15 — Keeping installations current.** ⬜ Installing the plugin is a
+
+  The same note as Phase 11 applies, and more strongly: this is expected to be
+  a box we build rather than a thing a church assembles, and its source is
+  GPLv3 regardless. It matters beyond its own tier — a main site that needs no
+  OBS is what makes this usable somewhere nobody wants a desktop computer in
+  the signal path, and it is the encoder that a hosted delivery service would
+  eventually be fed by.
+- **Phase 13 — Keeping installations current.** ⬜ Installing the plugin is a
   manual act — unzip, move files, restart OBS — and the only way to learn that a
   newer build exists is to go and look at the releases page. Two jobs live here
   and they are not the same size.
@@ -1234,9 +1297,93 @@ event. Phases 9–15 have not been started.
   tractable at all, because the files being replaced become data an updater can
   own rather than files inside Program Files.
 
-  Nothing here depends on phases 9–14, and it is small enough to pull forward if
+  Nothing here depends on phases 9–12, and it is small enough to pull forward if
   reinstalling by hand on each release is costing more than those phases are
   worth.
+
+- **Phase 14 — Storage credentials and pairing.** ⬜ A second way to answer
+  "which bucket, and with what keys" — a device-code pairing against a
+  credential broker, beside the typed keys that exist now and never instead of
+  them. Designed in §8.6, including the constraints that keep it honest: inert
+  until an operator asks for it, a broker URL that is a field rather than a
+  constant, cached credentials that never gate going live, and a disconnect
+  that hands back the bucket details.
+
+  This is on the list because of what §8.6 opens with. Creating a cloud
+  account, scoping a token correctly and writing a lifecycle rule are the three
+  steps that decide whether a church can deploy this at all, and they are the
+  three a broker removes. Whatever the eventual split between what a church
+  does itself and what it pays somebody for, the plugin needs the seam — and
+  the seam is small, because `S3Config` is already a plain value struct that
+  something builds rather than something the transport reaches out for.
+
+  Depends on nothing else here. Along with Phase 13, the most useful work
+  available once the plugins are finished.
+
+
+### Two things that were on this list
+
+Neither was built, so nothing anyone has is affected. The reasoning is kept
+rather than the entries deleted: the people who read a roadmap are the ones
+who would notice two of them quietly disappearing.
+
+### The ABR transcoder, "relay plus" — no longer part of this project
+
+It answers a different question from the rest of this document. Everything
+else here carries an event between sites a church runs; a rendition ladder
+exists to serve an audience on the open internet, which is a delivery
+business with its own cost curve, its own failure modes and its own
+competitors. Building it here would have quietly changed what this
+project is, and would have set an expectation of hosted delivery that a
+repository of two OBS plugins cannot honour.
+
+It is not cancelled, it has moved: it is the foundation of a hosted service
+Stage Audio Works intends to build separately, fed by the encoder plugin or
+by the Phase 12 appliance. The existing relay stays exactly as it is —
+free, in this repository, and not degraded to make room for anything.
+
+The engineering notes are kept below because they were dearly bought and
+the next person to attempt this should not start from nothing.
+
+The relay copies; this
+re-encodes. Decode the incoming feed once, produce a ladder of renditions
+(1080p, 720p, 480p), package it as CMAF for **both HLS and DASH**, and write
+it to a bucket that is then the origin — so a browser or a phone plays ABR
+straight from object storage with no origin server running anywhere. Encoders:
+NVENC, VAAPI and x264, behind a capability probe, the way the relay already
+probes ffmpeg for SRT. Input stays the bucket as now, but SRT and RTMP input
+as well, which is what makes the container useful outside this project.
+The hard part is not the encode. It is ladder *alignment* — closed GOPs, one
+IDR per segment, identical boundaries across renditions — or ABR switching
+glitches at every switch. That should be proven before anything else is built.
+Note that the target hardware changes with the job: a $5 VPS has no encoder,
+so this wants a small box with a usable iGPU, and the documentation should say
+so rather than inherit the relay's VPS story. Built as a library first, the way
+`relay_logic` is, so the same engine can later become an in-OBS multi-bitrate
+encoder uploading resiliently from the machine that already has the picture.
+
+### End-to-end low latency — dropped
+
+The concept was a second delivery path in fractions of a second rather than
+tens — ZeroTier to avoid port forwarding, WebRTC or SRT above it — running on
+the same plugins and appliances.
+
+It is dropped for three reasons, none of which were going to improve. It
+inverts §1: everything that makes this project worth running comes from
+being allowed to buffer, and a sub-second path gives that up on exactly the
+venue connections this project exists to survive. Timeslipping does not
+survive it — hold, resume and scrub are most of why a campus wants this, and
+they are not features you can offer on one path and withdraw on the other
+without confusing every operator who has to choose. And it would be a
+support liability out of proportion to its use: a path whose quality tracks
+the connection minute by minute generates calls that no amount of
+documentation prevents.
+
+Where a site genuinely needs conversational latency — a two-way interview, a
+campus pastor taking questions — SRT already exists in OBS, there is good
+hardware for it, and Stage Audio Works can engineer it per project on the SRT
+infrastructure it already runs. That is a better answer than a second delivery
+path in this repository, and it is available today rather than after a phase.
 
 ---
 

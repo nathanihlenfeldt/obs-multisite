@@ -10,6 +10,22 @@ using json = nlohmann::json;
 
 namespace multisite {
 
+// The protocol version a document claims, read the same way everywhere.
+//
+// An absent field means the document predates versioning, which is version 1.
+// So does a field holding something that is not a positive number — a string, a
+// null, a zero — because this arrives from a bucket any encoder version may
+// have written, and the oldest protocol is the safest one to read an unclear
+// document under. Deliberately never throws: a malformed version must not be
+// the thing that stops an event playing.
+static int read_protocol_version(const json& j) {
+    if (!j.contains("protocol_version")) return 1;
+    const json& v = j["protocol_version"];
+    if (!v.is_number_integer()) return 1;
+    const int n = v.get<int>();
+    return n > 0 ? n : 1;
+}
+
 // ── TileLayout ────────────────────────────────────────────────────────────────
 std::string TileLayout::to_string() const {
     return std::to_string(cols) + "x" + std::to_string(rows);
@@ -103,13 +119,15 @@ static std::vector<AudioTrack> tracks_from_json(const json& j) {
 
 // ── LivePointer ───────────────────────────────────────────────────────────────
 std::string LivePointer::to_json() const {
-    json j = { {"room_id", room_id}, {"event_id", event_id},
+    json j = { {"protocol_version", protocol_version},
+               {"room_id", room_id}, {"event_id", event_id},
                {"status", status}, {"updated_at_ms", updated_at_ms} };
     return j.dump();
 }
 LivePointer LivePointer::from_json(const std::string& s) {
     json j = json::parse(s);
     LivePointer p;
+    p.protocol_version = read_protocol_version(j);
     p.room_id       = j.value("room_id", "");
     p.event_id      = j.value("event_id", "");
     p.status        = j.value("status", "live");
@@ -120,6 +138,7 @@ LivePointer LivePointer::from_json(const std::string& s) {
 // ── EventInfo ─────────────────────────────────────────────────────────────────
 std::string EventInfo::to_json() const {
     json j;
+    j["protocol_version"]   = protocol_version;
     j["event_id"]           = event_id;
     j["room_id"]            = room_id;
     j["name"]               = name;
@@ -134,6 +153,7 @@ std::string EventInfo::to_json() const {
 EventInfo EventInfo::from_json(const std::string& s) {
     json j = json::parse(s);
     EventInfo e;
+    e.protocol_version   = read_protocol_version(j);
     e.event_id           = j.value("event_id", "");
     e.room_id            = j.value("room_id", "");
     e.name               = j.value("name", "");
@@ -185,13 +205,15 @@ std::string event_id_from_index_key(const std::string& key) {
 
 // ── RoomEventEntry ────────────────────────────────────────────────────────────
 std::string RoomEventEntry::to_json() const {
-    json j = { {"event_id", event_id}, {"room_id", room_id},
+    json j = { {"protocol_version", protocol_version},
+               {"event_id", event_id}, {"room_id", room_id},
                {"name", name}, {"started_at_ms", started_at_ms} };
     return j.dump();
 }
 RoomEventEntry RoomEventEntry::from_json(const std::string& s) {
     json j = json::parse(s);
     RoomEventEntry e;
+    e.protocol_version = read_protocol_version(j);
     e.event_id      = j.value("event_id", "");
     e.room_id       = j.value("room_id", "");
     e.name          = j.value("name", "");
@@ -250,6 +272,7 @@ double Manifest::stream_duration_hint() const {
 
 std::string Manifest::to_json() const {
     json j;
+    j["protocol_version"]    = protocol_version;
     j["event_id"]            = event_id;
     j["status"]              = status;
     j["name"]                = name;
@@ -271,6 +294,7 @@ std::string Manifest::to_json() const {
 Manifest Manifest::from_json(const std::string& s) {
     json j = json::parse(s);
     Manifest m;
+    m.protocol_version    = read_protocol_version(j);
     m.event_id            = j.value("event_id", "");
     m.status              = j.value("status", "live");
     m.name                = j.value("name", "");
@@ -301,11 +325,13 @@ std::string MarkerList::to_json() const {
     for (const auto& mk : markers)
         arr.push_back({ {"seq", mk.seq}, {"at_ms", mk.at_ms},
                         {"type", mk.type}, {"label", mk.label}, {"id", mk.id} });
-    return json({ {"markers", arr} }).dump();
+    return json({ {"protocol_version", protocol_version},
+                  {"markers", arr} }).dump();
 }
 MarkerList MarkerList::from_json(const std::string& s) {
     json j = json::parse(s);
     MarkerList ml;
+    ml.protocol_version = read_protocol_version(j);
     if (j.contains("markers") && j["markers"].is_array()) {
         for (const auto& mk : j["markers"]) {
             Marker m;
