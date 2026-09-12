@@ -1,0 +1,93 @@
+name: DCO
+
+# Every commit in a pull request must carry a Signed-off-by line matching its
+# author. That line is the contributor certifying provenance — see DCO and
+# CONTRIBUTING.md — and it is the only thing this project asks for beyond the
+# GPL, deliberately.
+#
+# Only pull requests are checked. A push straight to main is not, which is the
+# normal shape for this: the point of the DCO is knowing where an outside
+# contribution came from, and a maintainer pushing to their own repository is
+# not that. Maintainers should still commit with -s.
+
+# No workflow_dispatch: every step below reads github.event.pull_request, which
+# a manual run does not have.
+on:
+  pull_request:
+    types: [ opened, synchronize, reopened ]
+
+permissions:
+  contents: read
+
+jobs:
+  signed-off:
+    runs-on: ubuntu-latest
+    steps:
+      # The PR head itself, not the merge commit GitHub synthesises: the merge
+      # commit is created by GitHub and has no sign-off, and it is not what
+      # lands on main anyway.
+      - uses: actions/checkout@v5
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
+
+      - name: Fetch the base branch
+        run: |
+          git fetch --no-tags --quiet origin \
+            "${{ github.event.pull_request.base.ref }}"
+
+      - name: Every commit carries a Signed-off-by matching its author
+        env:
+          BASE: origin/${{ github.event.pull_request.base.ref }}
+        run: |
+          set -uo pipefail
+
+          # Merge commits are excluded: a contributor merging main into their
+          # branch has not authored anything to certify, and asking them to
+          # sign off on somebody else's work is the opposite of the point.
+          commits="$(git rev-list --no-merges "$BASE"..HEAD)"
+          if [ -z "$commits" ]; then
+            echo "No commits to check."
+            exit 0
+          fi
+
+          fail=0
+          for sha in $commits; do
+            subject="$(git show -s --format='%s' "$sha")"
+            author="$(git show -s --format='%ae' "$sha")"
+            # Every sign-off on the commit, lowercased, one per line.
+            signoffs="$(git show -s --format='%B' "$sha" \
+                        | sed -n 's/^[Ss]igned-off-by:.*<\(.*\)>.*/\1/p' \
+                        | tr '[:upper:]' '[:lower:]')"
+
+            if [ -z "$signoffs" ]; then
+              echo "::error::${sha:0:9} (\"$subject\") has no Signed-off-by line."
+              fail=1
+            elif ! printf '%s\n' "$signoffs" \
+                   | grep -qxF "$(printf '%s' "$author" | tr '[:upper:]' '[:lower:]')"; then
+              echo "::error::${sha:0:9} (\"$subject\") is signed off by a different address than its author ($author)."
+              fail=1
+            else
+              echo "ok  ${sha:0:9}  $subject"
+            fi
+          done
+
+          if [ "$fail" -ne 0 ]; then
+            cat <<'MSG'
+
+          To fix, from your branch:
+
+              git rebase --signoff origin/main
+              git push --force-with-lease
+
+          Or for the last commit only:
+
+              git commit --amend -s --no-edit
+
+          What the sign-off means, and why this project asks for it rather than
+          for a CLA, is in CONTRIBUTING.md.
+          MSG
+            exit 1
+          fi
+
+          echo "All commits signed off."

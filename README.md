@@ -45,7 +45,8 @@ far more than one that is two seconds behind and stutters.
 | Put the appliance's sound on the network (AES67) | [AES67 audio](docs/SATELLITE.md#aes67-audio-on-the-network) |
 | Send the event to YouTube or Facebook | [Streaming to the public](docs/STREAMING.md) |
 | Control it from a Stream Deck | [Companion module](https://github.com/stageaudioworks/companion-module-obs-multisite) |
-| Build, test or contribute | [Developer guide](docs/DEVELOPER.md) |
+| Build and test | [Developer guide](docs/DEVELOPER.md) |
+| Send a change, or report a bug well | [CONTRIBUTING.md](CONTRIBUTING.md) |
 | Read the design and storage protocol | [PROJECT-SCOPE.md](PROJECT-SCOPE.md) |
 
 What works, what does not yet, and what is planned next is in
@@ -138,6 +139,14 @@ If this is useful to your church, use it. If you improve it, we would be glad to
 see the change come back. If it fails you in an interesting way, a good bug
 report is a real contribution: much of what works well here was fixed because
 someone took the time to paste a log.
+
+Commits need a `Signed-off-by` line — `git commit -s` — certifying that the
+change is yours to give. That is the [DCO](DCO), and it is the only thing asked
+for beyond the GPL. **There is deliberately no Contributor Licence Agreement**:
+a CLA would give us the right to relicense your work into a closed product, we
+have no plan to use that right, and asking for it would be asking for something
+in exchange for nothing. What you contribute stays GPLv3, for the next church
+as much as for this one. See [CONTRIBUTING.md](CONTRIBUTING.md).
 
 </details>
 

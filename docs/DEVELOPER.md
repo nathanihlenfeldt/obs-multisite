@@ -2,7 +2,8 @@
 
 Building the code yourself, running the tests, and knowing what is where. For
 the project's state — what works and what is next — see the
-[README](../README.md).
+[README](../README.md). For sending a change back, including the sign-off every
+commit needs, see [CONTRIBUTING.md](../CONTRIBUTING.md).
 
 ## Build and test
 
