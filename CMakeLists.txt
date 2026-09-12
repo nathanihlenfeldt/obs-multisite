@@ -339,6 +339,16 @@ add_executable(test_pcm_convert tests/test_pcm_convert.cpp)
 target_include_directories(test_pcm_convert PRIVATE src/appliance)
 add_test(NAME pcm_convert COMMAND test_pcm_convert)
 
+# The AES67 daemon's REST interface, as shapes: the source body the player
+# sends, the JSON it reads back, and the SDP the daemon publishes. All text, all
+# easy to get quietly wrong — a channel map naming the wrong eight channels is
+# heard as the wrong eight channels — and none of it needs the daemon, the
+# kernel module or a card to check. aes67.cpp, which does talk to the daemon, is
+# deliberately not linked here.
+add_executable(test_aes67 tests/test_aes67.cpp)
+target_include_directories(test_aes67 PRIVATE src/appliance)
+add_test(NAME aes67 COMMAND test_aes67)
+
 # ── Optional: the satellite appliance (headless player) ───────────────────────
 # The Raspberry Pi / mini-PC receive box: the same core, with its own video and
 # audio output and a browser-based operator interface instead of OBS.
@@ -370,6 +380,10 @@ if(BUILD_PLAYER AND FFMPEG_FOUND AND CURL_FOUND AND NOT WIN32)
         src/appliance/screen.cpp
         src/appliance/api.cpp
         src/appliance/sysinfo.cpp
+        # The AES67 daemon on this box: configuring it, watching it and
+        # switching it. Its shapes live in aes67.h and are tested separately —
+        # this is only the part that talks to the daemon.
+        src/appliance/aes67.cpp
         src/appliance/preview.cpp
         src/appliance/splash.cpp
         src/appliance/outputs.cpp)

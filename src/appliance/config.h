@@ -117,6 +117,29 @@ struct Config {
     // Secret, like the bucket key: never sent back to the browser.
     std::string cloudflared_token;
 
+    // ── The sound on the network (AES67) ─────────────────────────────────────
+    // AES67 is a separate install — scripts/player/merging-aes67.sh builds
+    // Merging's kernel module and the GPL aes67-daemon — and it registers a
+    // sound card of its own. What this player can do about it is keep its
+    // source set up the way it should be, publish what it is, and switch it.
+    //
+    // Off by default, deliberately: a box with no AES67 stack installed has no
+    // business spending its life reporting that it cannot find one, and every
+    // other install is the majority.
+    bool        aes67_manage = false;
+    // Blank means "whatever the daemon's own configuration names", which is what
+    // a box that has never been edited should get. Set here to publish to a
+    // different multicast group.
+    std::string aes67_address;
+    // The width of the published stream. Eight is the production bus — main
+    // mix, mic ISOs and click — and it is fixed rather than following the feed,
+    // because receiving consoles configure against a stream's width and would
+    // have to re-learn it every time an event carried a different number of
+    // tracks. (aes67.h carries the same default as kAes67DefaultChannels; it is
+    // repeated rather than included so that this header, which everything
+    // includes, does not drag a JSON library in behind it.)
+    int         aes67_channels = 8;
+
     bool configured() const {
         return !bucket.empty() &&
                (!endpoint_host.empty() || !r2_account_id.empty());

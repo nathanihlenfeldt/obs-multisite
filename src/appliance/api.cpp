@@ -4,6 +4,7 @@
 #include "sysinfo.h"
 #include "video_output.h"
 #include "audio_output.h"
+#include "aes67.h"   // the daemon on this box: its shapes, and talking to it
 #include "preview.h"
 
 #include "../vendor/nlohmann/json.hpp"
@@ -153,6 +154,10 @@ json config_json(const Config& c) {
                                  ? std::string()
                                  : std::string(kSecretPlaceholder);
     j["cloudflared_set"]   = !c.cloudflared_token.empty();
+
+    j["aes67_manage"]   = c.aes67_manage;
+    j["aes67_address"]  = c.aes67_address;
+    j["aes67_channels"] = c.aes67_channels;
     return j;
 }
 
@@ -254,6 +259,10 @@ Config apply_edit(Config c, const json& j) {
         }
     }
 
+    take(j, "aes67_manage",   c.aes67_manage);
+    take(j, "aes67_address",  c.aes67_address);
+    take(j, "aes67_channels", c.aes67_channels);
+
     // Guard rails, so a mistyped figure cannot make the box unusable from the
     // very interface being used to fix it.
     if (c.poll_interval_ms   < 500)  c.poll_interval_ms = 500;
@@ -276,6 +285,52 @@ bool bool_param(const HttpRequest& req, const char* name, bool fallback) {
     const std::string v = req.param(name);
     if (v.empty()) return fallback;
     return v == "1" || v == "true" || v == "yes" || v == "on";
+}
+
+// ── Reading a POST that the interface sends as JSON ──────────────────────────
+// `param()` reads the query string only, and the interface sends a JSON body —
+// so both are honoured, the body first. The query string is not redundancy for
+// its own sake: it is what somebody at a terminal reaches for when they are
+// testing a box with curl, and there is no reason for the two to differ.
+json body_json(const HttpRequest& req) {
+    if (req.body.empty()) return json::object();
+    try {
+        return json::parse(req.body);
+    } catch (...) {
+        // A body that will not parse is treated as absent, so the query string
+        // still gets its chance rather than the request failing over a
+        // malformed one.
+        return json::object();
+    }
+}
+
+std::string text_param(const HttpRequest& req, const json& body,
+                       const char* name) {
+    const auto it = body.find(name);
+    if (it != body.end() && it->is_string()) return it->get<std::string>();
+    return req.param(name);
+}
+
+bool flag_param(const HttpRequest& req, const json& body, const char* name,
+                bool fallback) {
+    const auto it = body.find(name);
+    if (it != body.end()) {
+        if (it->is_boolean()) return it->get<bool>();
+        if (it->is_number())  return it->get<int>() != 0;
+    }
+    return bool_param(req, name, fallback);
+}
+
+double number_param(const HttpRequest& req, const json& body, const char* name,
+                    double fallback) {
+    const auto it = body.find(name);
+    if (it != body.end()) {
+        if (it->is_number()) return it->get<double>();
+        if (it->is_string()) {
+            try { return std::stod(it->get<std::string>()); } catch (...) {}
+        }
+    }
+    return num_param(req, name, fallback);
 }
 
 } // namespace
@@ -680,6 +735,156 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
                                 {"level", to_string(e.level)},
                                 {"text", e.text}});
         res.json(json{{"lines", std::move(rows)}}.dump());
+    });
+
+    // ── The sound on the network (AES67) ─────────────────────────────────────
+    // The daemon on this box owns the stream; these routes are how an operator
+    // sees it and switches it. The state is gathered fresh on every request
+    // rather than cached: it is a handful of loopback calls, and a stale answer
+    // to "is the sound leaving the building?" is worse than a slow one.
+    //
+    // Reading is never gated by the lock — somebody should be able to find out
+    // that the network feed is down without unlocking anything. Changing it is
+    // gated, because it changes what is on air, and this is exactly the sort of
+    // setting a tablet left on a music stand must not be able to alter.
+    auto aes67_state = [&player]() {
+        const Config c = player.config();
+        return aes67_probe(c.alsa_device, c.aes67_channels, c.aes67_address);
+    };
+
+    auto aes67_json = [](const Aes67State& s) {
+        return json{
+            {"installed",       s.installed},
+            {"service_active",  s.service_active},
+            {"rest_reachable",  s.rest_reachable},
+            {"port",            s.port},
+            {"ptp_known",       s.ptp_known},
+            {"ptp_locked",      s.ptp_locked},
+            {"ptp_status",      s.ptp_status_word},
+            {"ptp_gmid",        s.ptp_gmid},
+            {"ptp_jitter",      s.ptp_jitter},
+            {"sources_known",   s.sources_known},
+            {"source_present",  s.source_present},
+            {"source_enabled",  s.source_enabled},
+            {"source_correct",  s.source_correct},
+            {"source_channels", s.source_channels},
+            {"source_address",  s.source_address},
+            {"source_name",     s.source_name},
+            {"sdp_valid",       s.sdp_valid},
+            {"sdp_port",        s.sdp_port},
+            {"sdp_codec",       s.sdp_codec},
+            {"sdp_channels",    s.sdp_channels},
+            {"sdp_ptp",         s.sdp_ptp},
+            // The whole SDP, because it is the one thing a console's engineer
+            // will ask for and it is only a couple of hundred bytes.
+            {"sdp",             s.sdp_text},
+            {"card_present",    s.card_present},
+            {"player_on_card",  s.player_on_card},
+            // Everything that has to be true for the sound to actually leave,
+            // concluded once here rather than re-derived in the interface.
+            {"carrying_audio",  s.carrying_audio()},
+            {"error",           s.error},
+        };
+    };
+
+    // The refusal the locked controls share. Not the `control` helper above:
+    // that one wraps the player's own controls and answers with its status,
+    // whereas these act on another process entirely.
+    auto aes67_locked = [&player](HttpResponse& res) {
+        if (!player.locked()) return false;
+        res.status = 409;
+        res.json(json{{"error", "the controls are locked"},
+                      {"locked", true}}.dump());
+        return true;
+    };
+
+    server.route("GET", "/api/aes67", [aes67_state, aes67_json](
+                                         const HttpRequest&, HttpResponse& res) {
+        res.json(aes67_json(aes67_state()).dump());
+    });
+
+    // The operator's switch, and the address and width it publishes. One route
+    // because they are one decision: asking for the sound on the network means
+    // asking for a stream of a given width at a given address, and doing it in a
+    // single call is what makes it one action rather than three that can
+    // disagree with each other if the second one fails.
+    server.route("POST", "/api/aes67/source",
+                 [&player, config_path, aes67_state, aes67_json, aes67_locked](
+                     const HttpRequest& req, HttpResponse& res) {
+        if (aes67_locked(res)) return;
+
+        const json body = body_json(req);
+        Config updated = player.config();
+        const bool enabled =
+            flag_param(req, body, "enabled", updated.aes67_manage);
+        updated.aes67_manage = enabled;
+
+        const std::string addr = text_param(req, body, "address");
+        if (!addr.empty()) updated.aes67_address = addr;
+
+        updated.aes67_channels = (int)number_param(
+            req, body, "channels", updated.aes67_channels);
+
+        // Saved before the daemon is asked, so that a daemon which refuses still
+        // leaves the box remembering what it was asked to do — and so the
+        // setting survives the power cut that might have caused the refusal.
+        std::string err;
+        if (!updated.save(config_path, err)) {
+            res.status = 500;
+            res.json(json{{"error", "could not save settings: " + err}}.dump());
+            return;
+        }
+        player.reconfigure(updated);
+
+        const int width = aes67_channels_to_map(updated.aes67_channels);
+        const std::string address =
+            aes67_address_or_default(updated.aes67_address);
+        // The name is what appears in a console's source list, so it says which
+        // room this is rather than what it is running.
+        const std::string name = "Multisite " + hostname();
+
+        std::string problem;
+        if (enabled) {
+            // Started *and* enabled, together, every time: enabling is what
+            // makes it come back after a power cut, which is the promise the
+            // interface makes, and a daemon that happens to be running but is
+            // not enabled would break it silently. Both calls are idempotent,
+            // so repeating them costs nothing.
+            problem = aes67_set_service(true, true);
+            if (problem.empty())
+                problem = aes67_ensure_source(width, address, name, true);
+        } else if (aes67_state().source_present) {
+            // Switching off stops the stream rather than deleting it: the
+            // address and width are kept, so switching it back on is one click
+            // and not a re-entry of everything.
+            problem = aes67_set_source_enabled(false);
+        }
+
+        json result = aes67_json(aes67_state());
+        if (!problem.empty()) result["problem"] = problem;
+        res.json(result.dump());
+    });
+
+    // Starting and stopping the daemon itself. An engineer's control rather than
+    // an operator's: stopping it takes the whole stack down, including anything
+    // else that has been aimed at this box's streams.
+    server.route("POST", "/api/aes67/service",
+                 [aes67_state, aes67_json, aes67_locked](
+                     const HttpRequest& req, HttpResponse& res) {
+        if (aes67_locked(res)) return;
+
+        const json body = body_json(req);
+        const bool start = flag_param(req, body, "start", true);
+        // Enabling is what survives a power cut, and stopping is what somebody
+        // does for an afternoon, so they are asked for separately. Defaulting
+        // `enable` to the same as `start` is right for both: starting a daemon
+        // that will not come back is rarely what was meant.
+        const bool enable = flag_param(req, body, "enable", start);
+        const std::string problem = aes67_set_service(start, enable);
+
+        json result = aes67_json(aes67_state());
+        if (!problem.empty()) result["problem"] = problem;
+        res.json(result.dump());
     });
 }
 

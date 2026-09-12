@@ -109,6 +109,11 @@ PLAYER_CONF="/etc/multisite-player/config.json"
 # existing daemon.conf. Both default to leaving things alone.
 POINT_PLAYER=0
 REWRITE_CONFIG=0
+# The stream this script sets up for the player, which is what makes a fresh
+# install a finished one: eight channels is the production bus, and the address
+# is read out of the daemon's own configuration unless it is given here.
+NO_SOURCE=0
+SOURCE_CHANNELS="${SOURCE_CHANNELS:-8}"
 
 # Where this repository's raw files live, so the closing notes can name a command
 # that works on a box that has no checkout. Set RAW_BASE to a fork or a branch
@@ -135,6 +140,9 @@ Options
   --rewrite-config     Overwrite /etc/daemon.conf, keeping a .bak.
   --point-player       Also set the player's alsa_device to the new card and
                        restart it. Without this the player is left untouched.
+  --no-source          Do not set up a stream. Do this if the box's streams are
+                       managed elsewhere, or by hand.
+  --channels N         Channels in that stream, default 8.
   --check              Look at what is already here and report, change nothing.
   -h, --help           This text.
 
@@ -145,8 +153,9 @@ What it changes
   apt packages, /var/tmp/aes67-merging (build tree), /usr/local/bin/aes67-daemon,
   /usr/local/share/aes67-daemon/dist (the WebUI), /etc/daemon.conf,
   /etc/status.json, /etc/systemd/system/aes67-daemon.service,
-  /etc/sysctl.d/90-aes67.conf, and an /etc/modules-load.d entry so the module
-  loads at boot.
+  /etc/sysctl.d/90-aes67.conf, an /etc/modules-load.d entry so the module
+  loads at boot, and one stream — eight channels, at the multicast address the
+  daemon's configuration names.
 
 What it never touches
   Any card already registered on the box, and the player's config unless
@@ -161,6 +170,8 @@ while [ $# -gt 0 ]; do
         --build-dir)      BUILD_DIR="${2:?--build-dir needs a value}"; shift 2 ;;
         --rewrite-config) REWRITE_CONFIG=1; shift ;;
         --point-player)   POINT_PLAYER=1; shift ;;
+        --no-source)      NO_SOURCE=1; shift ;;
+        --channels)       SOURCE_CHANNELS="${2:?--channels needs a value}"; shift 2 ;;
         --check)          CHECK_ONLY=1; shift ;;
         -h|--help)        usage; exit 0 ;;
         *) die "unknown option: $1 (try --help)" ;;
@@ -249,6 +260,11 @@ install_deps() {
         libsystemd-dev
         libfaac-dev
         psmisc
+        # Used at the end to set up the stream through the daemon's own REST
+        # interface. Almost certainly here already — this script is normally
+        # fetched with curl — but the one box where it is not would be the one
+        # that ends up with a daemon and no stream.
+        curl
     )
 
     # The kernel headers, by whichever name this distribution uses.
@@ -778,6 +794,102 @@ PY
     note "sudo cp $PLAYER_CONF.bak $PLAYER_CONF && sudo systemctl restart multisite-player"
 }
 
+# ── The stream ───────────────────────────────────────────────────────────────
+# The card on its own transmits nothing. The daemon has to be told what to send
+# and where, and that is a source: which ALSA playback channels become the
+# stream's channels, at what width, and to which multicast address.
+#
+# Done here rather than left to the player, because a fresh install should be a
+# finished one. Somebody who runs this and walks away should have a box that is
+# sending audio, not a box that could be made to — the player will keep the
+# source in shape afterwards, but it cannot do that on a box where the source
+# has never existed and nobody has opened the interface.
+create_source() {
+    say "The stream"
+
+    if [ "$NO_SOURCE" -eq 1 ]; then
+        note "skipped, because --no-source was given"
+        return 0
+    fi
+
+    local api="http://127.0.0.1:$WEBUI_PORT/api"
+
+    # The daemon reports itself active before it is serving, so its interface is
+    # waited for rather than assumed. Thirty seconds is generous for a process
+    # that has already started.
+    local tries=0
+    while [ "$tries" -lt 30 ]; do
+        if curl -fsS --max-time 2 "$api/version" >/dev/null 2>&1; then break; fi
+        tries=$((tries + 1))
+        sleep 1
+    done
+    if [ "$tries" -ge 30 ]; then
+        warn "the daemon's interface did not answer on port $WEBUI_PORT."
+        warn "No stream has been set up. Once the daemon is running, re-run this"
+        warn "script and it will be."
+        return 0
+    fi
+
+    # The address, read out of the daemon's own configuration rather than
+    # written down a second time here: one place to change it, and no way for
+    # the two to disagree.
+    local mcast
+    mcast="$(sed -n 's/.*"rtp_mcast_base"[^"]*"\([^"]*\)".*/\1/p' "$DAEMON_CONF" | head -1)"
+    mcast="${mcast:-239.1.0.1}"
+
+    local channels="$SOURCE_CHANNELS"
+    case "$channels" in
+        ''|*[!0-9]*) channels=8 ;;
+    esac
+    [ "$channels" -ge 1 ] && [ "$channels" -le 64 ] || channels=8
+
+    # The channel map is the first N ALSA playback channels, in order — the map
+    # is what decides which channel of the stream carries what.
+    local map
+    map="$(python3 -c 'import sys;print(",".join(str(i) for i in range(int(sys.argv[1]))))' \
+           "$channels" 2>/dev/null || true)"
+    if [ -z "$map" ]; then
+        map="0,1,2,3,4,5,6,7"
+        channels=8
+    fi
+
+    # The name is what a console shows in its source list, so it says which box
+    # this is rather than what it is running.
+    local name
+    name="Multisite $(hostname 2>/dev/null || echo player)"
+
+    local body
+    body="$(printf '{"id": 0, "enabled": true, "name": "%s", "io": "Audio Device",
+ "max_samples_per_packet": 48, "codec": "L24", "address": "%s",
+ "ttl": 15, "payload_type": 98, "dscp": 34, "refclk_ptp_traceable": false,
+ "map": [%s]}' "$name" "$mcast" "$map" | tr -d '\n')"
+
+    if curl -fsS --max-time 5 -X PUT -H 'Content-Type: application/json' \
+            --data "$body" "$api/source/0" >/dev/null 2>&1; then
+        note "stream:      source 0, $channels channels, L24, to $mcast"
+    else
+        warn "the daemon would not take the stream."
+        warn "Its own interface, at http://$(hostname -I 2>/dev/null | awk '{print $1}'):$WEBUI_PORT,"
+        warn "can be used instead: add a source there with $channels channels."
+        return 0
+    fi
+
+    # What is actually on the wire, as the daemon publishes it. This is the
+    # address and port an operator has to give whatever is receiving — worth
+    # printing here, because the alternative is somebody reading it off the
+    # daemon's own interface later.
+    local sdp addr port
+    sdp="$(curl -fsS --max-time 5 "$api/source/sdp/0" 2>/dev/null || true)"
+    if [ -n "$sdp" ]; then
+        addr="$(printf '%s' "$sdp" | sed -n 's/^c=IN IP4 \([0-9.]*\).*/\1/p' | tail -1)"
+        port="$(printf '%s' "$sdp" | sed -n 's/^m=audio \([0-9]*\).*/\1/p' | head -1)"
+        if [ -n "$addr" ]; then
+            note "publishing:  $addr${port:+:$port}"
+        fi
+    fi
+}
+
+
 # ── The run ──────────────────────────────────────────────────────────────────
 main() {
     report_state
@@ -796,6 +908,7 @@ main() {
     install_daemon
     write_config
     install_service
+    create_source
 
     if [ "$POINT_PLAYER" -eq 1 ]; then
         point_player
@@ -810,6 +923,10 @@ main() {
     note "Is it usable? The WebUI's PTP page should show a master and 'locked'."
     note "No PTP master on the network means no audio — this daemon slaves to the"
     note "clock, it does not hand one out. That is the most likely silence."
+    echo
+    note "The player's own pages show the same thing, read back from the daemon:"
+    note "  Settings > Sound on the network   the switch, the address, the width"
+    note "  This box > Sound on the network   what is actually being sent"
     echo
     if [ "$POINT_PLAYER" -eq 0 ]; then
         note "The player is still on whatever card it was using. When the WebUI"

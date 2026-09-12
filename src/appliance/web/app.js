@@ -460,6 +460,9 @@ async function loadSettings() {
   set('#c-autoplay', String(settings.auto_play));
   set('#c-zerotier', settings.zerotier_network_id || '');
   set('#c-cloudflared', settings.cloudflared_token || '');
+  set('#c-aes67-on', String(!!settings.aes67_manage));
+  set('#c-aes67-address', settings.aes67_address || '');
+  set('#c-aes67-channels', settings.aes67_channels);
   $('#idle-image-field').hidden = settings.idle_mode !== 'image';
   set('#c-idle-image', settings.idle_image_path);
   await loadOutputChoices();
@@ -574,6 +577,119 @@ $('#btn-remote').addEventListener('click', async () => {
   setTimeout(() => { note.textContent = ''; }, 8000);
 });
 
+/* ── The sound on the network ────────────────────────────────────────────────
+   Its own button rather than the main Save, like remote access, because
+   applying it does something immediate on another program — starts a daemon,
+   creates a stream — and the answer matters more than the setting did.
+
+   Everything shown here is read back from the daemon rather than assumed from
+   the settings beside it. The two can disagree, and when they do the daemon is
+   the one that is true: a stream can be configured and switched off, or
+   switched on and fed nothing because the player is still writing the sound to
+   HDMI. Those look identical from the settings and are different faults. */
+
+async function loadAes67() {
+  const facts = $('#aes67-facts');
+  if (!facts) return;
+  let s = null;
+  try { s = await api('GET', '/api/aes67'); } catch (e) { return; }
+
+  const rows = [];
+  const add = (k, v) => rows.push(`<dt>${k}</dt><dd>${escapeHtml(v)}</dd>`);
+
+  if (s.installed) {
+    add('AES67 service', s.service_active ? 'running' : 'not running');
+    if (s.rest_reachable) {
+      add('PTP clock', s.ptp_locked
+          ? ('locked' + (s.ptp_gmid ? ' to ' + s.ptp_gmid : ''))
+          : (s.ptp_status || 'not locked'));
+      if (s.source_present) {
+        add('Stream', (s.source_enabled ? 'sending' : 'stopped') +
+            (s.source_address ? ' to ' + s.source_address : '') +
+            (s.sdp_port ? ':' + s.sdp_port : ''));
+        add('Stream format', (s.sdp_codec || 'L24') + ', ' +
+            (s.sdp_channels || s.source_channels) + ' channels, 48 kHz');
+      } else {
+        add('Stream', 'not created yet');
+      }
+      add('AES67 sound card', s.card_present
+          ? (s.player_on_card ? 'registered, and this player is using it'
+                              : 'registered, but this player is NOT using it')
+          : 'not registered with ALSA');
+    }
+  } else {
+    add('AES67', 'not installed on this box');
+  }
+  facts.innerHTML = rows.join('');
+
+  // The one thing an operator needs: why the sound is, or is not, leaving.
+  const problems = [];
+  if (s.error) problems.push(s.error);
+  if (!s.installed) {
+    problems.push('The AES67 stack is a separate install on this box; until it ' +
+                  'is there, nothing here can send anything.');
+  } else {
+    if (!s.service_active)
+      problems.push('The AES67 daemon is not running.');
+    if (s.service_active && !s.rest_reachable)
+      problems.push('The daemon is running but is not answering, so it cannot ' +
+                    'be set up or asked anything.');
+    if (s.rest_reachable && s.ptp_known && !s.ptp_locked)
+      problems.push('The clock is not locked. This daemon is a PTP slave: with ' +
+                    'nothing on the network handing out the clock it sends no ' +
+                    'audio at all. That is a network question, not a fault here.');
+    if (s.sources_known && !s.source_present)
+      problems.push('No stream has been set up yet — switch it on under Settings.');
+    if (s.source_present && !s.source_correct)
+      problems.push('The stream on the daemon is not the shape this box asks ' +
+                    'for. Applying it under Settings will put it right.');
+    if (s.source_present && !s.source_enabled)
+      problems.push('The stream is switched off, so nothing is being sent.');
+    if (s.source_present && !s.card_present)
+      problems.push('The AES67 sound card is not registered with ALSA, so the ' +
+                    'kernel module is probably not loaded.');
+    if (s.source_present && s.card_present && !s.player_on_card)
+      problems.push('This player is not writing to the AES67 card, so the ' +
+                    'stream would carry silence. Choose the AES67 sound card ' +
+                    'under Settings.');
+  }
+
+  const hint = $('#aes67-hint');
+  if (hint) {
+    hint.textContent = problems.length ? problems.join(' ')
+                                       : (s.installed ? 'Sound is going onto the network.' : '');
+  }
+
+  // The SDP verbatim, when the daemon has published one.
+  const box = $('#aes67-sdp-box');
+  if (box) {
+    if (s.sdp) {
+      box.hidden = false;
+      $('#aes67-sdp').textContent = s.sdp;
+    } else {
+      box.hidden = true;
+    }
+  }
+}
+
+$('#btn-aes67').addEventListener('click', async () => {
+  const note = $('#aes67-note');
+  note.textContent = 'Applying…';
+  try {
+    const s = await api('POST', '/api/aes67/source', {
+      enabled: $('#c-aes67-on').value === 'true',
+      address: $('#c-aes67-address').value.trim(),
+      channels: Number($('#c-aes67-channels').value),
+    });
+    note.textContent = s.problem ? s.problem : 'Applied.';
+    await loadSettings();
+    loadAes67();
+  } catch (err) {
+    note.textContent = err.message;
+  }
+  setTimeout(() => { note.textContent = ''; }, 8000);
+});
+
 
 /* ── This box ────────────────────────────────────────────────────────────── */
 
@@ -626,6 +742,7 @@ async function loadSystem() {
 
   loadStorage(false);
   loadRemote();
+  loadAes67();
 }
 
 /* ── Remote access ───────────────────────────────────────────────────────────

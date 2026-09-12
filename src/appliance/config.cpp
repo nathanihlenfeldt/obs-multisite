@@ -116,6 +116,10 @@ bool Config::load(const std::string& path, std::string& error) {
 
     take(j, "zerotier_network_id",  zerotier_network_id);
     take(j, "cloudflared_token",    cloudflared_token);
+
+    take(j, "aes67_manage",         aes67_manage);
+    take(j, "aes67_address",        aes67_address);
+    take(j, "aes67_channels",       aes67_channels);
     return true;
 }
 
@@ -164,6 +168,10 @@ bool Config::save(const std::string& path, std::string& error) const {
 
     j["zerotier_network_id"]  = zerotier_network_id;
     j["cloudflared_token"]    = cloudflared_token;
+
+    j["aes67_manage"]         = aes67_manage;
+    j["aes67_address"]        = aes67_address;
+    j["aes67_channels"]       = aes67_channels;
 
     const std::string tmp = path + ".tmp";
     {

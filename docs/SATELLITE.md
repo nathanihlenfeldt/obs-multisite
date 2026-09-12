@@ -286,6 +286,41 @@ It builds from source, so give it a few minutes and let it finish.
   of test tone cannot settle either. The detail is in
   [BUGS.md entry 3](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event).
 
+### Controlling it from the player's own page
+
+The installer sets up one stream as part of the install — eight channels, L24, at
+the multicast address named in `/etc/daemon.conf` — so a box that has just been
+set up is already sending, without anybody opening an interface. The player then
+keeps that stream in shape and gives it a switch, which leaves the daemon's own
+WebUI for the rest of the daemon's settings rather than for the everyday one.
+
+Two places in the player's page (port 8080, the usual one):
+
+- **Settings → Sound on the network.** The switch, the multicast address, and the
+  channel count. One button applies all three, because they are one decision:
+  switching it on starts the daemon, sets it to come back after a power cut, and
+  creates or corrects the stream. Switching it off *stops* the stream rather than
+  deleting it, so the address and width are kept and switching it back on is one
+  click and not a re-entry of everything. It sits behind **Lock**, like the other
+  settings that change what is on air.
+- **This box → Sound on the network.** What is actually being sent, read back
+  from the daemon rather than assumed from the settings: whether the daemon is
+  running, whether the clock is locked and to which grandmaster, the address and
+  port on the wire, and the SDP it publishes — which is the thing a console's
+  engineer will ask for. Anything that would stop the audio is said in a sentence
+  underneath, including the two states that look identical from the settings and
+  are not: a stream that is configured but switched off, and one that is switched
+  on while the player is still writing the sound to HDMI.
+
+**What the switch does not do.** The sound still leaves by the HDMI socket as
+well. Putting it on the network adds a route; it does not move the one already
+there, so a box feeding a room through an amp is unaffected by any of this. It
+also cannot lock the clock for you — if the page says the clock is not locked,
+the fault is on the network, not on this box.
+
+**If the AES67 stack is not installed**, both places say so rather than offering
+a switch that would only fail. Install it with the script above and they fill in.
+
 ## Remote control from a phone
 
 The decoder in OBS serves the same page the appliance does — play, hold, catch

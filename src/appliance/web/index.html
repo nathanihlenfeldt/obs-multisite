@@ -277,6 +277,44 @@
       </select>
     </div>
 
+    <h2>Sound on the network</h2>
+    <div class="field">
+      <label for="c-aes67-on">Publish the sound as AES67</label>
+      <select id="c-aes67-on">
+        <option value="false">No — the sound stays on the HDMI socket</option>
+        <option value="true">Yes — put it on the network as well</option>
+      </select>
+      <p class="hint">
+        Needs the open AES67 stack installed on this box, which is a separate
+        step (<code>scripts/player/merging-aes67.sh</code>). Switching this on
+        starts the daemon, sets it to come back after a power cut, and creates an
+        eight-channel stream. The sound still leaves by HDMI as well — this adds
+        a route, it does not move the one already there.
+      </p>
+    </div>
+    <div class="field">
+      <label for="c-aes67-address">Multicast address</label>
+      <input id="c-aes67-address" placeholder="239.1.0.1 — blank uses the daemon's own">
+      <p class="hint">
+        Where the stream is sent. A console receiving it has to be told the same
+        address, unless it finds the stream by itself — this daemon announces
+        itself over SAP, which most do.
+      </p>
+    </div>
+    <div class="field">
+      <label for="c-aes67-channels">Channels</label>
+      <input type="number" id="c-aes67-channels" min="1" max="64" step="1" value="8">
+      <p class="hint">
+        Eight is the production bus: main mix, mic ISOs and click. The width is
+        fixed rather than following whatever an event carries, because receiving
+        consoles configure against it and would have to re-learn the stream.
+      </p>
+    </div>
+    <div class="row">
+      <button type="button" id="btn-aes67">Apply to the network</button>
+      <span class="muted" id="aes67-note"></span>
+    </div>
+
     <div class="row sticky-save">
       <button type="submit" class="big go">Save settings</button>
       <span class="muted" id="settings-note"></span>
@@ -322,6 +360,19 @@
     Set these up under Settings. The address here is the one printed on the
     screen as the remote access address.
   </p>
+
+  <h2>Sound on the network</h2>
+  <dl class="facts" id="aes67-facts"></dl>
+  <p class="hint" id="aes67-hint"></p>
+  <details id="aes67-sdp-box" hidden>
+    <summary>What is being announced</summary>
+    <p class="hint">
+      The session description the daemon publishes for this box's stream. It is
+      what is actually on the wire, and it is the thing a console's engineer
+      will ask for.
+    </p>
+    <pre class="log" id="aes67-sdp"></pre>
+  </details>
 
   <h2>Power</h2>
   <div class="row">
