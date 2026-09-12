@@ -138,18 +138,22 @@ that checkable without the hardware:
   the address arithmetic are inline, and the `aes67` suite exercises them with
   nothing installed. What remains in `aes67.cpp` is the part that talks to the
   daemon and is one systemctl helper, and there is little in it to get wrong.
-- For `alsa_output.cpp`, a **stub `<alsa/asoundlib.h>`** declaring only the
-  surface that file uses is enough for the compiler to check it:
+- For `alsa_output.cpp`, a **stub `<alsa/asoundlib.h>`** is kept in the
+  repository at `tests/stubs/`, declaring only the surface that file uses.
+  Pointing the compiler at it is enough to have the file checked:
 
   ```sh
-  c++ -std=c++17 -fsyntax-only -Wall -Wextra -I/tmp/alsa_stub \
+  c++ -std=c++17 -fsyntax-only -Wall -Wextra -Itests/stubs \
       -Isrc -Isrc/appliance -Isrc/core src/appliance/alsa_output.cpp
   ```
 
   That catches the syntax, the types and the members that no longer exist —
   everything a change to that file can break that is not ALSA's own behaviour.
-  It is not a substitute for the Linux build in CI, which compiles it against the
-  real library; it is what stops a rename being discovered on a Pi.
+  It is not a substitute for the Linux build in CI, which compiles the same file
+  against the real library; it is what stops a rename being discovered on a Pi.
+  The stub must never go on the include path of a real build — it would shadow
+  the real header — and it is worth keeping to exactly what the file calls, so
+  that a declaration left behind after its last caller was removed is noticed.
 
 ---
 
