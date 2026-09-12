@@ -113,6 +113,13 @@ add_executable(test_tile_layout tests/test_tile_layout.cpp)
 target_link_libraries(test_tile_layout PRIVATE multisite_core)
 add_test(NAME tile_layout COMMAND test_tile_layout)
 
+# The storage protocol's own version. Pins both directions at once: a document
+# written before the field existed must still read, and one from a protocol this
+# build does not know must be refused rather than half-read.
+add_executable(test_protocol_version tests/test_protocol_version.cpp)
+target_link_libraries(test_protocol_version PRIVATE multisite_core)
+add_test(NAME protocol_version COMMAND test_protocol_version)
+
 # One tile of a composited feed as a view: offsets into the same plane pointers,
 # the trick the OBS source uses, spelled out for the appliance's output path.
 add_executable(test_tile_crop tests/test_tile_crop.cpp)

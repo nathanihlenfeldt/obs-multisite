@@ -10,8 +10,45 @@
 
 namespace multisite {
 
+// ── Protocol version ─────────────────────────────────────────────────────────
+//
+// The version of the storage protocol itself, carried in every document the
+// encoder writes. It exists so that a decoder meeting a bucket it cannot
+// understand says so, instead of half-reading it and failing somewhere further
+// on that looks like corruption.
+//
+// One integer rather than a semver, because a reader has exactly one question —
+// "can I still understand this?" — and one number answers it.
+//
+// **Bump it only for a change that would make an older reader misread a
+// bucket.** Never for an addition an older reader can ignore: every field added
+// so far has been that kind, which is why `j.value(field, default)` is used
+// throughout and why this starts at 1 rather than at the number of times the
+// format has grown.
+//
+// **Absent means 1.** Every bucket written before this field existed parses as
+// version 1 and keeps working untouched, exactly as an absent tile layout
+// parses as 1x1. There is nothing to migrate and no flag day.
+inline constexpr int kProtocolVersion = 1;
+
+// Whether a document claiming version `v` can be read by this build.
+//
+// Older is always readable: we go on reading what we once wrote, because a
+// recording made last year is exactly what someone wants to play back. Newer is
+// not readable, and refusing plainly is the whole point of the field — the
+// alternative is a satellite that shows nothing and cannot say why.
+//
+// A version of 0 or less is treated as 1: it means a document that named the
+// field but left it empty or unparseable, and the oldest protocol is the safest
+// assumption to read it under.
+inline constexpr bool protocol_readable(int v) { return v <= kProtocolVersion; }
+
 // rooms/{room}/live.json — points at the current live event.
 struct LivePointer {
+    // The protocol version this document was written under. See
+    // kProtocolVersion. Defaults to the version this build writes; parsing a
+    // document without the field yields 1.
+    int         protocol_version = kProtocolVersion;
     std::string room_id;
     std::string event_id;
     std::string status = "live";     // "live" | "ended"
@@ -86,6 +123,7 @@ struct VideoInfo {
 
 // events/{event_id}/event.json — static descriptor written once at Go Live.
 struct EventInfo {
+    int         protocol_version = kProtocolVersion;   // see kProtocolVersion
     std::string event_id;
     std::string room_id;
     // Operator-facing title, e.g. "Sun 14 Sep 2025, 10:30" or "Harvest
@@ -113,6 +151,7 @@ struct EventInfo {
 // then costs a single request, and the start time needed to label the event is
 // already in the key listing.
 struct RoomEventEntry {
+    int         protocol_version = kProtocolVersion;   // see kProtocolVersion
     std::string event_id;
     std::string room_id;
     // Mirrors EventInfo.name so a listing can label the event without reading
@@ -136,6 +175,11 @@ struct ManifestSegment {
 
 // events/{event_id}/manifest.json — rolling live-edge window.
 struct Manifest {
+    // Carried here as well as in event.json because the event catalogue reads
+    // manifests directly when listing a room's recordings, without ever
+    // fetching the descriptor beside them. A listing should be able to mark an
+    // event unreadable rather than offer it and fail on load.
+    int         protocol_version = kProtocolVersion;   // see kProtocolVersion
     std::string event_id;
     std::string status = "live";
     // Operator-facing event title, carried here (not only in event.json) so the
@@ -173,6 +217,7 @@ struct Marker {
 };
 
 struct MarkerList {
+    int         protocol_version = kProtocolVersion;   // see kProtocolVersion
     std::vector<Marker> markers;
     std::string to_json() const;
     static MarkerList from_json(const std::string&);

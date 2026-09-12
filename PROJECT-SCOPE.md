@@ -315,6 +315,52 @@ A segment is never listed in the manifest until it is durably in storage:
 PUT manifest`. If a decoder can see a manifest entry, the segment is guaranteed
 to exist.
 
+### 4.8 Protocol version
+
+Every document the encoder writes carries `protocol_version`, a single integer.
+`live.json`, `event.json`, the room index entry, `manifest.json` and
+`markers.json` all have it, so any one of them can be judged on its own by
+whatever reads it first.
+
+One integer rather than a semver, because a reader has exactly one question —
+*can I still understand this?* — and one number answers it. It starts at **1**.
+
+**It is bumped only for a change that would make an older reader misread a
+bucket.** Never for an addition an older reader can safely ignore, which is what
+every field added so far has been: `name`, `layout`, `channel_labels` and the
+rest all arrived as optional fields with defaults, and an older decoder meeting
+one simply does not see it. Growing the format is not the same as breaking it,
+and only breaking it moves this number.
+
+**An absent version is version 1.** Every bucket written before the field
+existed goes on working untouched, exactly as an absent tile layout parses as
+1x1. There is no migration and no flag day. So does a version that is present
+but unclear — a string, a null, a zero, a negative, a float — because this
+arrives from a bucket that any encoder version may have written, and the oldest
+protocol is the safest assumption under which to read an unclear document.
+Parsing never throws on it: a malformed version must not be the thing that stops
+an event playing.
+
+**Older is readable; newer is refused.** A decoder goes on reading everything it
+once wrote, because a recording from last year is exactly what somebody wants to
+play back. A document from a protocol it does not know is refused with a message
+that says so — *"this event needs a newer version of the plugin"* — rather than
+half-read.
+
+That refusal is the entire point of the field. The failure it prevents is not a
+decoder that stops; it is a decoder that carries on: a newer bucket half-read as
+an older one shows up as a stutter, a failed checksum, or a clock time that is
+wrong by an hour, and every one of those sends an operator to look at the
+network when the answer is that the plugin is out of date. The check is made
+against `manifest.json`, because that is the document whose misreading does the
+damage — segment sequence, checksums and timing all come from it — and because
+`live.json` yields only an event id, which being wrong is caught at the manifest
+anyway.
+
+The event listing is deliberately **not** filtered by version. An unreadable
+event stays in the list and explains itself when someone tries to play it, which
+is more use to an operator than an event that silently is not there.
+
 ---
 
 ## 5. Reliability

@@ -246,6 +246,13 @@ only *after* the bucket has confirmed it stored. If a decoder can see an entry,
 the object exists. Everything else — retries, crash resume, deep buffering —
 builds on that.
 
+Every one of those JSON documents carries a `protocol_version`. A decoder goes
+on reading anything it once wrote — a recording from last year is exactly what
+someone wants to play back — and refuses a bucket from a protocol it does not
+know, saying so, rather than half-reading it and stuttering. A document without
+the field is version 1, so nothing already in a bucket has to change. See
+[PROJECT-SCOPE.md §4.8](PROJECT-SCOPE.md#48-protocol-version).
+
 For the full design, see [PROJECT-SCOPE.md](PROJECT-SCOPE.md).
 
 ---
