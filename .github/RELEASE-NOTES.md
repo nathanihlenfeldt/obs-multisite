@@ -32,7 +32,64 @@ Third-party terms are set out in `COPYRIGHT`.
 
 ## What's new in v0.1.15-alpha
 
-Three fixes, and one correction to what the previous notes told you.
+One new thing a room can do, a crash on quit, and several fixes — including
+one correction to what the previous notes told you.
+
+### Several cameras in one feed, pulled apart at the far end
+
+A room that needs two or four separate pictures at its satellites has always
+been able to composite them into a single feed and send that. Taking them apart
+again was the satellite's problem, solved by hand with crop filters, at every
+satellite, every time.
+
+The main site can now say how it composited. **Settings → Media → Pictures in
+this feed** offers one picture, two side by side, two stacked, or four in a
+square. At the satellite, each region becomes a source of its own — **Multisite
+Picture (Decoder)** — already cropped, ready to drop into a scene or send
+fullscreen to a screen of your choosing. A campus player can be pointed at one
+of them too.
+
+It costs nothing to receive. The feed is downloaded once and decoded once
+however many pictures you pull out of it; each one is a view of that, not
+another stream.
+
+**It has to be set before you go live.** The layout is written down when the
+event starts, so changing it part way through does nothing until the next one.
+
+**It cannot be worked out from the picture, which is why you have to say.** A
+very wide frame is a perfectly good single picture as well as a plausible pair,
+and a wrong guess would cut a programme in half. Left alone it stays on one
+picture, which is what every room sending one camera wants and what every
+recording made before this existed already is.
+
+### OBS could crash when you quit after a broadcast
+
+On Windows, closing OBS after broadcasting could end in a crash dialog. The
+broadcast itself was fine and nothing was lost — the fault was on the way out,
+as OBS closed its plugins down.
+
+This plugin was talking to obs-websocket while OBS was already unloading. Which
+plugin goes first is not decided, so if obs-websocket went first, we were
+speaking to something that no longer existed. There was nothing to be gained by
+that conversation at that point, so it no longer happens.
+
+### The settings dialogs fit the screen again
+
+Both settings dialogs had grown taller than a laptop screen — and the part that
+fell off the bottom was the buttons, so there was no way to close the window.
+
+They are in tabs now: where the video goes, how it is encoded, and what this
+machine is. Each page fits without scrolling, and the buttons are always there.
+The **Tag uploads for expiry** line carried its warnings in the label, which is
+one long unwrapping line that was setting the width of the whole dialog; those
+have moved to a tooltip.
+
+### A companion source stops asking which room
+
+The audio track and picture sources each had a room box that was almost always
+left empty, because empty already means "the room the Multisite Source is
+following". It now shows which room it is following, and only asks when there is
+genuinely more than one to choose between.
 
 ### The stream keeps running when nothing is playing
 
