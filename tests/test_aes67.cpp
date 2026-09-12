@@ -314,6 +314,102 @@ int main() {
               "a continuation line is not a card");
     }
 
+    // ── Telling one card from another by name ────────────────────────────────
+    // Two questions hang off this comparison and both were answered by looking
+    // for the name anywhere in a string, which is wrong on a box that has a
+    // second card whose name merely contains it: whether the card the daemon
+    // reads is registered at all, and whether the player is sending the sound to
+    // it. "RAVENNA2" is a different card; treating it as this one would report a
+    // stream that cannot work as healthy, and would throw away the device
+    // somebody deliberately chose.
+    std::printf("== one card is not another ==\n");
+    {
+        const std::string cards =
+            " 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi\n"
+            " 1 [RAVENNA2       ]: MergingRavennaALSA - Merging RAVENNA\n"
+            " 2 [NOTRAVENNA     ]: SomeOther - Another Card\n";
+        CHECK(!aes67_card_present(cards, "RAVENNA"),
+              "a card whose id merely contains the name is not the card");
+        CHECK(aes67_card_present(cards, "RAVENNA2"),
+              "the card that really is there is found");
+        CHECK(!aes67_card_present("", "RAVENNA"),
+              "an empty listing registers nothing");
+        CHECK(!aes67_card_present(cards, ""),
+              "being asked for no name finds nothing");
+        CHECK(aes67_card_ids(cards).size() == 3,
+              "every card on the listing is named");
+
+        // The device strings ALSA really uses. The CARD= field is compared
+        // whole — "RAVENNA2" must not match "RAVENNA" — and the bare form is
+        // the card's name on its own.
+        CHECK(aes67_device_is_card("plughw:CARD=RAVENNA,DEV=0", "RAVENNA"),
+              "the plug-layer device for the card matches");
+        CHECK(aes67_device_is_card("hw:CARD=RAVENNA", "RAVENNA"),
+              "so does the direct one, with no DEV");
+        CHECK(aes67_device_is_card("RAVENNA", "RAVENNA"),
+              "and the card's name on its own");
+        CHECK(!aes67_device_is_card("plughw:CARD=RAVENNA2,DEV=0", "RAVENNA"),
+              "a longer name is a different card");
+        CHECK(!aes67_device_is_card("hw:CARD=vc4hdmi0,DEV=0", "RAVENNA"),
+              "another card is not it");
+        CHECK(!aes67_device_is_card("default", "RAVENNA"),
+              "the system default is not a card");
+        CHECK(!aes67_device_is_card("hw:0", "RAVENNA"),
+              "a device named by number cannot be matched to a name");
+        CHECK(!aes67_device_is_card("", "RAVENNA"), "nothing is not the card");
+        CHECK(!aes67_device_is_card("hw:CARD=RAVENNA", ""),
+              "and no name matches nothing");
+    }
+
+    // ── Which device the sound should be on ──────────────────────────────────
+    // One rule, two callers: the reconciler and the settings page. They used to
+    // answer it separately, which is exactly how the setting and the sound came
+    // to disagree — the page offered a device while the reconciler was about to
+    // move the sound onto the AES67 card.
+    std::printf("== where the sound should be ==\n");
+    {
+        const std::vector<std::string> ids = {
+            "hw:CARD=vc4hdmi0,DEV=0", "plughw:CARD=RAVENNA,DEV=0",
+        };
+        bool found = false;
+        CHECK(aes67_pick_alsa_device("hw:CARD=vc4hdmi0,DEV=0", "RAVENNA", ids,
+                                     &found) == "plughw:CARD=RAVENNA,DEV=0",
+              "managing the network sound puts the sound on the card");
+        CHECK(found, "and the device it chose is one the box has");
+
+        // The id is taken from the box's own list rather than written down: the
+        // driver's id is settable at module load, so the id is not ours to
+        // guess.
+        const std::vector<std::string> renamed = {
+            "hw:CARD=OurOwnName,DEV=0",
+        };
+        CHECK(aes67_pick_alsa_device("default", "OurOwnName", renamed) ==
+                  "hw:CARD=OurOwnName,DEV=0",
+              "a card registered under another id is still found");
+
+        // Nothing enumerated — a test, or a box where ALSA refused. The card is
+        // named directly rather than left unset, because a device that cannot be
+        // found now can be found on the next pass.
+        CHECK(aes67_pick_alsa_device("default", "RAVENNA",
+                                     std::vector<std::string>{}) ==
+                  "hw:CARD=RAVENNA,DEV=0",
+              "an unenumerated box is still pointed at the card");
+
+        // No card at all, which is what a box without the module installed says.
+        // The configured device stands, untouched.
+        CHECK(aes67_pick_alsa_device("hw:CARD=vc4hdmi0,DEV=0", "", ids,
+                                     &found) == "hw:CARD=vc4hdmi0,DEV=0",
+              "with no card there is nothing to move the sound to");
+        CHECK(!found, "and the answer says so");
+
+        // A card that is registered by number, not by name, cannot be found in
+        // the list — the direct form is used, which the plug layer resolves.
+        const std::vector<std::string> numbered = {"hw:0", "hw:1"};
+        CHECK(aes67_pick_alsa_device("hw:0", "RAVENNA", numbered) ==
+                  "hw:CARD=RAVENNA,DEV=0",
+              "a listing with no card in it falls back to naming the card");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL AES67 TESTS PASSED"
                                       : "SOME AES67 TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

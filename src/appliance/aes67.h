@@ -137,6 +137,72 @@ inline int aes67_channels_to_map(int want_channels) {
     return want < 1 ? 1 : want;
 }
 
+// The card a device id names, if it names one. ALSA's identifiers come in three
+// shapes — "hw:CARD=RAVENNA,DEV=0", "plughw:CARD=RAVENNA,DEV=0" and the
+// card name on its own — and the comparison below has to see through all three
+// without matching a card whose name merely contains this one.
+//
+// The trap is "RAVENNA" as a substring: "RAVENNA2" and "NOTRAVENNA" both
+// contain it, and a box with either would have its sound device reported as
+// taken over by the network output when it is not. So a CARD= form is read out
+// and compared whole, and the bare form is compared whole as well.
+inline bool aes67_device_is_card(const std::string& device,
+                                 const std::string& name) {
+    if (device.empty() || name.empty()) return false;
+
+    const std::string key = "CARD=";
+    const size_t at = device.find(key);
+    if (at != std::string::npos) {
+        size_t begin = at + key.size();
+        size_t end = device.find_first_of(",:", begin);
+        const std::string card = device.substr(begin, end - begin);
+        return card == name;
+    }
+    // No CARD=: the whole string is the card, unless it is a plugin whose tail
+    // is a device index rather than a name ("hw:0"). Those name a card by
+    // number, which cannot be matched against a name, so they never match.
+    if (device.find(':') != std::string::npos) return false;
+    return device == name;
+}
+
+// Where a device sits on the list. -1 when it is not there.
+inline int aes67_find_device(const std::vector<std::string>& ids,
+                             const std::string& card) {
+    for (size_t i = 0; i < ids.size(); ++i)
+        if (aes67_device_is_card(ids[i], card)) return (int)i;
+    return -1;
+}
+
+// The one decision both the reconciler and the settings page ask: which ALSA
+// device should the sound be on?
+//
+// It exists because those two answering it separately is exactly how the
+// setting and the sound came to disagree — the page offered a device while the
+// reconciler was about to move the sound onto the AES67 card. One rule, two
+// callers: while the network output is on the sound goes to the card the daemon
+// reads, choosing that card's ALSA id out of what the box actually has, and
+// otherwise the configured device stands.
+//
+// "out" is the card's id when one was chosen from the list. An empty list means
+// nothing has been enumerated yet — a test, or a box where ALSA refused — and
+// the card is then named directly rather than left unset, because a device that
+// cannot be found is a device that can be found on the next pass.
+inline std::string aes67_pick_alsa_device(
+        const std::string& configured, const std::string& card,
+        const std::vector<std::string>& alsa_ids, bool* out_found = nullptr) {
+    if (card.empty()) {
+        if (out_found) *out_found = false;
+        return configured;
+    }
+    const int idx = aes67_find_device(alsa_ids, card);
+    if (out_found) *out_found = idx >= 0 || alsa_ids.empty();
+    if (idx >= 0) return alsa_ids[(size_t)idx];
+    // Not enumerated. Naming the card is still the right device, and the next
+    // enumeration — the one a page reload does — will replace it with whichever
+    // id actually works.
+    return "hw:CARD=" + card + ",DEV=0";
+}
+
 // The body a source is added or updated with (PUT /api/source/<id>). Every key
 // the daemon parses is here on purpose: it reads them with get<>() and no
 // default, so a body missing one is rejected rather than defaulted. The map is
@@ -334,6 +400,49 @@ inline int aes67_daemon_port_from_conf(const std::string& text) {
 // An empty answer means no card matched, and the caller must treat that as
 // "cannot be done": pointing the player at a device that does not exist would
 // silence the room for a stream that could never have worked.
+// The bracketed field of one /proc/asound/cards line, trimmed. Empty when the
+// line has no card in it.
+inline std::string aes67_bracket_id(const std::string& line) {
+    const size_t open = line.find('[');
+    if (open == std::string::npos) return {};
+    const size_t close = line.find(']', open);
+    if (close == std::string::npos) return {};
+
+    std::string id = line.substr(open + 1, close - open - 1);
+    const size_t first = id.find_first_not_of(" \t");
+    if (first == std::string::npos) return {};      // empty brackets
+    id.erase(0, first);
+    while (!id.empty() && (id.back() == ' ' || id.back() == '\t'))
+        id.pop_back();
+    return id;
+}
+
+// Every card id the kernel lists, in the order it lists them.
+inline std::vector<std::string> aes67_card_ids(const std::string& cards_text) {
+    std::vector<std::string> out;
+    size_t pos = 0;
+    while (pos <= cards_text.size()) {
+        const size_t eol = cards_text.find('\n', pos);
+        const std::string line = cards_text.substr(
+            pos, eol == std::string::npos ? std::string::npos : eol - pos);
+        pos = (eol == std::string::npos) ? cards_text.size() + 1 : eol + 1;
+
+        const std::string id = aes67_bracket_id(line);
+        if (!id.empty()) out.push_back(id);
+    }
+    return out;
+}
+
+// Is a card of exactly this name registered? Whole-id comparison, so a second
+// card whose id merely contains the first ("RAVENNA2") is not mistaken for it.
+inline bool aes67_card_present(const std::string& cards_text,
+                               const std::string& name) {
+    if (name.empty()) return false;
+    for (const auto& id : aes67_card_ids(cards_text))
+        if (id == name) return true;
+    return false;
+}
+
 inline std::string aes67_card_id_from_cards(const std::string& cards_text,
                                             const std::string& name) {
     if (name.empty()) return {};
@@ -345,20 +454,14 @@ inline std::string aes67_card_id_from_cards(const std::string& cards_text,
             pos, eol == std::string::npos ? std::string::npos : eol - pos);
         pos = (eol == std::string::npos) ? cards_text.size() + 1 : eol + 1;
 
-        const size_t open = line.find('[');
-        if (open == std::string::npos) continue;
-        const size_t close = line.find(']', open);
-        if (close == std::string::npos) continue;
-
-        std::string id = line.substr(open + 1, close - open - 1);
-        const size_t first = id.find_first_not_of(" \t");
-        if (first == std::string::npos) continue;   // empty brackets
-        id.erase(0, first);
-        while (!id.empty() && (id.back() == ' ' || id.back() == '\t'))
-            id.pop_back();
+        const std::string id = aes67_bracket_id(line);
         if (id.empty()) continue;
 
-        if (line.find(name) != std::string::npos) return id;
+        // The bracketed id first — that IS the card's name. Only then the rest
+        // of the line, which is where a driver's own long name lives (the
+        // kernel's id is a truncation of it, so the id can be absent and the
+        // name still present).
+        if (id == name || line.find(name) != std::string::npos) return id;
     }
     return {};
 }
@@ -412,6 +515,62 @@ struct Aes67State {
                source_present && source_enabled && card_present && player_on_card;
     }
 };
+
+// ── Keeping a stream up ──────────────────────────────────────────────────────
+// The switch in the interface is a one-shot: it starts the daemon, writes the
+// source and points the player at the card, once, and whatever happens next is
+// whatever happens next. That is not enough for an appliance. A card that was
+// not registered yet, a daemon that came up a moment too late, a source that an
+// engineer edited from Merging's own page — each of them leaves a box that is
+// switched on and silent, and the only repair on offer was to go back to the
+// settings page and press Apply again.
+//
+// So the box watches its own stream. What it must *not* do is decide on its own
+// to put something back on air: a stream that was switched off stays off until a
+// person switches it on. Those two are the whole of the design below, and they
+// are here rather than in the loop that uses them so they can be checked without
+// a daemon, a Pi or a card.
+enum class Aes67Action {
+    None,          // nothing to do, and nothing wrong
+    StartService,  // the daemon should be running and enabled but is not
+    EnsureSource,  // our source is missing, or is not the shape we publish
+    RepointCard,   // the sound is going somewhere other than the AES67 card
+    WaitForClock,  // nothing can be fixed from here: the clock is not locked
+};
+
+// The one decision. `manage` is the operator's switch, `source_correct` is
+// Aes67Source::matches_shape against the width and address this box publishes.
+//
+// Read in order, it says:
+//   1. Not managing, or not installed: nothing to keep up, and nothing to say.
+//   2. Managing but the daemon is not running: start it (idempotently).
+//   3. Running but not answering on its port: no conclusion can be drawn from
+//      silence, so wait rather than start repairing what may be fine.
+//   4. Clock not locked: audio cannot flow yet, and nothing here can lock it.
+//      Waiting is the correct action, not an error.
+//   5. No source at all, while managing: a box that is switched on should have
+//      one, even between services — that is what receivers subscribe to.
+//   6. The source is there and switched OFF: leave it alone. This is the line
+//      that keeps a deliberate stop from being undone by a repair loop.
+//   7. There and switched on but the wrong shape, or the sound is going
+//      elsewhere: put it right. Both are what "switched on and silent" looks
+//      like from here.
+inline Aes67Action aes67_converge_action(const Aes67State& s, bool manage,
+                                         bool source_correct) {
+    if (!manage || !s.installed) return Aes67Action::None;
+    if (!s.service_active)       return Aes67Action::StartService;
+    if (!s.rest_reachable)       return Aes67Action::None;
+    if (!s.ptp_known || !s.ptp_locked) return Aes67Action::WaitForClock;
+    if (!s.source_present)       return Aes67Action::EnsureSource;
+    if (!s.source_enabled)       return Aes67Action::None;
+    if (!source_correct)         return Aes67Action::EnsureSource;
+    if (s.card_present && !s.player_on_card) return Aes67Action::RepointCard;
+    return Aes67Action::None;
+}
+
+// The same decision in words, for the log and the interface. "None" is
+// deliberately the empty string: a tick that did nothing has nothing to say.
+const char* aes67_action_word(Aes67Action a);
 
 // Everything above, in one pass. `want_channels` and `want_address` are what
 // THIS player means to publish, so the answer can say whether the source that

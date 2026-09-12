@@ -262,12 +262,28 @@ Aes67State aes67_probe(const std::string& alsa_device, int want_channels,
     // true, and neither is visible from inside the other — a source that is
     // perfectly configured carries nothing if the player is still sending the
     // sound to HDMI.
-    st.card_present =
-        read_text_file("/proc/asound/cards").find(kAes67CardName) !=
-        std::string::npos;
-    st.player_on_card = alsa_device.find(kAes67CardName) != std::string::npos;
+    // A card comparison rather than the file containing the name somewhere: a
+    // box with a second card whose name merely contains it ("RAVENNA2") must
+    // not have its sound reported as present when it is not.
+    st.card_present = aes67_card_present(read_text_file("/proc/asound/cards"),
+                                         kAes67CardName);
+    st.player_on_card = aes67_device_is_card(alsa_device, kAes67CardName);
 
     return st;
+}
+
+const char* aes67_action_word(Aes67Action a) {
+    // "None" is the empty string rather than the word: it is what the log
+    // prints for a tick that did nothing, and a tick that did nothing must be
+    // able to say nothing at all.
+    switch (a) {
+    case Aes67Action::None:         return "";
+    case Aes67Action::StartService: return "starting the AES67 daemon";
+    case Aes67Action::EnsureSource: return "putting the AES67 source right";
+    case Aes67Action::RepointCard:  return "pointing the sound at the AES67 card";
+    case Aes67Action::WaitForClock: return "waiting for the clock to lock";
+    }
+    return "";
 }
 
 std::string aes67_ensure_source(int channels, const std::string& address,

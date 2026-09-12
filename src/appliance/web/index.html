@@ -104,6 +104,21 @@
     </div>
   </details>
 
+  <details class="meterbox" id="meters-box" open>
+    <summary>Sound meters</summary>
+    <p class="hint">
+      What the <strong>sound card</strong> is being given, channel by channel —
+      taken at the output, not at the feed. Muting the box, a card that would not
+      open, and an event that has genuinely gone quiet all read as silence here,
+      and the line underneath says which of them it is. The meter shows what the
+      card is being handed, so a channel the card is too narrow to take is not
+      drawn: four bars of a signal that is not leaving the box would be worse
+      than no bars at all.
+    </p>
+    <div class="meterbars" id="meters"></div>
+    <p class="hint meternote" id="meters-reason"></p>
+  </details>
+
   <div class="cues" id="cues"></div>
 
   <div class="readout" id="readout"></div>

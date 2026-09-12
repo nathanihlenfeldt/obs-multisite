@@ -337,6 +337,45 @@ locked, the fault is on the network, not on this box.
 **If the AES67 stack is not installed**, both places say so rather than offering
 a switch that would only fail. Install it with the script above and they fill in.
 
+### Hearing what is leaving the box
+
+The meters under the Play tab, and the figures beside them, are taken from the
+one place that decides everything above: **where the samples are handed to the
+sound card.** That is deliberate, and it is the difference between a meter that
+answers a question and one that answers the wrong one. A meter of the decoded
+feed says an event is carrying sound; it cannot tell you whether the box is
+putting it anywhere. Every fault this box has — a card that would not open, a
+mute somebody forgot, a stream that is off the air while the feed is perfectly
+healthy — is invisible on a meter of the feed and obvious on a meter of the
+output.
+
+So the bars fall to nothing, and the reason underneath says which of these it is:
+
+| Reason | What it means | What to do |
+|---|---|---|
+| `playing` | Card open, sound switched on, frames arriving with signal in them | Nothing |
+| `feed-silent` | Frames arriving, but there is no signal in them | The event carries no sound — a muted microphone upstream, or a track that was never in the feed |
+| `idle` | Card open and being fed, but nothing is being delivered | Nothing, if the box is stopped, held or between events |
+| `muted` | Switched off in Settings | Switch it back on under **Sound** |
+| `card-closed` | The card is not open | A fault: the reason it would not open is beside it in the Sound readout |
+
+Two of those are worth sitting with, because they look the same and are not.
+**Muted** and **card-closed** are both a flat meter; the first is somebody's
+decision and the second is a fault, and the words say which. Likewise a flat
+meter with frames still arriving is the *event*, not the box — the appliance is
+doing exactly what it was asked to do, and the fix is at the other end.
+
+Muting writes silence to a card that stays open rather than closing it. On a box
+whose sound leaves over the network that is not a nicety: a closed card takes the
+stream off air and receivers drop it, and un-muting does not get it back until
+they re-subscribe. Muted means *a stream that is up and carrying silence*, which
+is what a mute should sound like, and the meters fall for it because they are
+reading what the card was given.
+
+The panel is drawn at the width of the **card**, not the feed. A stereo card fed
+a six-track feed shows two bars, because two is what is leaving the box — four
+bars of a signal nobody can hear would be worse than showing nothing.
+
 ### Uninstalling the player
 
 To take the player back off a box, run the mirror of the installer:
