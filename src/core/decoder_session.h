@@ -177,6 +177,11 @@ public:
     // names the encoder operator typed would never be seen by anyone.
     std::vector<AudioTrack> audio_layout() const;
 
+    // How the encoder composited this feed. 1x1 — one whole picture — for every
+    // event that predates tiling and for every room that sends one camera,
+    // because an absent field parses to that.
+    TileLayout video_layout() const;
+
     // A finished recording behaves as video-on-demand: it has an end, a
     // duration, and a position within it — "behind live" is meaningless.
     bool    event_ended() const { return is_vod(m_room.load()); }

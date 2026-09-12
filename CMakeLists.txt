@@ -106,6 +106,12 @@ add_test(NAME position_interp COMMAND test_position_interp)
 add_executable(test_playout_timeline tests/test_playout_timeline.cpp)
 target_link_libraries(test_playout_timeline PRIVATE multisite_core)
 add_test(NAME playout_timeline COMMAND test_playout_timeline)
+
+# Dividing one encoded picture into discrete ones. Every way of getting this
+# geometry wrong is quiet — a rectangle a pixel out still shows a picture.
+add_executable(test_tile_layout tests/test_tile_layout.cpp)
+target_link_libraries(test_tile_layout PRIVATE multisite_core)
+add_test(NAME tile_layout COMMAND test_tile_layout)
 add_test(NAME reliability COMMAND test_reliability)
 
 # The core is shared with the planned headless appliance, which links neither

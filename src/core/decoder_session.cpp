@@ -600,6 +600,11 @@ std::vector<AudioTrack> DecoderSession::audio_layout() const {
     return m_manifest.audio_tracks;
 }
 
+TileLayout DecoderSession::video_layout() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_manifest.video.layout;
+}
+
 uint64_t DecoderSession::discontinuity_id() const {
     return m_discontinuity.load();      // read by the feed loop constantly
 }

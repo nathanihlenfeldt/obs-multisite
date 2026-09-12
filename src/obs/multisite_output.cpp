@@ -50,6 +50,13 @@ static constexpr char S_TAGS[]      = "send_expiry_tag";
 // with tagging switched on keeps sending the tag after the rename.
 static constexpr char S_TAGS_OLD[]  = "use_object_tags";
 static constexpr char S_CHANLBL[]   = "channel_labels";
+// How this feed is composited, if it carries more than one picture. The
+// operator has already built the scene that way; this is them saying so, so
+// the satellite can pull it apart without anybody building crop filters by
+// hand. Declared rather than detected: a 3840x1080 frame is a legitimate
+// ultrawide picture as well as a plausible 2x1, and nothing in the video
+// distinguishes them.
+static constexpr char S_LAYOUT[]    = "tile_layout";
 static constexpr char S_MARKERS[]   = "marker_labels";
 
 // A finished fragment on its way from the muxer to the durable spool.
@@ -121,7 +128,8 @@ static std::string trim(const std::string& s) {
 static bool build_tracks(OutputCtx* ctx, std::vector<CmafTrack>& tracks,
                          VideoInfo& vinfo, std::vector<AudioTrack>& ainfo,
                          const std::string& label_csv,
-                         const std::string& channel_label_csv) {
+                         const std::string& channel_label_csv,
+                         const std::string& layout_str) {
     for (int i = 0; i < MAX_AUDIO_MIXES; ++i) ctx->audio_track_for[i] = -1;
 
     obs_encoder_t* venc = obs_output_get_video_encoder(ctx->output);
@@ -169,6 +177,20 @@ static bool build_tracks(OutputCtx* ctx, std::vector<CmafTrack>& tracks,
     vinfo.codec  = vc;
     vinfo.width  = vt.width; vinfo.height = vt.height;
     vinfo.fps    = vt.fps_den ? (double)vt.fps_num / vt.fps_den : 0.0;
+    // Parsed rather than trusted: the setting is a fixed list today, but this
+    // lands in event.json for every satellite and every future version to read,
+    // and TileLayout::parse falls back to one whole picture for anything it
+    // does not recognise.
+    vinfo.layout = TileLayout::parse(layout_str);
+    if (vinfo.layout.is_split()) {
+        // Worth a line in the log: it changes what the other end does with the
+        // picture, and a wrong setting here is otherwise invisible from the
+        // encoder side — the operator sees their own composited scene either way.
+        mlog_info("video: %dx%d declared as a %s layout — the satellite will "
+                  "expose %d separate sources",
+                  vinfo.width, vinfo.height, vinfo.layout.to_string().c_str(),
+                  vinfo.layout.count());
+    }
 
     auto labels = split_csv(label_csv);
     int audio_n = 0;
@@ -322,6 +344,9 @@ static void out_defaults(obs_data_t* s) {
     obs_data_set_default_string(s, S_TRACKLBL, "Main mix,Sermon ISO,Click");
     obs_data_set_default_string(s, S_CHANLBL,
         "Main L,Main R,Sermon ISO,Click,Spare 5,Spare 6,Spare 7,Spare 8");
+    // One picture, which is what nearly every room sends and what every event
+    // written before tiling existed carries implicitly.
+    obs_data_set_default_string(s, S_LAYOUT, "1x1");
     obs_data_set_default_bool(s, S_TAGS, false);
     obs_data_set_default_string(s, S_MARKERS,
         "Sermon Start,Offering,Go to local,Dismissal");
@@ -340,6 +365,19 @@ static obs_properties_t* out_props(void*) {
     obs_properties_add_text(p, S_TRACKLBL, obs_module_text("TrackLabels"), OBS_TEXT_DEFAULT);
     // Packed multi-channel mode: what each channel of the audio track carries.
     obs_properties_add_text(p, S_CHANLBL, obs_module_text("ChannelLabels"), OBS_TEXT_DEFAULT);
+    // A list rather than free text: these are the only shapes the satellite can
+    // pull apart, and a typo here would be discovered at the other end of the
+    // country during a service.
+    {
+        obs_property_t* lay = obs_properties_add_list(
+            p, S_LAYOUT, obs_module_text("TileLayout"),
+            OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_STRING);
+        obs_property_list_add_string(lay, obs_module_text("TileLayout.1x1"), "1x1");
+        obs_property_list_add_string(lay, obs_module_text("TileLayout.2x1"), "2x1");
+        obs_property_list_add_string(lay, obs_module_text("TileLayout.1x2"), "1x2");
+        obs_property_list_add_string(lay, obs_module_text("TileLayout.2x2"), "2x2");
+        obs_property_set_long_description(lay, obs_module_text("TileLayout.Help"));
+    }
     // R2 rejects x-amz-tagging; leave off unless the store supports tagging.
     obs_properties_add_bool(p, S_TAGS, obs_module_text("SendExpiryTag"));
     obs_properties_add_text(p, S_MARKERS, obs_module_text("MarkerLabels"),
@@ -428,7 +466,9 @@ static bool out_start(void* data) {
     std::vector<CmafTrack> tracks;
     VideoInfo vinfo;
     std::vector<AudioTrack> ainfo;
-    if (!build_tracks(ctx, tracks, vinfo, ainfo, labels, chan_labels)) return false;
+    const std::string layout_str = obs_data_get_string(s, S_LAYOUT);
+    if (!build_tracks(ctx, tracks, vinfo, ainfo, labels, chan_labels, layout_str))
+        return false;
 
     ctx->muxer = std::make_unique<CmafMuxer>(tracks, sc.segment_duration_s);
     if (!ctx->muxer->ok()) {

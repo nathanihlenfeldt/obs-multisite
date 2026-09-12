@@ -34,10 +34,54 @@ struct AudioTrack {
     std::vector<std::string> channel_labels;
 };
 
+// How one encoded picture is divided into discrete ones at the satellite.
+//
+// A room that needs two or four separate pictures composites them at the main
+// site and sends one feed; the satellite pulls them apart. Doing that with crop
+// filters by hand is what this replaces — the encoder says how it composited,
+// and the decoder exposes each region as its own source.
+//
+// Published rather than inferred, for the same reason AudioTrack::channel_labels
+// is: aspect ratio cannot tell 2x1 from 1x1 (a 3840x1080 feed is a legitimate
+// ultrawide single picture), and guessing wrong splits a programme in half.
+//
+// 1x1 is the default and means "one picture", which is every event written
+// before this existed. Nothing has to migrate: an absent field parses to 1x1.
+struct TileLayout {
+    int cols = 1;
+    int rows = 1;
+
+    int count() const { return cols * rows; }
+    bool is_split() const { return count() > 1; }
+
+    // "2x2" / "2x1" / "1x1". Parsing is deliberately strict — an unrecognised
+    // string becomes 1x1 rather than a guess, because showing one whole picture
+    // when the layout is unknown is recoverable by hand and showing a wrongly
+    // cropped one is not obviously wrong at all.
+    std::string to_string() const;
+    static TileLayout parse(const std::string& s);
+
+    // Where tile `index` sits in a frame_w x frame_h picture, counted in
+    // reading order: left to right, then top to bottom, so tile 0 is always
+    // top-left. An out-of-range index returns the whole frame rather than
+    // something empty — a source asking for a tile the layout does not have is
+    // misconfigured, and a whole picture says so where a black rectangle does
+    // not.
+    //
+    // Every edge is rounded DOWN to an even number. The decoded frame is I420,
+    // whose chroma planes are half resolution in both directions, so an odd
+    // offset or width has no corresponding chroma sample to start from and the
+    // crop would shear the colour away from the luma. Rounding down rather than
+    // up keeps the rectangle inside the frame.
+    struct Rect { int x = 0, y = 0, w = 0, h = 0; };
+    Rect tile_rect(int index, int frame_w, int frame_h) const;
+};
+
 struct VideoInfo {
     std::string codec = "h264";
     int width = 0, height = 0;
     double fps = 0.0;
+    TileLayout layout;
 };
 
 // events/{event_id}/event.json — static descriptor written once at Go Live.

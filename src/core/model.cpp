@@ -3,14 +3,66 @@
 #include "../vendor/nlohmann/json.hpp"
 
 #include <algorithm>
+#include <string>
 #include <vector>
 
 using json = nlohmann::json;
 
 namespace multisite {
 
+// ── TileLayout ────────────────────────────────────────────────────────────────
+std::string TileLayout::to_string() const {
+    return std::to_string(cols) + "x" + std::to_string(rows);
+}
+
+TileLayout TileLayout::parse(const std::string& s) {
+    TileLayout t;                       // 1x1 unless the string says otherwise
+    const size_t x = s.find('x');
+    if (x == std::string::npos || x == 0 || x + 1 >= s.size()) return t;
+    // Hand-rolled rather than sscanf so that trailing junk ("2x2 "), a negative
+    // ("-2x2") or a huge count cannot slip through as a plausible layout. This
+    // arrives from a bucket that any encoder version may have written.
+    const std::string a = s.substr(0, x), b = s.substr(x + 1);
+    auto digits_only = [](const std::string& v) {
+        if (v.empty() || v.size() > 2) return false;
+        for (char c : v) if (c < '0' || c > '9') return false;
+        return true;
+    };
+    if (!digits_only(a) || !digits_only(b)) return t;
+    const int c = std::stoi(a), r = std::stoi(b);
+    // An upper bound because this indexes sources and allocates crops. Four
+    // across is already past what a satellite can usefully show.
+    if (c < 1 || r < 1 || c > 4 || r > 4) return t;
+    t.cols = c; t.rows = r;
+    return t;
+}
+
+TileLayout::Rect TileLayout::tile_rect(int index, int frame_w, int frame_h) const {
+    auto even_down = [](int v) { return v > 0 ? v & ~1 : 0; };
+    Rect whole{ 0, 0, even_down(frame_w), even_down(frame_h) };
+    if (index < 0 || index >= count() || frame_w <= 0 || frame_h <= 0) return whole;
+    if (!is_split()) return whole;
+
+    const int col = index % cols, row = index / cols;
+    // Width is computed from the edges rather than as a per-tile constant, so
+    // the rightmost tile absorbs any remainder instead of leaving a strip of
+    // the picture in no tile at all.
+    const int x0 = even_down((int)((int64_t)frame_w * col / cols));
+    const int x1 = even_down((int)((int64_t)frame_w * (col + 1) / cols));
+    const int y0 = even_down((int)((int64_t)frame_h * row / rows));
+    const int y1 = even_down((int)((int64_t)frame_h * (row + 1) / rows));
+    Rect r{ x0, y0, x1 - x0, y1 - y0 };
+    if (r.w <= 0 || r.h <= 0) return whole;
+    return r;
+}
+
 static json video_to_json(const VideoInfo& v) {
-    return { {"codec", v.codec}, {"width", v.width}, {"height", v.height}, {"fps", v.fps} };
+    json j = { {"codec", v.codec}, {"width", v.width},
+               {"height", v.height}, {"fps", v.fps} };
+    // Written only when it says something. A 1x1 field in every event.json ever
+    // written would be noise, and its absence already means 1x1.
+    if (v.layout.is_split()) j["layout"] = v.layout.to_string();
+    return j;
 }
 static VideoInfo video_from_json(const json& j) {
     VideoInfo v;
@@ -18,6 +70,7 @@ static VideoInfo video_from_json(const json& j) {
     v.width  = j.value("width", 0);
     v.height = j.value("height", 0);
     v.fps    = j.value("fps", 0.0);
+    v.layout = TileLayout::parse(j.value("layout", "1x1"));
     return v;
 }
 static json tracks_to_json(const std::vector<AudioTrack>& ts) {

@@ -27,6 +27,10 @@
 #include "../core/playout_clock.h"
 #include "../core/position_interp.h"
 #include "../core/playout_timeline.h"
+
+#ifdef MULTISITE_HAVE_FRONTEND_API
+#include <obs-frontend-api.h>
+#endif
 #include "../core/s3_transport.h"
 
 #include <algorithm>
@@ -59,6 +63,11 @@ static constexpr char S_POLL_MS[]  = "poll_interval_ms";
 static constexpr char S_PREBUF[]   = "prebuffer_segments";
 static constexpr char S_KEEP[]     = "keep_behind_segments";
 static constexpr char S_ATRACK[]   = "audio_track";   // 0-based
+static constexpr char S_TILE[]     = "tile_index";    // 0-based, reading order
+// Which output a tile is sent to, if any. 0 means "none" so that adding a tile
+// source never takes over a screen on its own — an operator who has not asked
+// for a projector should not get one.
+static constexpr char S_TILEOUT[]  = "tile_output";
 
 // One entry in the delivery queue: either a video or an audio frame, already
 // stamped with its OBS presentation time.
@@ -91,6 +100,36 @@ struct AudioSub {
 };
 static std::mutex g_subs_mtx;
 static std::vector<AudioSub*> g_subs;
+
+// The same idea for video, for a feed that carries more than one picture. A
+// room that needs two or four cameras composites them at the main site and
+// sends one feed; each region becomes a source here, already cropped, instead
+// of somebody building crop filters by hand at every satellite.
+//
+// Registered by room for the same reason AudioSub is: a companion has to
+// survive the video source being reconfigured or replaced.
+struct TileSub {
+    obs_source_t* source = nullptr;
+    std::string   room_id;
+    int           tile = 0;           // 0-based, reading order: 0 is top-left
+    // Size of the last region handed over, so OBS has something to lay the
+    // source out with. Written by the delivery thread and read by OBS's, which
+    // is why they are atomic and why they live here rather than in TileCtx —
+    // this is the struct the delivery thread already holds.
+    std::atomic<uint32_t> w{0}, h{0};
+};
+static std::mutex g_tiles_mtx;
+static std::vector<TileSub*> g_tiles;
+
+static void register_tile_sub(TileSub* s) {
+    std::lock_guard<std::mutex> lk(g_tiles_mtx);
+    for (auto* e : g_tiles) if (e == s) return;
+    g_tiles.push_back(s);
+}
+static void unregister_tile_sub(TileSub* s) {
+    std::lock_guard<std::mutex> lk(g_tiles_mtx);
+    g_tiles.erase(std::remove(g_tiles.begin(), g_tiles.end(), s), g_tiles.end());
+}
 
 static void register_audio_sub(AudioSub* s) {
     std::lock_guard<std::mutex> lk(g_subs_mtx);
@@ -232,6 +271,29 @@ struct SourceCtx : DecoderControls {
     // 2712.003s and pinned on 1933.464s, 778 seconds apart, because the frame
     // that got there first was from the previous position.
     std::atomic<uint64_t> timeline_epoch{0};
+
+    // How the encoder composited this feed, read by the delivery thread on
+    // every video frame and written by the poll thread when the manifest
+    // arrives. Packed into ONE atomic rather than two: cols and rows read
+    // separately can tear across a write, and a frame cropped to a layout that
+    // never existed is a picture nobody can explain.
+    //
+    // `split` is separate only so the common case — one picture, no tiles —
+    // costs one relaxed bool read per frame rather than an unpack.
+    std::atomic<uint32_t> tile_layout_packed{(1u << 8) | 1u};   // 1x1
+    std::atomic<bool>     tile_layout_split{false};
+
+    multisite::TileLayout tile_layout_now() const {
+        const uint32_t p = tile_layout_packed.load();
+        multisite::TileLayout t;
+        t.cols = (int)(p >> 8);
+        t.rows = (int)(p & 0xff);
+        return t;
+    }
+    void set_tile_layout(const multisite::TileLayout& t) {
+        tile_layout_packed = ((uint32_t)t.cols << 8) | (uint32_t)t.rows;
+        tile_layout_split  = t.is_split();
+    }
 
     // ── Where the live edge is RIGHT NOW ─────────────────────────────────────
     // "How far behind the main site am I" was (live_seq - head) * segment
@@ -728,6 +790,62 @@ static void deliver_loop(SourceCtx* ctx) {
                                         frame.color_range_max);
             obs_source_output_video(ctx->source, &frame);
             ctx->frames_out++;
+
+            // ── Tiles ────────────────────────────────────────────────────────
+            // Fanned out HERE, at the handout, rather than by enqueuing one
+            // frame per tile at delivery. That is deliberate and it is the
+            // whole reason tiles are free: the delivery queue is bounded per
+            // stream, so four tiles enqueued separately would divide
+            // kMaxQueuedVideo by four and starve video exactly the way two
+            // audio tracks once did. One frame is queued, one frame is decoded,
+            // and the tiles are views of it.
+            //
+            // The crop is pointer arithmetic, not a copy. obs_source_frame
+            // carries a pointer and a stride per plane, so a tile is the same
+            // buffer with offset pointers, the original strides, and smaller
+            // width and height. Nothing is allocated and nothing is memcpy'd
+            // however many tiles there are.
+            //
+            // The main source keeps showing the whole composited picture. It is
+            // what the encoder sent, an operator who has not configured any
+            // tiles sees exactly what they saw before, and someone who wants
+            // only the top-left adds a tile source for it.
+            if (ctx->tile_layout_split.load()) {
+                const TileLayout lay = ctx->tile_layout_now();
+                // The lock is held across the whole fan-out, not used to take a
+                // snapshot and released. The audio path can snapshot because it
+                // copies out obs_source_t* and never touches the AudioSub
+                // again; this writes each tile's size back, so it needs the
+                // TileSub itself to still be there — and tile_destroy() can run
+                // on the UI thread at any moment. Holding it also means no
+                // allocation on a path that runs thirty times a second.
+                //
+                // Cheap to hold: g_tiles_mtx is contended only by a source
+                // being created, destroyed or reconfigured.
+                std::lock_guard<std::mutex> lk(g_tiles_mtx);
+                for (auto* t : g_tiles) {
+                    if (t->room_id != ctx->room_id_for_display) continue;
+                    const auto r = lay.tile_rect(t->tile, f.width, f.height);
+                    if (r.w <= 0 || r.h <= 0) continue;
+                    struct obs_source_frame tf = frame;   // same description…
+                    tf.width  = (uint32_t)r.w;            // …smaller rectangle
+                    tf.height = (uint32_t)r.h;
+                    // Offsets from the planes the full frame already resolved,
+                    // rather than re-deriving them: two walks of the same layout
+                    // is two chances to disagree about it.
+                    //
+                    // Chroma is half resolution in both directions, which is why
+                    // tile_rect guarantees even edges — an odd offset has no
+                    // chroma sample to start from, and the colour would shear
+                    // away from the luma.
+                    tf.data[0] = frame.data[0] + (size_t)r.y * f.stride[0] + r.x;
+                    tf.data[1] = frame.data[1] + (size_t)(r.y / 2) * f.stride[1] + (r.x / 2);
+                    tf.data[2] = frame.data[2] + (size_t)(r.y / 2) * f.stride[2] + (r.x / 2);
+                    obs_source_output_video(t->source, &tf);
+                    t->w = (uint32_t)r.w;
+                    t->h = (uint32_t)r.h;
+                }
+            }
         } else {
             const DecodedAudioFrame& f = item.audio;
             struct obs_source_audio audio = {};
@@ -874,6 +992,21 @@ static void poll_loop(SourceCtx* ctx) {
             if (!sess) break;
             // poll() does network I/O and can take seconds; never under a lock.
             RoomState st = sess->poll();
+
+            // Pick up how this feed was composited. It comes from the manifest,
+            // so it is known before the first frame is decoded and it follows a
+            // change of event — a room that sends one camera this week and four
+            // next week needs nothing reconfigured at the satellite.
+            {
+                const TileLayout lay = sess->video_layout();
+                if (lay.cols != ctx->tile_layout_now().cols ||
+                    lay.rows != ctx->tile_layout_now().rows) {
+                    ctx->set_tile_layout(lay);
+                    mlog_info("source: feed carries a %s layout — %d picture%s",
+                              lay.to_string().c_str(), lay.count(),
+                              lay.count() == 1 ? "" : "s");
+                }
+            }
 
             // Note where the live edge is and when we noticed it move, so the
             // snapshot can carry it forward at real-time rate between polls
@@ -2146,6 +2279,22 @@ struct AudioCtx {
     bool     registered = false;
 };
 
+// ── Companion tile source ────────────────────────────────────────────────────
+// One region of a composited feed, as its own video source. No decoder of its
+// own and no download of its own: it attaches to whichever Multisite Source is
+// following the same room and receives a cropped view of the frames that source
+// has already decoded. Exactly the shape the audio companion uses, for the same
+// reason — the segment is fetched once, decoded once, and every source is a
+// view of that one decode.
+struct TileCtx {
+    TileSub  sub;
+    bool     registered = false;
+    // Which monitor this tile is projected onto, or 0 for none. Kept so a
+    // change can be detected; opening a projector every update call would
+    // reopen the window on every keystroke in the room field.
+    int      projector = 0;
+};
+
 static const char* aud_name(void*) {
     return obs_module_text("Multisite.AudioSource");
 }
@@ -2220,6 +2369,147 @@ static obs_properties_t* aud_props(void* data) {
     return p;
 }
 
+// ── Companion tile source callbacks ──────────────────────────────────────────
+static const char* tile_name(void*) {
+    return obs_module_text("Multisite.TileSource");
+}
+
+static uint32_t tile_width(void* data) {
+    auto* c = static_cast<TileCtx*>(data);
+    return c ? c->sub.w.load() : 0;
+}
+static uint32_t tile_height(void* data) {
+    auto* c = static_cast<TileCtx*>(data);
+    return c ? c->sub.h.load() : 0;
+}
+
+static void tile_update(void* data, obs_data_t* s) {
+    auto* c = static_cast<TileCtx*>(data);
+    DecoderSettings shared = decoder_settings();
+    const char* room = obs_data_get_string(s, S_ROOM);
+    const std::string want_room = (room && *room) ? std::string(room)
+                                                  : shared.room_id;
+    const int want_tile = (int)obs_data_get_int(s, S_TILE);
+    const int want_out  = (int)obs_data_get_int(s, S_TILEOUT);
+
+    // Same reason as the audio companion: OBS calls update on every keystroke
+    // in a text field, so re-registering is harmless but logging is not.
+    const bool same = c->registered && c->sub.room_id == want_room &&
+                      c->sub.tile == want_tile;
+    if (!same) {
+        unregister_tile_sub(&c->sub);
+        c->sub.room_id = want_room;
+        c->sub.tile    = want_tile;
+        register_tile_sub(&c->sub);
+        c->registered = true;
+        mlog_info("tile source: room '%s', picture %d",
+                  c->sub.room_id.c_str(), c->sub.tile + 1);
+    }
+
+    // Projector assignment. Only acted on when it CHANGES, because opening a
+    // projector is a visible event on somebody's screen and update() runs far
+    // more often than the setting actually moves.
+    if (want_out != c->projector) {
+        c->projector = want_out;
+        if (want_out > 0) {
+#ifdef MULTISITE_HAVE_FRONTEND_API
+            // OBS counts monitors from zero; the setting counts from one so
+            // that zero can mean "no projector" without an off-by-one in the
+            // list the operator reads.
+            obs_frontend_open_projector("Source", want_out - 1, nullptr,
+                                        obs_source_get_name(c->sub.source));
+            mlog_info("tile source: picture %d projected to output %d",
+                      c->sub.tile + 1, want_out);
+#else
+            // A build without obs-frontend-api (the headless and CI builds)
+            // keeps the setting — it is saved in the scene and a full build
+            // will honour it — but cannot open a window from here.
+            mlog_warn("tile source: this build has no frontend API, so picture "
+                      "%d cannot be projected from here; assign it in OBS",
+                      c->sub.tile + 1);
+#endif
+        }
+        // Turning it off does not close the window. OBS owns it once opened and
+        // closing somebody's projector from under them because a dropdown moved
+        // is worse than leaving it: the operator can close it themselves, and
+        // the setting still governs the next time it is switched on.
+    }
+}
+
+static void* tile_create(obs_data_t* settings, obs_source_t* source) {
+    auto* c = new TileCtx();
+    c->sub.source = source;
+    tile_update(c, settings);
+    return c;
+}
+
+static void tile_destroy(void* data) {
+    auto* c = static_cast<TileCtx*>(data);
+    unregister_tile_sub(&c->sub);
+    c->registered = false;
+    delete c;
+}
+
+static void tile_defaults(obs_data_t* s) {
+    obs_data_set_default_int(s, S_TILE, 0);      // top-left
+    obs_data_set_default_int(s, S_TILEOUT, 0);   // no projector
+}
+
+static obs_properties_t* tile_props(void* data) {
+    obs_properties_t* p = obs_properties_create();
+    obs_properties_add_text(p, "tile_note",
+                            obs_module_text("TileSourceNote"), OBS_TEXT_INFO);
+    obs_properties_add_text(p, S_ROOM, obs_module_text("RoomID"), OBS_TEXT_DEFAULT);
+
+    // The list is built from the layout the feed actually declares, so an
+    // operator picks "top-left" from four rather than typing an index and
+    // hoping. A room sending one picture offers one entry, which is its own
+    // answer to "why is there nothing to choose".
+    TileLayout lay;
+    {
+        auto* c = static_cast<TileCtx*>(data);
+        const std::string want = c ? c->sub.room_id : std::string();
+        std::lock_guard<std::mutex> lk(g_owners_mtx);
+        for (auto* o : g_owners) {
+            if (!want.empty() && o->room_id_for_display != want) continue;
+            if (auto sess = get_session(o)) { lay = sess->video_layout(); break; }
+        }
+    }
+    obs_property_t* tl = obs_properties_add_list(
+        p, S_TILE, obs_module_text("TilePicture"),
+        OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+    for (int i = 0; i < lay.count(); ++i) {
+        std::string label;
+        if (!lay.is_split())      label = obs_module_text("Tile.Whole");
+        else if (lay.rows == 1)   label = (i == 0) ? obs_module_text("Tile.Left")
+                                                   : obs_module_text("Tile.Right");
+        else if (lay.cols == 1)   label = (i == 0) ? obs_module_text("Tile.Top")
+                                                   : obs_module_text("Tile.Bottom");
+        else {
+            static const char* k[] = { "Tile.TopLeft", "Tile.TopRight",
+                                       "Tile.BottomLeft", "Tile.BottomRight" };
+            label = (i < 4) ? obs_module_text(k[i])
+                            : std::to_string(i + 1);
+        }
+        obs_property_list_add_int(tl, label.c_str(), i);
+    }
+
+    // Fullscreen projector assignment. The plugin drives OBS's own projector
+    // rather than inventing an output of its own, which is what makes a tile
+    // work on a DeckLink or a second monitor without this code knowing what
+    // either of those is.
+    obs_property_t* op = obs_properties_add_list(
+        p, S_TILEOUT, obs_module_text("TileOutput"),
+        OBS_COMBO_TYPE_LIST, OBS_COMBO_FORMAT_INT);
+    obs_property_list_add_int(op, obs_module_text("TileOutput.None"), 0);
+    for (int i = 1; i <= 4; ++i)
+        obs_property_list_add_int(
+            op, (std::string(obs_module_text("TileOutput.Monitor")) + " " +
+                 std::to_string(i)).c_str(), i);
+    obs_property_set_long_description(op, obs_module_text("TileOutput.Help"));
+    return p;
+}
+
 void register_source() {
     struct obs_source_info info = {};
     info.id           = "multisite_source";
@@ -2251,7 +2541,29 @@ void register_source() {
     aud.get_properties = aud_props;
     aud.icon_type      = OBS_ICON_TYPE_AUDIO_INPUT;
     obs_register_source(&aud);
-    mlog_info("registered sources: multisite_source, multisite_audio_source");
+
+    // The companion tile source. Video flag only — it carries no audio of its
+    // own, because a tile is a region of a picture and the programme audio
+    // belongs to the feed, not to any one quarter of it. Never duplicated, for
+    // the same reason as the others: a duplicate would be a second registration
+    // for the same region.
+    struct obs_source_info tile = {};
+    tile.id             = "multisite_tile_source";
+    tile.type           = OBS_SOURCE_TYPE_INPUT;
+    tile.output_flags   = OBS_SOURCE_ASYNC_VIDEO | OBS_SOURCE_DO_NOT_DUPLICATE;
+    tile.get_name       = tile_name;
+    tile.create         = tile_create;
+    tile.destroy        = tile_destroy;
+    tile.update         = tile_update;
+    tile.get_defaults   = tile_defaults;
+    tile.get_properties = tile_props;
+    tile.get_width      = tile_width;
+    tile.get_height     = tile_height;
+    tile.icon_type      = OBS_ICON_TYPE_MEDIA;
+    obs_register_source(&tile);
+
+    mlog_info("registered sources: multisite_source, multisite_audio_source, "
+              "multisite_tile_source");
 }
 
 } // namespace multisite_obs
