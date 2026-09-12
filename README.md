@@ -366,7 +366,7 @@ out of scope, and the relay cannot re-encode.</summary>
   exists, and there is no OBS-level mechanism to add one — no update or upgrade
   entry point exists in `libobs` or `obs-frontend-api`. The Windows instructions
   also still use the install-directory layout OBS has said it will stop reading.
-  Both are Phase 15 in the [Roadmap](#roadmap), and the second is written up as
+  Both are Phase 13 in the [Roadmap](#roadmap), and the second is written up as
   [BUGS.md entry 2](BUGS.md).
 - **Not yet used for a real event.** A six-hour soak has been run (see
   [Status](#status)) but no congregation has watched anything through this. The
@@ -382,10 +382,10 @@ out of scope, and the relay cannot re-encode.</summary>
 ## Roadmap
 
 <details>
-<summary>What is planned next: phases 6 to 16, from the appliance's SDI and
+<summary>What is planned next: phases 6 to 14, from the appliance's SDI and
 x86 hardware tiers to storage redundancy, satellite output routing, headless
 appliances, keeping installations current and an easier way to connect a
-bucket — plus two phases that have been dropped, and why.</summary>
+bucket — plus two things that have been dropped, and why.</summary>
 
 - **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
   tier and proven on a Pi 5, though not yet through an event — that tier is done.
@@ -420,18 +420,7 @@ bucket — plus two phases that have been dropped, and why.</summary>
   require a purchase to run.
 - **Phase 12 — Headless encoder appliance.** The main site without OBS: DeckLink
   or HDMI input, on x86_64 or an RK3588 board. Same note as Phase 11.
-- **Phase 13 — ABR transcoder.** ⛔ **No longer part of this project.** A
-  rendition ladder exists to serve an audience on the open internet, which is a
-  different question from carrying an event between sites a church runs. It has
-  moved to a hosted service Stage Audio Works intends to build separately. The
-  existing relay stays here, free and undiminished; the engineering notes stay
-  in [PROJECT-SCOPE.md §10](PROJECT-SCOPE.md#10-delivery-phases).
-- **Phase 14 — End-to-end low latency.** ⛔ **Dropped.** It inverted the design
-  priority this project is built on, timeslipping could not survive it, and it
-  would have generated support calls on exactly the connections this project
-  exists to tolerate. Where a site genuinely needs conversational latency, SRT
-  is already in OBS and is a better answer today than a phase would have been.
-- **Phase 15 — Keeping installations current.** Today the plugin is a set of
+- **Phase 13 — Keeping installations current.** Today the plugin is a set of
   files an operator replaces by hand, and the only way anyone learns a newer
   build exists is to go and look. Notifying them is the small half: the plugin
   already speaks HTTPS through the libcurl it links for uploads — and already
@@ -443,7 +432,7 @@ bucket — plus two phases that have been dropped, and why.</summary>
   nothing, and a Flatpak install has to go through Flatpak. The prerequisite for
   any of it is packaging into the directory layout OBS now recommends rather than
   the one it has said will stop working.
-- **Phase 16 — Storage credentials and pairing.** A second way to answer "which
+- **Phase 14 — Storage credentials and pairing.** A second way to answer "which
   bucket, and with what keys": pair the plugin to a credential service with a
   short code, the way a television signs in, beside the typed keys that exist
   now and never instead of them. Creating a cloud account, scoping a token
@@ -453,9 +442,21 @@ bucket — plus two phases that have been dropped, and why.</summary>
   nothing contacts anything until an operator asks it to. Designed in
   [PROJECT-SCOPE.md §8.6](PROJECT-SCOPE.md#86-storage-credentials-direct-or-brokered-planned).
 
-Phases 15 and 16 are where the work goes once the plugins are finished. Between
+Phases 13 and 14 are where the work goes once the plugins are finished. Between
 them they are most of the distance between something a technician can deploy and
 something an ordinary church can, and neither depends on phases 9 to 12.
+
+Two things that used to be on this list are not any more. **The ABR transcoder**
+is no longer part of this project: a rendition ladder exists to serve an audience
+on the open internet, which is a different question from carrying an event
+between sites a church runs, and it has moved to a hosted service Stage Audio
+Works intends to build separately. The existing relay stays here, free and
+undiminished. **End-to-end low latency** is dropped outright — it inverted the
+design priority this project is built on, timeslipping could not survive it, and
+it would have generated support calls on exactly the connections this project
+exists to tolerate; where a site genuinely needs conversational latency, SRT is
+already in OBS. Neither was built. Both are written up with the reasoning in
+[PROJECT-SCOPE.md §10](PROJECT-SCOPE.md#10-delivery-phases).
 
 Each phase is described in full in
 [PROJECT-SCOPE.md §10](PROJECT-SCOPE.md#10-delivery-phases), which is also where
