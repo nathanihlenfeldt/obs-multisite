@@ -245,7 +245,10 @@
     <p>It builds an open RAVENNA stack from source, so give it a few minutes.
     It leaves the player on HDMI until you move it deliberately with
     <code>--point-player</code>, so the install can be proven before anything
-    the congregation sees is touched.</p>
+    the congregation sees is touched. It also creates the stream, so the box is
+    sending as soon as it is up; the switch for it afterwards is on the player's
+    own page, along with the multicast address it publishes to, the port, and
+    whether the clock has locked.</p>
     <div class="callout">
       <p><strong>A PTP master has to exist on the network, or nothing flows.</strong>
       The daemon slaves to a clock; it does not hand one out. A Dante device, a

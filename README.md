@@ -189,9 +189,11 @@ but has not yet carried real encoder output.
 - **AES67 audio on the appliance.** A campus can put the player's sound onto the
   network as an AES67 stream instead of leaving it inside the HDMI picture, so
   its own console can take the feed whether or not a screen is attached. Built
-  on Merging's open RAVENNA kernel module and the GPL `aes67-daemon` and
-  installed by one script; it passes eight channels on a bench Pi, but has not
-  yet been through an event. See
+  on Merging's open RAVENNA kernel module and the GPL `aes67-daemon`, installed
+  by one script, and switched from the player's own page — on or off, the
+  multicast address, and the channel count, with what is actually being sent and
+  whether the clock is locked shown next to it. It passes eight channels on a
+  bench Pi, but has not yet been through an event. See
   [AES67 audio](docs/SATELLITE.md#aes67-audio-on-the-network).
 - **Event browsing.** The decoder lists what a room has recorded, shows which is
   on air, which are finished recordings and which were cut short by an encoder
@@ -312,11 +314,12 @@ out of scope, and the relay cannot re-encode.</summary>
   is what an eight-channel de-embedder expects.
 - **AES67 audio on the appliance is installed but unproven over an event.**
   Eight channels were received on a bench Pi, so the card, the daemon and the
-  player's plumbing do work together. What is not measured is lip sync across a
-  two-hour service and the PTP accuracy a Pi's network interface can reach
-  without hardware timestamping, and no event has been through it. A PTP master
-  must also exist on the network or nothing flows — the daemon slaves to a
-  clock, it does not hand one out.
+  player's plumbing do work together, and the stream is created by the install
+  and switched from **Settings → Sound on the network**. What is not measured is
+  lip sync across a two-hour service and the PTP accuracy a Pi's network
+  interface can reach without hardware timestamping, and no event has been
+  through it. A PTP master must also exist on the network or nothing flows — the
+  daemon slaves to a clock, it does not hand one out.
   See [BUGS.md entry 3](BUGS.md).
 - **AV1 is carried but lightly exercised**, unlike H.264 and HEVC.
 - **Seeking is accurate to about a second**, not to a frame.

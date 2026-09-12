@@ -30,6 +30,67 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.14-alpha
+
+The appliance can now put its sound on the network without anybody logging into
+the daemon to arrange it, and it says why it is quiet when it is.
+
+### One switch, in the player's own page
+
+A campus that wants its audio on a console rather than only on the HDMI socket
+runs one installer, and from then on the player's own page carries the control.
+**Settings → Sound on the network** is on or off, the multicast address to
+publish to, and the channel count — one button for all three, because they are
+one decision rather than three. Switching it on starts the daemon, sets it to
+come back after a power cut, and creates the stream; switching it off *stops* the
+stream rather than deleting it, so the address survives and switching it back on
+is one click and not a re-entry of everything.
+
+**This box → Sound on the network** is the other half, and it is the half worth
+having: what is actually being sent, read back from the daemon rather than
+assumed from the settings beside it. Whether it is running, whether its clock is
+locked and to which grandmaster, the address and port on the wire, and the
+session description it publishes — which is the thing a console's engineer will
+ask you for.
+
+The stream is created as part of the install, so a box that has just been
+prepared is already sending — eight channels, 48 kHz, one-millisecond packets —
+rather than waiting for somebody to add a source by hand. The daemon's own
+interface is still there on port **8081** for everything else the daemon can do.
+
+### Silence now has a reason attached
+
+Four faults look identical from a settings page, and the page names them: the
+clock is not locked, the stream is switched off, the sound card is not registered
+with ALSA, or **the player is still writing the sound to HDMI**. The last is the
+one worth having in writing — the stream configured, enabled, announced, and
+carrying nothing.
+
+The clock is the one this cannot fix, and it does not pretend to. The daemon is a
+PTP slave: with nothing on the network handing out the clock it sends no audio at
+all, and that is a network question rather than a fault in the box. The page says
+so in as many words, instead of leaving it to be discovered at the receiver.
+
+### The route is Merging's open stack, and the old one has gone
+
+Audio leaves on the network through Merging's open RAVENNA kernel module and the
+GPL `aes67-daemon`. That route can be aimed — multicast address, port and channel
+map are all settable — which the licensed virtual sound card it replaced could
+not do, and its buffer is a normal one, so the under-run that gapped the sound
+once per frame on the old card does not happen.
+
+The player no longer carries anything that knows about that old card. If this box
+was set up with it, **read the note under Installing / upgrading before you
+update** — removing it changes what happens on a box that still has it.
+
+### Still not proven
+
+Eight channels have arrived cleanly at a bench Pi. What is *not* measured is
+whether the picture and the sound stay together across a two-hour service, and
+how accurate PTP becomes when a Pi's network interface does no hardware
+timestamping. Both have to be measured at the receiver, on a real event; ten
+seconds of test tone settles neither. The detail is in BUGS.md entry 3.
+
 ## What's new in v0.1.13-alpha
 
 Two things an operator does constantly — scrubbing to a moment, and reading how
@@ -442,6 +503,26 @@ curl -fsSL --retry 5 https://raw.githubusercontent.com/stageaudioworks/obs-multi
 Updating is the same command again; the settings and the segment cache are
 kept.
 
+**If this box was set up with the earlier licensed virtual sound card**, take
+that stack off as part of this update. The player used to recognise that card by
+name and write straight into its daemon's memory; it no longer does, so the card
+is opened like any other — and that driver pins an eight-millisecond buffer that
+cannot hold a decoded frame, which is exactly where the old "sound has broken
+up" came from. Updating without doing anything about it is the one combination
+that sounds worse than before: the card is still registered, so it is still the
+device the player is told to open, and it is still a device that cannot keep up.
+
+Either of these settles it, and both are one command:
+
+- **Put the sound on the network the open way** — `scripts/player/merging-aes67.sh`,
+  as described above. Run the script under `scripts/player/` that removes the old
+  install first; it also puts the player's sound back on its ordinary output, so
+  nothing is left pointing at a card that is about to disappear.
+- **Or leave the sound on HDMI.** Set **Sound → Output device** back to
+  *default* under Settings. The sound then leaves by the HDMI socket as it did
+  before and the old stack sits idle — registered, running, and being written
+  nothing.
+
 ## Known gaps
 
 - **Not yet used for a real event.** The soak covered sustained upload,
@@ -458,6 +539,12 @@ kept.
   does it — and more — better than a de-interleaver of ours would have; it is a
   separate install under AGPL-3.0. On the appliance, one chosen track is played
   when fed multi-track, and packed channels go out of HDMI in order.
+- **AES67 audio is installed but has not been through an event.** Eight channels
+  arrive cleanly at a bench Pi, so the card, the daemon and the player's plumbing
+  do work together. What is unmeasured is lip sync across a two-hour service, and
+  the PTP accuracy a Pi's network interface can reach with no hardware
+  timestamping. A PTP master must also exist on the network or nothing flows —
+  the daemon slaves to a clock, it does not hand one out.
 - **The relay has pushed live streams to YouTube** but has not been through a
   full event.
 - **HEVC to a streaming site needs SRT.** RTMP cannot carry it and re-encoding

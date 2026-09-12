@@ -34,9 +34,10 @@ cmake -S . -B build -DBUILD_OBS_PLUGIN=ON -DENABLE_QT=ON
 
 Apple Silicon only, and the core needs no OpenSSL — it uses CommonCrypto from
 libSystem, so a built plugin loads on a Mac that has never had Homebrew.
-`ctest` should pass **17/17** with nothing installed but CMake and FFmpeg: the
-thirteen always-built suites, plus `core_portable` and the three `cmaf*` ones.
-(`s3_url` and `s3_cancel` need libcurl, and are skipped without it.)
+`ctest` should pass **24/24** with nothing installed but CMake and FFmpeg.
+(`ctest -N` lists exactly what this tree built, which is the honest way to know
+the number; what gates each suite is under
+[What the tests cover](#what-the-tests-cover) below.)
 
 For the **plugin**, the only real difficulty is ABI matching. OBS.app carries
 its own FFmpeg, Qt and libobs, and a plugin has to use those exact copies. A
@@ -126,13 +127,41 @@ a machine other than the one that built it: package type `BNDL`, arm64, the
 module entry points exported, exactly one rpath, no OpenSSL, and no absolute
 path outside `/System` and `/usr/lib`.
 
+### Checking the appliance's code on a machine that cannot build it
+
+`alsa_output.cpp` and `aes67.cpp` are compiled only where ALSA and libcurl exist,
+so a laptop builds neither — and those are exactly the files a change is most
+likely to break without anybody noticing until it is on a Pi. Two things make
+that checkable without the hardware:
+
+- `aes67.h` is deliberately free of ALSA, curl and systemd. The JSON, the SDP and
+  the address arithmetic are inline, and the `aes67` suite exercises them with
+  nothing installed. What remains in `aes67.cpp` is the part that talks to the
+  daemon and is one systemctl helper, and there is little in it to get wrong.
+- For `alsa_output.cpp`, a **stub `<alsa/asoundlib.h>`** declaring only the
+  surface that file uses is enough for the compiler to check it:
+
+  ```sh
+  c++ -std=c++17 -fsyntax-only -Wall -Wextra -I/tmp/alsa_stub \
+      -Isrc -Isrc/appliance -Isrc/core src/appliance/alsa_output.cpp
+  ```
+
+  That catches the syntax, the types and the members that no longer exist —
+  everything a change to that file can break that is not ALSA's own behaviour.
+  It is not a substitute for the Linux build in CI, which compiles it against the
+  real library; it is what stops a rename being discovered on a Pi.
+
 ---
 
 ## What the tests cover
 
-Twenty suites, all runnable without OBS. Fourteen are built unconditionally
-wherever the core builds; the `cmaf*` three need FFmpeg, `s3_url` and
-`s3_cancel` need libcurl, and `s3_cancel` and `core_portable` need a POSIX host:
+Thirty suites, all runnable without OBS. How many a given build produces depends
+on what is installed, so `ctest -N` is the way to know rather than a number here
+that goes stale — but the gates are these: the `cmaf*` three need FFmpeg,
+`s3_url` and `s3_cancel` need libcurl, `preview` and the whole appliance need
+FFmpeg and libcurl together, the three relay suites need
+`-DMULTISITE_BUILD_RELAY=ON`, and `core_portable` needs a POSIX host. A full
+build on this machine is 30; with CMake and FFmpeg alone it is 24.
 
 | suite | what it proves |
 |---|---|
@@ -146,6 +175,7 @@ wherever the core builds; the `cmaf*` three need FFmpeg, `s3_url` and
 | `snapshot` | the figures the dock reads agree with the session they are built from |
 | `http_server` | the shared HTTP server spoken to over a real loopback socket: routing, verbs, the static web root, keep-alive, a handler that throws, and the refusal of a path that climbs out of the web root |
 | `control_api` | the one list of command names: the exact encoder and decoder surface, no name used twice under the single obs-websocket vendor, every name a well-formed path tail, and the path builder that the HTTP routes and the vendor requests both go through |
+| `aes67` | the shapes the AES67 daemon's REST interface is made of: the source body the player sends (every key the daemon's parser insists on, and an eight-channel map that is `0..7` in order), the source list it reads back, and the SDP it publishes — read against a real SDP taken from the daemon's own documentation. Text only, so it needs no daemon, no kernel module and no sound card |
 | `s3_list` | a ListObjectsV2 response is read correctly, including pagination and an access-denied body; a signed query string is canonicalised the way S3 does it |
 | `event_catalog` | events are classified as live / recording / interrupted, rooms stay separate, a listing failure is not shown as "no recordings", an event that recorded nothing is not offered, and an event with no room-index entry still lists alongside those that have one |
 | `storage_manager` | encoder-side storage management: the listing and the per-event size tally are separable, a tally that fails is reported as unknown rather than as `0 B`, cancellation returns early and is not counted as a store failure, and a prefix that will not finish paging gives up with a reason |

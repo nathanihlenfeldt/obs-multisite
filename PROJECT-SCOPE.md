@@ -517,6 +517,17 @@ Two tiers, sharing one build:
   output channels is not built, and playing all of them is not a fallback: six
   tracks into a device that accepts one is six times real time of audio, and
   the back-pressure starves the video sharing that thread.
+- **Audio over the network (AES67).** A fourth audio path, for a campus that
+  wants the sound on its own console rather than only inside the HDMI picture.
+  The appliance registers a virtual sound card — Merging's open RAVENNA kernel
+  module — and the GPL `aes67-daemon` publishes what the player writes to it as
+  an eight-channel AES67 stream, so it appears in Dante Controller and routes to
+  anything that takes AES67 directly. Installed by
+  `scripts/player/merging-aes67.sh`; the stream is created by that install and
+  switched afterwards from the player's own page, which also reports the
+  multicast address, the port and the clock state. It is additive — the sound
+  still leaves by HDMI, so a room fed from the Pi is unaffected — and the daemon
+  is a PTP slave, so a master has to exist on the network or nothing flows.
 - **Storage.** The segment cache writes roughly 3 GB per hour at 6 Mbps. That
   will wear out an SD card, so a USB SSD is required rather than recommended,
   and the cache location must be configurable.

@@ -268,8 +268,11 @@ It builds from source, so give it a few minutes and let it finish.
   `http://<pi>:8081` — 8081, not the project's 8080, because the player's own
   interface already uses 8080 on this box.
 - **A forwardable stream: 8 channels, multicast, 1 ms packets.** Those are the
-  AES67 defaults the daemon announces, and the destination — multicast address,
-  port, channel map — is yours to set in the daemon's configuration and WebUI.
+  AES67 defaults the daemon announces. The stream this box publishes is created
+  by the installer and controlled from the player's own page, above; the daemon's
+  configuration and its WebUI are where the rest of the daemon's settings live —
+  a second stream, a sink, a different clock domain — rather than the everyday
+  switch.
 - **Dante.** The source appears in Dante Controller, but the route from it to a
   receiver is made by hand in that application. Test against the real Dante
   hardware a site will use.

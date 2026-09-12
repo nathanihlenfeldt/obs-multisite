@@ -5,7 +5,7 @@ each entry has enough context to act on without anyone having been in the
 room when it was written. Delete an entry once it's fixed and released;
 this file is not a changelog.
 
-Last updated: 2026-09-11.
+Last updated: 2026-09-12.
 
 ---
 
@@ -168,6 +168,15 @@ eight-millisecond buffer and could not be aimed at a chosen destination.) The
 operator-facing version of this is
 [docs/SATELLITE.md](docs/SATELLITE.md#aes67-audio-on-the-network).
 
+The stream itself is no longer something an operator has to build in the daemon's
+own interface. `merging-aes67.sh` creates one as part of the install — eight
+channels, L24, at the multicast address its own configuration names — and the
+player then keeps that source in shape and switches it: **Settings → Sound on the
+network** for on/off, the address and the width, and **This box → Sound on the
+network** for what is actually being sent, read back from the daemon. The
+player's page is therefore the everyday route, and the daemon's own WebUI on 8081
+is for the rest of what the daemon can do.
+
 **What is actually left, in order:**
 
 1. **A PTP master must exist on the network.** The daemon slaves to a clock; it
@@ -194,6 +203,31 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **The player configures and switches the AES67 stream.** The stream used to be
+  something an operator built by hand in the daemon's own interface. Now the
+  installer creates it and the player owns it: **Settings → Sound on the network**
+  for the switch, the multicast address and the channel count, and **This box →
+  Sound on the network** for what is actually being sent — the daemon's state, the
+  clock and the grandmaster it locked to, the address and port on the wire, and
+  the SDP it publishes. The readout names the four faults that are otherwise
+  indistinguishable from a settings page: a clock that is not locked, a stream
+  switched off, a card not registered, and the player still writing the sound to
+  HDMI. Reading is never behind Lock; changing it is. The daemon's own WebUI on
+  8081 stays for the rest of what the daemon can do.
+
+- **The licensed virtual sound card is gone, and a script takes it off a box.**
+  The player no longer detects that card by name or writes into its daemon's
+  memory: nothing in the tree installs it, watches for it, or knows its device
+  node. `scripts/player/` carries a one-shot, idempotent uninstaller for a box set
+  up before the change — it stops and disables the service, unloads the module,
+  and removes the unit, daemon, settings, licence, DKMS registration, `/usr/src`
+  copy and installed `.ko`, then points the player's `alsa_device` back at
+  `default`. **A box still running that stack has to be cleaned before or with
+  this update**: with the card-specific write path removed, the player opens that
+  card as an ordinary ALSA device, and that driver pins an 8 ms buffer that cannot
+  hold a decoded frame — so an un-purged box on the new player is the one
+  combination that sounds worse than before.
+
 - **Merging's open AES67 stack is now the audio route.** AES67 audio previously
   went out through a licensed virtual sound card, which worked on the bench
   but pinned an 8 ms ALSA buffer that cannot hold a ~21 ms decoded frame — so the
@@ -202,9 +236,11 @@ which is point 2 above.
   replaces it with Merging's `ravenna-alsa-lkm` kernel module and the GPL
   `aes67-daemon`, which registers a normal ALSA card and does RTP, SDP/SAP and PTP
   itself. Confirmed on the bench: clean eight-channel audio out of the network, no
-  under-runs, destination selectable. The player needed no change to follow it —
-  it is an ordinary ALSA card. **Still open: lip sync over a full event**, and the
-  PTP accuracy a Pi's network interface reaches. Full account in point 3 above.
+  under-runs, destination selectable. Following it needed no change to the
+  player's audio path — it is an ordinary ALSA card — though the controls for the
+  stream itself came later, in the entry above. **Still open: lip sync over a
+  full event**, and the PTP accuracy a Pi's network interface reaches. Full
+  account in point 3 above.
 
 - **Decoder seek accuracy and the timeline readout** — released in
   `v0.1.13-alpha`. Two parts are operator-visible. **Seeking now lands on the moment asked for and says
