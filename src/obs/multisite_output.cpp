@@ -685,7 +685,9 @@ static bool complete_start(OutputCtx* ctx) {
 
 static bool out_start(void* data) {
     auto* ctx = static_cast<OutputCtx*>(data);
-    std::lock_guard<std::mutex> lk(ctx->mtx);
+    // unique_lock, not lock_guard, because the registry has to be joined AFTER
+    // this is released — see the lock-order note above out_stop.
+    std::unique_lock<std::mutex> lk(ctx->mtx);
 
     obs_data_t* s = obs_output_get_settings(ctx->output);
     S3Config s3;
@@ -769,15 +771,42 @@ static bool out_start(void* data) {
     }
     ctx->started = true;
     ctx->accepting = true;      // packets may now enter the muxer, or be held
+
+    const std::string room = sc.room_id;
+    const std::string ev   = ctx->session ? ctx->session->event_id() : std::string();
+    const bool deferred    = ctx->deferred.load();
+    lk.unlock();                // ── ctx->mtx released ───────────────────────
+
+    // Only now. Registering while holding ctx->mtx is the inverted order that
+    // deadlocked the quit: a status poll holds the registry and wants ctx->mtx.
     register_encoder_controls(ctx);   // hotkeys can now drop markers
-    if (!ctx->deferred.load())
+    if (!deferred)
         mlog_info("multisite output started — room=%s event=%s",
-                  sc.room_id.c_str(), ctx->session->event_id().c_str());
+                  room.c_str(), ev.c_str());
     return true;
 }
 
+// ── Lock order: the controls registry BEFORE ctx->mtx, never the other way ───
+//
+// encoder_stats() holds the registry lock while calling through the pointer it
+// protects — it has to, or the OutputCtx could be destroyed mid-call — and
+// OutputCtx::stats() takes ctx->mtx. So that direction is fixed, and everything
+// else has to agree with it.
+//
+// out_stop used to take ctx->mtx and then unregister, which is the opposite
+// order, and the two deadlocked: OBS's UI thread sat in out_stop holding
+// ctx->mtx waiting for the registry, while the web poll thread sat in stats()
+// holding the registry waiting for ctx->mtx. OBS then never finished quitting,
+// which reads as a crash once somebody force-quits it — and OBS reports it as
+// one on the next launch.
 static void out_stop(void* data, uint64_t) {
     auto* ctx = static_cast<OutputCtx*>(data);
+
+    // Outside the lock, and first: nothing else may reach this output through
+    // the registry once it is stopping, and taking it here is what keeps the
+    // order above true.
+    unregister_encoder_controls(ctx);
+
     std::lock_guard<std::mutex> lk(ctx->mtx);
     if (!ctx->started) return;
 
@@ -822,7 +851,7 @@ static void out_stop(void* data, uint64_t) {
             mlog_warn("no segments were produced — check that the video "
                       "encoder's keyframe interval is <= the segment duration");
     }
-    unregister_encoder_controls(ctx);
+// controls were unregistered at the top, before ctx->mtx was taken
     ctx->started = false;
     ctx->session.reset(); ctx->muxer.reset(); ctx->transport.reset();
 }
