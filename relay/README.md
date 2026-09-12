@@ -124,8 +124,12 @@ storage settings. So:
 - **Put HTTPS in front of it.** A password sent over plain HTTP crosses the
   network readable, and so does everything else. `Caddyfile.example` in this
   directory is a complete working config; Caddy gets and renews the
-  certificate by itself. If you would rather not expose it at all, leave it on
-  localhost and reach it over an SSH tunnel:
+  certificate by itself. If you already run nginx, `nginx.conf.example` is the
+  same thing for it — note the one trap it calls out: proxy to
+  `127.0.0.1`, never `localhost`, because the relay listens on IPv4 only and a
+  502 is what a name that resolves to `::1` first looks like. If you would
+  rather not expose it at all, leave it on localhost and reach it over an SSH
+  tunnel:
 
   ```bash
   ssh -L 8080:localhost:8080 you@your-server

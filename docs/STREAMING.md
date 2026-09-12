@@ -29,7 +29,8 @@ re-encoded.
 
 - **It has a login, and binds to localhost by default.** This event decides
   where your events are sent, so exposing it is a decision rather than a
-  default. Put HTTPS in front of it; `relay/Caddyfile.example` is a working
+  default. Put HTTPS in front of it; `relay/Caddyfile.example` (or
+  `relay/nginx.conf.example` if you run nginx) is a working
   config.
 - **One chosen sound feed per destination**, picked by the name the main site
   gave it — "Main Mix", "Sermon ISO" — never a track number. A future

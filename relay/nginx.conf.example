@@ -1,0 +1,66 @@
+# nginx.conf.example — TLS in front of the relay.
+#
+# The counterpart to Caddyfile.example for a server that already runs nginx.
+# The relay speaks plain HTTP and binds to localhost, because a login sent over
+# an unencrypted connection protects nobody. This puts a certificate in front
+# of it; obtaining and renewing that certificate is nginx's/your ACME client's
+# job and is not shown here.
+#
+# Copy into /etc/nginx/conf.d/ (or sites-available), change the domain, and
+# point that domain's DNS at this server first.
+
+server {
+    listen 80;
+    server_name stream.yourchurch.org;
+    # Everything below is a redirect to the TLS vhost, so nothing is ever
+    # answered over plain HTTP.
+    return 301 https://$host$request_uri;
+}
+
+server {
+    listen 443 ssl;
+    server_name stream.yourchurch.org;
+
+    ssl_certificate     /etc/letsencrypt/live/stream.yourchurch.org/fullchain.pem;
+    ssl_certificate_key /etc/letsencrypt/live/stream.yourchurch.org/privkey.pem;
+
+    # Proxied at the root of the vhost, never a subpath: the interface refers to
+    # /style.css, /app.js and /api/... by absolute path, so a `location /relay/`
+    # would load the page and 404 every asset and every call it makes.
+    location / {
+        # 127.0.0.1, NOT localhost. The relay listens on IPv4 only, so a name
+        # that resolves to ::1 first — which `localhost` does on a dual-stack
+        # box — gives connection-refused and a 502 that looks like the relay
+        # is down.
+        #
+        # If nginx is itself in a container, this address is nginx's own
+        # loopback rather than the relay. Put them on the same Docker network
+        # and name the service instead: proxy_pass http://relay:8080;
+        #
+        # The trailing slash matters too: without one, the request path is
+        # passed through unchanged, which is what is wanted here.
+        proxy_pass http://127.0.0.1:8080;
+
+        # The relay is an HTTP/1.1 keep-alive server.
+        proxy_http_version 1.1;
+        proxy_set_header Connection        "";
+
+        proxy_set_header Host              $host;
+        proxy_set_header X-Real-IP         $remote_addr;
+        proxy_set_header X-Forwarded-For   $proxy_add_x_forwarded_for;
+        # This is what tells the relay it can add `Secure` to the session
+        # cookie. Set it to $scheme, and only on a vhost that really is HTTPS:
+        # claiming https over a plain-HTTP connection makes the browser drop
+        # the cookie, and signing in bounces straight back to the sign-in page.
+        proxy_set_header X-Forwarded-Proto $scheme;
+
+        # A service download is several gigabytes and takes as long as it
+        # takes. Without these the proxy gives up part-way through and the
+        # operator sees a download that fails at an apparently random point.
+        proxy_read_timeout    0;
+        proxy_send_timeout    0;
+        proxy_buffering       off;
+        proxy_request_buffering off;
+        client_max_body_size  0;
+    }
+}
