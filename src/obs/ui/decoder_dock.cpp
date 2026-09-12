@@ -28,6 +28,12 @@
 #include <QStringList>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFrame>
+#include <QScreen>
+#include <QScrollArea>
+#include <QTabWidget>
+#include "settings_tabs.h"
+#include <QGuiApplication>
 #include <QListWidget>
 #include <QListWidgetItem>
 #include <QColor>
@@ -478,7 +484,18 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     m_settings->setWindowTitle(tr_("Dock.SettingsTitle"));
     auto* dlgRoot = new QVBoxLayout(m_settings);
 
-    auto* storeBox = new QGroupBox(tr_("Dock.Storage"), m_settings);
+    // Two tabs rather than one long strip — the same shape the encoder dock
+    // uses, and for the same reason. Stacked, storage plus the role selector
+    // plus the remote control box was taller than a laptop screen, and the
+    // buttons were what fell off the bottom.
+    //
+    // What this machine RECEIVES and what this machine IS are separate
+    // questions, so they are separate pages, and each fits without scrolling.
+    auto* tabs = new QTabWidget(m_settings);
+
+    auto* storePage = new QWidget(tabs);
+    auto* storePageLayout = new QVBoxLayout(storePage);
+    auto* storeBox = new QGroupBox(tr_("Dock.Storage"), storePage);
     auto* form = new QFormLayout(storeBox);
     m_accountId = new QLineEdit(storeBox);
     m_endpoint  = new QLineEdit(storeBox);
@@ -509,15 +526,24 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
     m_bufferMins->setSuffix(tr_("Dock.Minutes"));
     m_bufferMins->setToolTip(tr_("BufferMinutesHint"));
     form->addRow(tr_("BufferMinutes"), m_bufferMins);
-    dlgRoot->addWidget(storeBox);
-    // In both dialogs on purpose: choosing a role hides the other dock, so a
-    // control in only one of them could hide the way back.
-    dlgRoot->addWidget(make_role_selector(m_settings));
-    // The phone-and-tablet page, and the address to type into one.
-    dlgRoot->addWidget(make_remote_control_box(m_settings));
+    storePageLayout->addWidget(storeBox);
+    storePageLayout->addStretch(1);
+    add_settings_tab(tabs, storePage, tr_("Dock.Storage"));
+
+    // Both of these are in BOTH docks on purpose: choosing a role hides the
+    // other dock, so a control living in only one of them could hide the only
+    // way back.
+    auto* machinePage = new QWidget(tabs);
+    auto* machineLayout = new QVBoxLayout(machinePage);
+    machineLayout->addWidget(make_role_selector(machinePage));
+    machineLayout->addWidget(make_remote_control_box(machinePage));
+    machineLayout->addStretch(1);
+    add_settings_tab(tabs, machinePage, tr_("Dock.ThisMachine"));
+
+    dlgRoot->addWidget(tabs, 1);            // the tabs take the stretch
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, m_settings);
-    dlgRoot->addWidget(buttons);
+    dlgRoot->addWidget(buttons, 0);         // …and the buttons never scroll
     connect(buttons, &QDialogButtonBox::rejected, m_settings, &QDialog::accept);
 
     {
@@ -565,6 +591,26 @@ DecoderDock::DecoderDock(QWidget* parent) : QWidget(parent) {
 
 void DecoderDock::onOpenSettings() {
     if (!m_settings) return;
+
+    // Fit the screen it is about to open on, not the one it was built on.
+    //
+    // The scroll area means the content can always be reached, but Qt will
+    // still happily size the dialog to its natural height and hand you a window
+    // taller than the display — which on a laptop put the buttons below the
+    // bottom edge. Capping it here rather than at construction is deliberate:
+    // an operator may have moved OBS to a different monitor, or docked a laptop,
+    // since the dock was created.
+    if (QScreen* sc = m_settings->screen() ? m_settings->screen()
+                                           : QGuiApplication::primaryScreen()) {
+        const QRect avail = sc->availableGeometry();
+        // Nine tenths, not all of it: a dialog exactly the height of the work
+        // area has its title bar under the menu bar on macOS and is then
+        // impossible to move.
+        m_settings->setMaximumHeight((int)(avail.height() * 0.9));
+        if (m_settings->height() > m_settings->maximumHeight())
+            m_settings->resize(m_settings->width(), m_settings->maximumHeight());
+    }
+
     m_settings->exec();
     onSaveSettings();
     decoder_reconfigure_all();   // apply straight away
