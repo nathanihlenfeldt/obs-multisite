@@ -184,6 +184,8 @@ void BroadcastSettings::load() {
         marker_labels = obs_data_get_string(d, "marker_labels");
     if (obs_data_has_user_value(d, "video_encoder_id"))
         video_encoder_id = obs_data_get_string(d, "video_encoder_id");
+    if (obs_data_has_user_value(d, "tile_layout"))
+        tile_layout = obs_data_get_string(d, "tile_layout");
     obs_data_release(d);
 }
 
@@ -208,6 +210,7 @@ void BroadcastSettings::save() const {
     obs_data_set_string(d, "channel_labels", channel_labels.c_str());
     obs_data_set_string(d, "marker_labels", marker_labels.c_str());
     obs_data_set_string(d, "video_encoder_id", video_encoder_id.c_str());
+    obs_data_set_string(d, "tile_layout", tile_layout.c_str());
 
     char* path = obs_module_config_path("encoder.json");
     if (path) {
@@ -269,6 +272,9 @@ bool BroadcastController::go_live(std::string& error) {
     obs_data_set_string(s, "channel_labels", m_cfg.channel_labels.c_str());
     obs_data_set_string(s, "marker_labels", m_cfg.marker_labels.c_str());
     obs_data_set_bool(s, "send_expiry_tag", m_cfg.send_expiry_tag);
+    // Read once, at Go Live, and written into event.json — which is why
+    // changing it mid-broadcast does nothing until the next event.
+    obs_data_set_string(s, "tile_layout", m_cfg.tile_layout.c_str());
 
     m_output = obs_output_create("multisite_output", "multisite_out", s, nullptr);
     obs_data_release(s);

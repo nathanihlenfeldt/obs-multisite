@@ -52,6 +52,12 @@ struct BroadcastSettings {
         "Main L,Main R,Sermon ISO,Click,Spare 5,Spare 6,Spare 7,Spare 8";
     std::string marker_labels =
         "Sermon Start,Offering,Go to local,Dismissal";
+    // How this feed is composited, if it carries more than one picture:
+    // "1x1", "2x1", "1x2" or "2x2". The satellite splits it accordingly and
+    // exposes each region as its own source. Declared rather than detected —
+    // a 3840x1080 frame is a legitimate ultrawide picture as well as a
+    // plausible pair, and nothing in the video distinguishes them.
+    std::string tile_layout = "1x1";
 
     // Persisted alongside OBS's own plugin config.
     void load();

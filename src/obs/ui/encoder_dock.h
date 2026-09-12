@@ -70,6 +70,8 @@ private:
     QLineEdit* m_trackLabels = nullptr;
     QLineEdit* m_channelLabels = nullptr;
     QLineEdit* m_markerLabels = nullptr;
+    // How this feed is composited, if it carries more than one picture.
+    QComboBox* m_tileLayout = nullptr;
     // These only apply in particular audio setups, so they are shown
     // conditionally rather than confusing everyone else.
     QWidget* m_trackLabelRow = nullptr;

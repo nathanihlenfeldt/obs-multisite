@@ -31,7 +31,12 @@
 #include <QDateTime>
 #include <QDialog>
 #include <QDialogButtonBox>
+#include <QFrame>
+#include <QScreen>
 #include <QScrollArea>
+#include <QTabWidget>
+#include "settings_tabs.h"
+#include <QGuiApplication>
 
 namespace multisite_obs {
 
@@ -162,8 +167,21 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_settings->setWindowTitle(tr_("Dock.SettingsTitle"));
     auto* dlgRoot = new QVBoxLayout(m_settings);
 
+    // Three tabs rather than one long strip. This dialog carries storage, media
+    // settings, the role selector and the remote control box; stacked, that was
+    // taller than a laptop screen, and the buttons — the part you need to
+    // dismiss it — were what fell off the bottom.
+    //
+    // Scrolling fixed being trapped but left an operator panning a long column
+    // to find one field. These settings fall into groups that are thought about
+    // separately, so they are separated: where the video goes, how it is
+    // encoded, and what this machine is. Each page fits without scrolling.
+    auto* tabs = new QTabWidget(m_settings);
+
     // ── Storage ──────────────────────────────────────────────────────────────
-    auto* storeBox = new QGroupBox(tr_("Dock.Storage"), m_settings);
+    auto* storePage = new QWidget(tabs);
+    auto* storePageLayout = new QVBoxLayout(storePage);
+    auto* storeBox = new QGroupBox(tr_("Dock.Storage"), storePage);
     auto* form = new QFormLayout(storeBox);
     m_accountId = new QLineEdit(storeBox);
     m_endpoint  = new QLineEdit(storeBox);
@@ -174,6 +192,9 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_region    = new QLineEdit(storeBox);
     m_room      = new QLineEdit(storeBox);
     m_tags      = new QCheckBox(tr_("SendExpiryTag"), storeBox);
+    // The caveats are a tooltip, not part of the label: as a label they were a
+    // single unwrapped line that set the width of the entire dialog.
+    m_tags->setToolTip(tr_("SendExpiryTagHint"));
     form->addRow(tr_("R2AccountID"), m_accountId);
     form->addRow(tr_("EndpointHost"), m_endpoint);
     form->addRow(tr_("Bucket"), m_bucket);
@@ -182,10 +203,14 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     form->addRow(tr_("Region"), m_region);
     form->addRow(tr_("RoomID"), m_room);
     form->addRow(QString(), m_tags);
-    dlgRoot->addWidget(storeBox);
+    storePageLayout->addWidget(storeBox);
+    storePageLayout->addStretch(1);
+    add_settings_tab(tabs, storePage, tr_("Dock.Storage"));
 
     // ── Media ────────────────────────────────────────────────────────────────
-    auto* mediaBox = new QGroupBox(tr_("Dock.Media"), m_settings);
+    auto* mediaPage = new QWidget(tabs);
+    auto* mediaPageLayout = new QVBoxLayout(mediaPage);
+    auto* mediaBox = new QGroupBox(tr_("Dock.Media"), mediaPage);
     auto* mform = new QFormLayout(mediaBox);
     m_segDur = new QDoubleSpinBox(mediaBox);
     m_segDur->setRange(2.0, 15.0);
@@ -215,6 +240,18 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     mform->addRow(tr_("Dock.VideoBitrate"), m_vBitrate);
     mform->addRow(tr_("Dock.AudioBitrate"), m_aBitrate);
     mform->addRow(tr_("Dock.AudioTracks"), m_tracks);
+
+    // How the feed is composited, for rooms that send several cameras as one
+    // picture. A list rather than free text: these are the only shapes the
+    // satellite can pull apart, and a typo would be discovered at the other end
+    // of the country during a service.
+    m_tileLayout = new QComboBox(mediaBox);
+    m_tileLayout->addItem(tr_("TileLayout.1x1"), "1x1");
+    m_tileLayout->addItem(tr_("TileLayout.2x1"), "2x1");
+    m_tileLayout->addItem(tr_("TileLayout.1x2"), "1x2");
+    m_tileLayout->addItem(tr_("TileLayout.2x2"), "2x2");
+    m_tileLayout->setToolTip(tr_("TileLayout.Help"));
+    mform->addRow(tr_("TileLayout"), m_tileLayout);
     // "Audio names" label OBS mixer TRACKS and only matter when sending more
     // than one. "Channel names" label channels INSIDE a multi-channel track and
     // only matter when OBS is running a surround layout. Showing both to
@@ -229,16 +266,26 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     m_audioNote->setStyleSheet("color: palette(text); opacity: 0.75;");
     mform->addRow(QString(), m_audioNote);
     mform->addRow(tr_("MarkerLabels"), m_markerLabels);
-    dlgRoot->addWidget(mediaBox);
-    // In both dialogs on purpose: choosing a role hides the other dock, so a
-    // control in only one of them could hide the way back.
-    dlgRoot->addWidget(make_role_selector(m_settings));
-    // The phone-and-tablet page, and the address to type into one. In both
-    // docks for the same reason the role selector is.
-    dlgRoot->addWidget(make_remote_control_box(m_settings));
+    mediaPageLayout->addWidget(mediaBox);
+    mediaPageLayout->addStretch(1);
+    add_settings_tab(tabs, mediaPage, tr_("Dock.Media"));
+
+    // ── This machine ─────────────────────────────────────────────────────────
+    // What the box itself is and how it is reached, as opposed to what it
+    // sends. Both of these are in BOTH docks on purpose: choosing a role hides
+    // the other dock, so a control living in only one of them could hide the
+    // only way back.
+    auto* machinePage = new QWidget(tabs);
+    auto* machineLayout = new QVBoxLayout(machinePage);
+    machineLayout->addWidget(make_role_selector(machinePage));
+    machineLayout->addWidget(make_remote_control_box(machinePage));
+    machineLayout->addStretch(1);
+    add_settings_tab(tabs, machinePage, tr_("Dock.ThisMachine"));
+
+    dlgRoot->addWidget(tabs, 1);            // the tabs take the stretch
 
     auto* buttons = new QDialogButtonBox(QDialogButtonBox::Close, m_settings);
-    dlgRoot->addWidget(buttons);
+    dlgRoot->addWidget(buttons, 0);         // …and the buttons never scroll
     connect(buttons, &QDialogButtonBox::rejected, m_settings, &QDialog::accept);
 
     connect(m_goLive, &QPushButton::clicked, this, &EncoderDock::onGoLive);
@@ -300,6 +347,22 @@ void EncoderDock::onOpenSettings() {
     if (!m_settings) return;
     populateEncoders();        // by now every module has registered its own
     updateAudioFields();       // OBS's audio layout may have changed
+
+    // Fit the screen it is about to open on, not the one it was built on. The
+    // scroll area means everything can be reached, but Qt will still size the
+    // dialog to its natural height and hand back a window taller than the
+    // display. Done here rather than at construction because an operator may
+    // have moved OBS to another monitor, or docked a laptop, since then.
+    if (QScreen* sc = m_settings->screen() ? m_settings->screen()
+                                           : QGuiApplication::primaryScreen()) {
+        const QRect avail = sc->availableGeometry();
+        // Nine tenths, not all: a dialog exactly the height of the work area
+        // has its title bar under the menu bar on macOS and cannot be moved.
+        m_settings->setMaximumHeight((int)(avail.height() * 0.9));
+        if (m_settings->height() > m_settings->maximumHeight())
+            m_settings->resize(m_settings->width(), m_settings->maximumHeight());
+    }
+
     m_settings->exec();
     onSaveSettings();      // persist whatever was changed
 }
@@ -379,6 +442,14 @@ void EncoderDock::loadIntoFields() {
     m_trackLabels->setText(QString::fromStdString(cfg.track_labels));
     m_channelLabels->setText(QString::fromStdString(cfg.channel_labels));
     m_markerLabels->setText(QString::fromStdString(cfg.marker_labels));
+    {
+        // findData rather than an index: the stored value is the layout string
+        // itself, so reordering or adding entries later cannot silently change
+        // what a saved configuration means.
+        const int i = m_tileLayout->findData(
+            QString::fromStdString(cfg.tile_layout));
+        m_tileLayout->setCurrentIndex(i >= 0 ? i : 0);   // unknown reads as 1x1
+    }
 }
 
 void EncoderDock::onSaveSettings() {
@@ -402,6 +473,7 @@ void EncoderDock::onSaveSettings() {
     cfg.track_labels       = m_trackLabels->text().toStdString();
     cfg.channel_labels     = m_channelLabels->text().toStdString();
     cfg.marker_labels      = m_markerLabels->text().toStdString();
+    cfg.tile_layout        = m_tileLayout->currentData().toString().toStdString();
     // The event name is per-event, not a saved setting. Send it only when the
     // operator has typed their own; an untouched date/time default is sent
     // empty so the satellite falls back to the time and a resumed event keeps

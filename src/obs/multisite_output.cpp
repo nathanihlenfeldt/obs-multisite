@@ -379,7 +379,12 @@ static obs_properties_t* out_props(void*) {
         obs_property_set_long_description(lay, obs_module_text("TileLayout.Help"));
     }
     // R2 rejects x-amz-tagging; leave off unless the store supports tagging.
-    obs_properties_add_bool(p, S_TAGS, obs_module_text("SendExpiryTag"));
+    {
+        obs_property_t* tg =
+            obs_properties_add_bool(p, S_TAGS, obs_module_text("SendExpiryTag"));
+        obs_property_set_long_description(tg,
+                                          obs_module_text("SendExpiryTagHint"));
+    }
     obs_properties_add_text(p, S_MARKERS, obs_module_text("MarkerLabels"),
                             OBS_TEXT_DEFAULT);
     return p;
