@@ -84,6 +84,12 @@ struct BroadcastStatus {
     std::string storage_host;
     double      upload_bytes_per_s = 0.0;
     unsigned long long upload_samples = 0;
+    // Free space where the durable spool lives. Checked whether live or
+    // idle, so a low disk shows up before it starts costing segments (see
+    // SessionConfig::max_spool_bytes). 0 healthy, 1 low, 2 critical.
+    int         disk_health = 0;
+    bool        disk_known = false;
+    unsigned long long disk_free_bytes = 0;
 };
 
 // A video encoder OBS actually has on this machine.

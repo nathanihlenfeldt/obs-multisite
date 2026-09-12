@@ -25,6 +25,12 @@ int RetryUploader::backoff_ms(int attempt) const {
 bool RetryUploader::upload_one(const SpooledSegment& seg) {
     int attempt = 0;
     while (m_running) {
+        // A retry can sit here for a long time (that is the whole point of
+        // an outage). If the spool evicted THIS segment for disk space while
+        // we were retrying it — see SpoolQueue's disk cap — abandon it rather
+        // than risk a stale attempt succeeding after the fact and publishing
+        // into the manifest a segment the spool has already declared gone.
+        if (seg.seq < m_spool.floor()) return false;
         ++attempt;
         PutResult r = m_transport.put(seg.key, seg.data, m_cfg.content_type, m_cfg.tags);
         if (r.success && m_cfg.verify_first_n > 0 &&

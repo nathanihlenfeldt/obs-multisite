@@ -370,6 +370,46 @@ int main() {
               "cleanly-ended event is not offered for resume");
     }
 
+    std::printf("== 10. Local disk cap drops the oldest segment and warns the operator ==\n");
+    {
+        MemStore store;
+        SessionConfig cfg;
+        cfg.spool_dir = (base / "s10").string();
+        // Room for 3 of these 2048-byte segments before eviction kicks in.
+        cfg.max_spool_bytes = 3 * 2048;
+        cfg.base_backoff_ms = 1; cfg.max_backoff_ms = 2; cfg.backoff_jitter = 0.0;
+        Session ses(cfg, store);
+        CHECK(ses.start_new(blob(0), video, tracks),
+              "start_new succeeds (control files still write)");
+
+        store.fail_budget = 100000;   // segment uploads fail from here on
+        for (uint64_t i = 0; i < 8; ++i)
+            ses.publish_segment(blob(i + 1), 6.0, (double)i * 6.0);
+        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+
+        auto st = ses.status();
+        CHECK(st.dropped_for_disk > 0, "segments were dropped for local disk space");
+        CHECK(st.pending < 8, "fewer than all 8 remain queued (some evicted)");
+        CHECK(!ses.last_error().empty(), "a warning is recorded");
+        CHECK(ses.last_error().find("dropped") != std::string::npos,
+              "the warning names what happened");
+
+        store.fail_budget = 0;   // link recovers
+        for (int i = 0; i < 400 && ses.status().pending > 0; ++i)
+            std::this_thread::sleep_for(std::chrono::milliseconds(25));
+        CHECK(ses.status().pending == 0,
+              "the SURVIVING segments still drain once the link returns");
+        CHECK(!store.ordering_violation,
+              "write-ordering held even with an eviction in the mix");
+
+        Manifest m = Manifest::from_json(
+            store.text("events/" + ses.event_id() + "/manifest.json"));
+        CHECK(m.first_available_seq > 0,
+              "the manifest floor advanced past what was dropped once a publish "
+              "happened, so a decoder does not wait forever on it");
+        ses.end();
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_fail == 0 ? "ALL SESSION TESTS PASSED" : "SOME TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

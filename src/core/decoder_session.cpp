@@ -520,6 +520,19 @@ std::optional<PlayableSegment> DecoderSession::next_segment() {
         if (m_head.load() > m_latest_seq.load()) return std::nullopt;
 
         want = m_head.load();
+        if (want < m_first_available_seq.load()) {
+            // The encoder itself declared this segment gone — evicted from its
+            // local spool under disk pressure before it could ever be
+            // uploaded, so no amount of waiting will make it appear. That is
+            // a deliberate, encoder-side decision (unlike an ordinary gap,
+            // where holding position is correct because the segment may
+            // still be coming); treat it the same as a seek, not a stall.
+            m_head = m_first_available_seq.load();
+            ++m_discontinuity;
+            m_stats.gap_skips++;
+            want = m_head.load();
+            if (want > m_latest_seq.load()) return std::nullopt;
+        }
         if (!m_cache->has(want)) {
             // Waiting on a segment: hold position rather than skipping, so
             // nothing is silently dropped from the programme.

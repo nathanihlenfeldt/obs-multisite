@@ -122,6 +122,13 @@ struct FakeEncoder {
         store.put("rooms/" + room + "/live.json",
                   std::vector<uint8_t>(j.begin(), j.end()), "", {});
     }
+    // Simulates the encoder's spool cap evicting old segments for disk space:
+    // declares everything below `seq` permanently gone.
+    void drop_floor_to(uint64_t seq) {
+        if (seq > manifest.first_available_seq) manifest.first_available_seq = seq;
+        publish_manifest();
+    }
+
     MarkerList markers;
     void drop_marker(const std::string& label) {
         Marker mk;
@@ -440,6 +447,48 @@ int main() {
         CHECK(dec.playback_head() == head,
               "head does NOT advance past a gap (no silent skip)");
         CHECK(dec.stats().gaps_waited > 0, "gap recorded");
+    }
+
+    std::printf("== 8b. A segment the ENCODER declared gone is skipped, not stalled on ==\n");
+    {
+        FakeStore store;
+        FakeEncoder enc(store, "r", "01EVENTIIIIIIIIIIIIIIIIIII");
+        enc.publish_start();
+        for (int i = 0; i < 6; ++i) enc.publish_segment();   // seqs 0..5
+
+        DecoderConfig cfg;
+        cfg.room_id = "r"; cfg.cache_dir = (base / "d8b").string();
+        cfg.prebuffer_segments = 6;
+        cfg.start_buffer_seconds = 0;
+        DecoderSession dec(cfg, store);
+        dec.poll(enc.clock_ms);
+        dec.pump_downloads(10);
+        CHECK(dec.start(), "playback started");
+
+        auto first = dec.next_segment();
+        CHECK(first && first->seq == 0, "served segment 0");
+        uint64_t head = dec.playback_head();
+        CHECK(head == 1, "head at 1");
+
+        // The encoder's disk-space eviction already happened: segment 1 is
+        // gone from the cache AND the manifest now says nothing below 3 is
+        // retained any more.
+        char name[16];
+        std::snprintf(name, sizeof(name), "%08llu", (unsigned long long)head);
+        fs::remove(fs::path(cfg.cache_dir) / dec.event_id() /
+                   (std::string(name) + ".m4s"));
+        enc.drop_floor_to(3);
+        dec.poll(enc.clock_ms);
+        dec.pump_downloads(10);
+
+        uint64_t disc_before = dec.discontinuity_id();
+        auto skipped = dec.next_segment();
+        CHECK(skipped.has_value(),
+              "does not stall forever on a segment the encoder declared gone");
+        CHECK(skipped && skipped->seq == 3, "head jumped forward to the new floor");
+        CHECK(dec.discontinuity_id() > disc_before,
+              "the jump raises a discontinuity, same as a seek");
+        CHECK(dec.stats().gap_skips > 0, "the skip is counted separately from an ordinary wait");
     }
 
     std::printf("== 9. Markers are read and can be jumped to ==\n");

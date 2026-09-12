@@ -182,6 +182,56 @@ int main() {
         CHECK(up.stats().permanent_failures.load() == 1, "permanent failure surfaced");
     }
 
+    std::printf("== 7. Disk cap drops the OLDEST unconfirmed segment ==\n");
+    {
+        std::string dir = (base / "spool7").string();
+        // Cap small enough that a handful of 4 KiB segments overflow it.
+        SpoolQueue q(dir, /*max_bytes=*/10 * 1024);
+        q.begin_event("01EVENT", 1);
+
+        std::vector<SpoolDrop> drops;
+        q.set_drop_callback([&](const SpoolDrop& d) { drops.push_back(d); });
+
+        for (uint64_t s = 1; s <= 6; ++s) {
+            SpooledSegment seg;
+            seg.seq = s; seg.data = fake_segment(s, 4096);
+            seg.key = "seg/" + std::to_string(s);
+            q.enqueue(std::move(seg));
+        }
+        CHECK(q.bytes_pending() <= 10 * 1024, "pending bytes stay under the cap");
+        CHECK(!drops.empty(), "the cap actually evicted something");
+        CHECK(drops.front().seq == 1, "the OLDEST segment (seq 1) was dropped first");
+        // 10 KiB / 4 KiB rounds to 2 segments kept; the newest write is never
+        // the one sacrificed.
+        auto pend = q.pending_count();
+        CHECK(pend >= 1 && pend < 6, "some segments evicted, not all of them");
+        CHECK(q.state().first_seq == drops.back().seq + 1,
+              "the floor advances to just past the last thing actually dropped");
+        CHECK(q.dropped_count() == drops.size(), "drop counter matches callback firings");
+
+        // The newest segment written is never the one evicted, even if it
+        // alone would exceed the cap — dropping it would defeat the point
+        // (losing exactly the segment that just arrived) and stop progress.
+        SpooledSegment huge;
+        huge.seq = 7; huge.data = fake_segment(7, 64 * 1024);
+        huge.key = "seg/7";
+        q.enqueue(std::move(huge));
+        CHECK(q.pending_count() >= 1 && q.peek_next().has_value(),
+              "a single oversized newest segment is kept, not dropped");
+    }
+
+    std::printf("== 8. Confirming a segment frees its bytes from the cap ==\n");
+    {
+        std::string dir = (base / "spool8").string();
+        SpoolQueue q(dir, /*max_bytes=*/100 * 1024 * 1024); // generous
+        q.begin_event("01EVENT", 1);
+        SpooledSegment seg; seg.seq = 1; seg.data = fake_segment(1, 4096); seg.key = "seg/1";
+        q.enqueue(std::move(seg));
+        CHECK(q.bytes_pending() == 4096, "bytes_pending reflects the write");
+        q.confirm(1);
+        CHECK(q.bytes_pending() == 0, "confirming frees the byte count, not just the file");
+    }
+
     fs::remove_all(base);
     std::printf("\n%s\n", g_failures == 0
         ? "ALL RELIABILITY TESTS PASSED"

@@ -37,6 +37,13 @@ struct SessionConfig {
     // Empty means "no custom name" — the satellite falls back to the time.
     std::string event_name;
     std::string spool_dir;                 // local durable queue location
+    // Local disk cap for unconfirmed segments (0 = unlimited, retry forever).
+    // Protects the encoder machine's disk when the upload link is down or too
+    // slow to keep up for a long stretch, at the cost of the oldest queued
+    // segments — see spool_queue.h. 4 GiB is generous headroom for normal
+    // operation (the spool should sit near-empty) while still bounding a
+    // multi-hour outage on a small drive.
+    uint64_t    max_spool_bytes = 4ull * 1024 * 1024 * 1024;
     double      segment_duration_s = 6.0;
     size_t      manifest_window = 50;      // rolling window size
     // Object tagging: S3 supports it, but Cloudflare R2 does NOT and rejects
@@ -110,6 +117,10 @@ public:
         uint64_t    verify_failures = 0;
         std::string verify_note;      // result of the last upload verification
         LinkHealth  health = LinkHealth::Healthy;
+        // How many segments this event has had to drop from the local spool
+        // for disk space (see SessionConfig::max_spool_bytes). Zero in normal
+        // operation; the encoder dock surfaces this as an operator warning.
+        uint64_t    dropped_for_disk = 0;
     };
     Status status() const;
 
@@ -138,6 +149,7 @@ private:
 
     Manifest    m_manifest;
     MarkerList  m_markers;
+    uint64_t    m_dropped_total = 0;   // guarded by m_mtx
     std::string m_last_error;
     ProgressCallback m_on_progress;
     mutable std::mutex m_mtx;
@@ -153,6 +165,12 @@ private:
                        const VideoInfo& video,
                        const std::vector<AudioTrack>& tracks);
     void  on_confirmed(const SpooledSegment& seg);
+    // Called (on the encode thread, via SpoolQueue's drop callback) when a
+    // segment had to be evicted for disk space. Must never touch the network:
+    // publish_segment()'s "never blocks on the network" guarantee for the
+    // encode thread depends on it. The advanced floor rides along on the next
+    // manifest publish, whenever that naturally happens.
+    void  on_dropped(const SpoolDrop& d);
 };
 
 } // namespace multisite

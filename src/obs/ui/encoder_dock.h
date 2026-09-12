@@ -92,6 +92,7 @@ private:
     QLabel* m_retries = nullptr;
     QLabel* m_data = nullptr;
     QLabel* m_link = nullptr;
+    QLabel* m_disk = nullptr;
     QLabel* m_error = nullptr;
     QTimer* m_timer = nullptr;
 

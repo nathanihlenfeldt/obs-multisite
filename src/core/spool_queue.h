@@ -8,6 +8,13 @@
 // Segments are drained in strict sequence order; a segment's spool file is only
 // removed once the upload is confirmed durable in the bucket.
 //
+// That guarantee is unconditional only when `max_bytes` is 0. Given a nonzero
+// cap, an upload link that stays down (or too slow to keep up) for long
+// enough will make enqueue() start deleting its own oldest unconfirmed
+// segments to keep the backlog off the local disk — see the constructor and
+// SpoolDrop. This is a deliberate, bounded trade of "never lose a frame" for
+// "never fill the operator's disk"; it does not fire in normal operation.
+//
 // On-disk layout (all under `dir`):
 //   state.json                 event_id, first_seq, last_enqueued, last_confirmed, ended
 //   <seq:08d>.seg              raw segment bytes (written tmp+rename → crash-safe)
@@ -22,6 +29,8 @@
 #include <optional>
 #include <cstdint>
 #include <mutex>
+#include <atomic>
+#include <functional>
 
 namespace multisite {
 
@@ -36,6 +45,11 @@ struct SpooledSegment {
 
 struct SpoolState {
     std::string event_id;
+    // Lowest sequence number still guaranteed obtainable from this spool.
+    // Starts as the event's first seq and only ever increases: an eviction
+    // under the disk-space cap (see SpoolQueue::SpoolQueue) advances it past
+    // whatever it just discarded, so nothing downstream waits forever on a
+    // segment declared gone.
     uint64_t    first_seq      = 0;
     uint64_t    last_enqueued  = 0;   // highest seq written to spool
     uint64_t    last_confirmed = 0;   // highest seq confirmed durable in bucket
@@ -53,9 +67,25 @@ struct ResumeInfo {
     size_t      pending_count  = 0;   // segments on disk not yet confirmed
 };
 
+// A segment evicted from the spool before it was ever uploaded, because the
+// backlog outgrew `max_bytes`. `new_floor` is the lowest sequence number
+// still guaranteed to exist; anything below it is gone for good.
+struct SpoolDrop {
+    uint64_t seq = 0;
+    uint64_t new_floor = 0;
+};
+
 class SpoolQueue {
 public:
-    explicit SpoolQueue(std::string dir);
+    // `max_bytes` bounds how much unconfirmed data the spool keeps on disk —
+    // 0 (the default) preserves the original "retry forever, never lose a
+    // segment" behaviour. A nonzero cap protects the local disk from filling
+    // during a long or badly degraded upload link, at the cost of dropping the
+    // OLDEST still-unconfirmed segment (the one furthest from being resolved)
+    // rather than the newest: it is the choice most likely to already be
+    // stale to a live viewer, and the one that unblocks the strict in-order
+    // uploader fastest.
+    explicit SpoolQueue(std::string dir, uint64_t max_bytes = 0);
 
     // Inspect an existing spool without starting a new event. Used at startup to
     // drive the "resume previous event, or start new?" prompt.
@@ -86,10 +116,31 @@ public:
 
     SpoolState state() const;
 
+    // Lowest sequence number this spool still vouches for. A segment whose
+    // seq is below this was evicted for disk space and will never exist —
+    // the uploader checks this mid-retry so a stale attempt that started
+    // before an eviction cannot resurrect a segment after the fact.
+    uint64_t floor() const;
+
+    // Total bytes of pending (not yet confirmed) segments currently on disk.
+    uint64_t bytes_pending() const;
+    // How many segments this spool has ever had to drop for disk space.
+    uint64_t dropped_count() const { return m_dropped_count.load(); }
+
+    // Called (off any internal lock) whenever enqueue() has to evict an
+    // unconfirmed segment to stay under `max_bytes`. Set once, before the
+    // spool is used from more than one thread.
+    using DropCallback = std::function<void(const SpoolDrop&)>;
+    void set_drop_callback(DropCallback cb) { m_on_drop = std::move(cb); }
+
 private:
     std::string m_dir;
+    uint64_t    m_max_bytes = 0;
     mutable std::mutex m_mtx;
-    SpoolState m_state;
+    SpoolState  m_state;
+    uint64_t    m_bytes_pending = 0;
+    std::atomic<uint64_t> m_dropped_count{0};
+    DropCallback m_on_drop;
 
     std::string seg_path(uint64_t seq) const;
     std::string meta_path(uint64_t seq) const;
@@ -97,6 +148,11 @@ private:
     void load_state();
     void save_state();
     std::vector<uint64_t> pending_seqs() const; // sorted ascending
+    // Removes seq's files, advances the floor past it, records the drop.
+    // Caller holds m_mtx and appends the result to `out` for the callback to
+    // be invoked once the lock is released (the callback may re-enter code
+    // that itself locks a caller's mutex — never call it locked).
+    uint64_t evict_locked(uint64_t seq, std::vector<SpoolDrop>& out);
 };
 
 } // namespace multisite

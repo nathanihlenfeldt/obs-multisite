@@ -1,11 +1,13 @@
 // SPDX-License-Identifier: GPL-3.0-or-later
 #include "sysinfo.h"
 #include "log.h"
+#include "../core/disk_health.h"
 
 #include <algorithm>
 #include <array>
 #include <cctype>
 #include <chrono>
+#include <cstdint>
 #include <cstdio>
 #include <cstring>
 #include <fstream>
@@ -268,6 +270,8 @@ DiskInfo disk_info(const std::string& path) {
     if (::statvfs(path.c_str(), &st) == 0) {
         d.total_bytes = (long long)st.f_blocks * (long long)st.f_frsize;
         d.free_bytes  = (long long)st.f_bavail * (long long)st.f_frsize;
+        d.health = multisite::disk_health_name(
+            multisite::classify_disk_free((uint64_t)d.free_bytes));
     }
 #ifdef __linux__
     // mmcblk0 is the SD card slot on a Pi. Writing the segment cache there

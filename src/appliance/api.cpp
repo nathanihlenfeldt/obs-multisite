@@ -560,7 +560,8 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
             {"disk", json{{"path", disk.path},
                           {"total_bytes", disk.total_bytes},
                           {"free_bytes", disk.free_bytes},
-                          {"is_sd_card", disk.is_sd_card}}},
+                          {"is_sd_card", disk.is_sd_card},
+                          {"health", disk.health}}},
         }.dump());
     });
 

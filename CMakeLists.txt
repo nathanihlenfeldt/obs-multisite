@@ -39,6 +39,7 @@ add_library(multisite_core STATIC
     src/core/aws_sigv4.cpp
     src/core/s3_list_xml.cpp
     src/core/storage_health.cpp
+    src/core/disk_health.cpp
     src/core/link_health.cpp
     src/core/event_catalog.cpp
     src/core/storage_manager.cpp
@@ -159,6 +160,13 @@ add_test(NAME storage_health COMMAND test_storage_health)
 add_executable(test_link_health tests/test_link_health.cpp)
 target_link_libraries(test_link_health PRIVATE multisite_core)
 add_test(NAME link_health COMMAND test_link_health)
+
+# The low-disk readout the encoder dock and the appliance's web UI both show.
+# Pure threshold arithmetic, kept out of the statvfs/std::filesystem::space()
+# call sites so it can be tested with no filesystem at all.
+add_executable(test_disk_health tests/test_disk_health.cpp)
+target_link_libraries(test_disk_health PRIVATE multisite_core)
+add_test(NAME disk_health COMMAND test_disk_health)
 
 add_executable(test_session tests/test_session.cpp)
 target_link_libraries(test_session PRIVATE multisite_core)

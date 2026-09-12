@@ -102,12 +102,16 @@ EncoderDock::EncoderDock(QWidget* parent) : QWidget(parent) {
     // A main site whose queue will not drain has no other way to tell a slow
     // link from a distant one.
     addStat(3, 1, "Dock.Bucket",    m_storage);
+    // The disk the durable spool lives on. Checked whether idle or live, so
+    // a nearly-full drive is visible before Go Live rather than discovered
+    // mid-event when the cap starts dropping queued segments.
+    addStat(4, 0, "Dock.Disk",      m_disk);
 
     m_error = new QLabel(QString(), statusBox);
     m_error->setWordWrap(true);
     m_error->setStyleSheet("color: #e5484d;");
     m_error->hide();
-    grid->addWidget(m_error, 4, 0, 1, 4);
+    grid->addWidget(m_error, 5, 0, 1, 4);
     root->addWidget(statusBox);
 
     // ── Event name / Go live ─────────────────────────────────────────────────
@@ -599,11 +603,40 @@ void EncoderDock::refresh() {
         }
     };
 
+    // The disk the durable spool lives on, whether idle or live: a nearly-full
+    // drive is worth knowing before Go Live, not just when the cap starts
+    // dropping queued segments (see SessionConfig::max_spool_bytes).
+    auto showDisk = [&] {
+        if (!m_disk) return;
+        if (!st.disk_known) {
+            m_disk->setText(QString("—"));
+            m_disk->setStyleSheet(QString());
+            return;
+        }
+        QString free = QString::number(
+            st.disk_free_bytes / (1024.0 * 1024.0 * 1024.0), 'f', 1) + " GB";
+        switch (st.disk_health) {
+            case 0:
+                m_disk->setText(tr_("Dock.DiskHealthy") + " (" + free + ")");
+                m_disk->setStyleSheet("color: #35c489;");
+                break;
+            case 1:
+                m_disk->setText(tr_("Dock.DiskLow") + " (" + free + ")");
+                m_disk->setStyleSheet("color: #e0a020;");
+                break;
+            default:
+                m_disk->setText(tr_("Dock.DiskCritical") + " (" + free + ")");
+                m_disk->setStyleSheet("color: #e5484d;");
+                break;
+        }
+    };
+
     if (!st.live) {
         m_state->setText(tr_("Dock.Idle"));
         m_state->setStyleSheet("font-weight: bold; color: palette(mid);");
         m_uptime->setText("—");
         showLink(false);
+        showDisk();
         // The idle probe's colo and host, so the operator can see where the
         // bucket answers from before they go live.
         if (m_storage)
@@ -639,6 +672,7 @@ void EncoderDock::refresh() {
     m_data->setText(QString::number(st.bytes / (1024.0 * 1024.0), 'f', 0) + " MB");
 
     showLink(true);
+    showDisk();
 
     if (!st.last_error.empty()) {
         m_error->setText(QString::fromStdString(st.last_error));

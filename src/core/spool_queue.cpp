@@ -20,9 +20,17 @@ static std::string seq_name(uint64_t seq) {
     return b;
 }
 
-SpoolQueue::SpoolQueue(std::string dir) : m_dir(std::move(dir)) {
+SpoolQueue::SpoolQueue(std::string dir, uint64_t max_bytes)
+    : m_dir(std::move(dir)), m_max_bytes(max_bytes) {
     fs::create_directories(m_dir);
     load_state();
+    // Recompute pending bytes from what's actually on disk (not persisted:
+    // trivial to get wrong across a crash, trivial to recompute here).
+    for (uint64_t seq : pending_seqs()) {
+        std::error_code ec;
+        auto sz = fs::file_size(seg_path(seq), ec);
+        if (!ec) m_bytes_pending += sz;
+    }
 }
 
 std::string SpoolQueue::seg_path(uint64_t seq) const {
@@ -118,6 +126,7 @@ void SpoolQueue::begin_event(const std::string& event_id, uint64_t first_seq) {
     m_state.last_confirmed= first_seq > 0 ? first_seq - 1 : 0;
     m_state.ended         = false;
     m_state.valid         = true;
+    m_bytes_pending       = 0;
     save_state();
 }
 
@@ -129,25 +138,51 @@ void SpoolQueue::resume_event() {
 }
 
 std::string SpoolQueue::enqueue(SpooledSegment seg) {
-    std::lock_guard<std::mutex> lk(m_mtx);
-    seg.checksum = sha256_hex(seg.data);
+    std::vector<SpoolDrop> drops;
+    std::string checksum;
+    {
+        std::lock_guard<std::mutex> lk(m_mtx);
+        seg.checksum = sha256_hex(seg.data);
+        checksum = seg.checksum;
 
-    // 1) segment bytes (atomic)
-    atomic_write(seg_path(seg.seq), seg.data.data(), seg.data.size());
-    // 2) sidecar meta (atomic) — written AFTER the bytes so a crash between the
-    //    two leaves an orphan .seg with no .meta, which drain skips safely.
-    json m;
-    m["seq"]          = seg.seq;
-    m["duration_s"]   = seg.duration_s;
-    m["pts_offset_s"] = seg.pts_offset_s;
-    m["checksum"]     = seg.checksum;
-    m["key"]          = seg.key;
-    std::string ms = m.dump();
-    atomic_write(meta_path(seg.seq), ms.data(), ms.size());
+        // 1) segment bytes (atomic)
+        atomic_write(seg_path(seg.seq), seg.data.data(), seg.data.size());
+        // 2) sidecar meta (atomic) — written AFTER the bytes so a crash between
+        //    the two leaves an orphan .seg with no .meta, which drain skips
+        //    safely.
+        json m;
+        m["seq"]          = seg.seq;
+        m["duration_s"]   = seg.duration_s;
+        m["pts_offset_s"] = seg.pts_offset_s;
+        m["checksum"]     = seg.checksum;
+        m["key"]          = seg.key;
+        std::string ms = m.dump();
+        atomic_write(meta_path(seg.seq), ms.data(), ms.size());
 
-    if (seg.seq > m_state.last_enqueued) m_state.last_enqueued = seg.seq;
-    save_state();
-    return seg.checksum;
+        if (seg.seq > m_state.last_enqueued) m_state.last_enqueued = seg.seq;
+        m_bytes_pending += seg.data.size();
+
+        // Over the disk cap: drop the OLDEST unconfirmed segments (never the
+        // one just written) until back under it, or only one is left.
+        if (m_max_bytes > 0) {
+            auto pend = pending_seqs();
+            size_t i = 0;
+            while (m_bytes_pending > m_max_bytes && pend.size() - i > 1) {
+                uint64_t victim = pend[i];
+                if (victim == seg.seq) break; // never evict what we just wrote
+                m_bytes_pending -= evict_locked(victim, drops);
+                ++i;
+            }
+        }
+        save_state();
+    }
+    // Fire the callback with no lock held: it may call back into code that
+    // takes a caller-owned mutex (e.g. to update a manifest), and this lock is
+    // already held by callers elsewhere (pending_count/state) in a different
+    // order — invoking it here would risk the exact AB/BA deadlock this
+    // codebase has been bitten by before.
+    if (m_on_drop) for (const auto& d : drops) m_on_drop(d);
+    return checksum;
 }
 
 std::optional<SpooledSegment> SpoolQueue::peek_next() const {
@@ -174,9 +209,34 @@ std::optional<SpooledSegment> SpoolQueue::peek_next() const {
     return std::nullopt;
 }
 
+uint64_t SpoolQueue::evict_locked(uint64_t seq, std::vector<SpoolDrop>& out) {
+    std::error_code ec;
+    uint64_t freed = 0;
+    auto sz = fs::file_size(seg_path(seq), ec);
+    if (!ec) freed = sz;
+    fs::remove(seg_path(seq), ec);
+    fs::remove(meta_path(seq), ec);
+    if (seq + 1 > m_state.first_seq) m_state.first_seq = seq + 1;
+    m_dropped_count++;
+    out.push_back(SpoolDrop{ seq, m_state.first_seq });
+    return freed;
+}
+
+uint64_t SpoolQueue::bytes_pending() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_bytes_pending;
+}
+
+uint64_t SpoolQueue::floor() const {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    return m_state.first_seq;
+}
+
 void SpoolQueue::confirm(uint64_t seq) {
     std::lock_guard<std::mutex> lk(m_mtx);
     std::error_code ec;
+    auto sz = fs::file_size(seg_path(seq), ec);
+    if (!ec && sz <= m_bytes_pending) m_bytes_pending -= sz;
     fs::remove(seg_path(seq), ec);
     fs::remove(meta_path(seq), ec);
     if (seq > m_state.last_confirmed) m_state.last_confirmed = seq;

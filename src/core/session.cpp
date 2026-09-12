@@ -37,7 +37,8 @@ static std::string seq_name(uint64_t seq) {
 
 Session::Session(SessionConfig cfg, Transport& transport)
     : m_cfg(std::move(cfg)), m_tx(transport) {
-    m_spool = std::make_unique<SpoolQueue>(m_cfg.spool_dir);
+    m_spool = std::make_unique<SpoolQueue>(m_cfg.spool_dir, m_cfg.max_spool_bytes);
+    m_spool->set_drop_callback([this](const SpoolDrop& d) { on_dropped(d); });
 
     UploaderConfig ucfg;
     ucfg.content_type = "video/mp4";
@@ -221,6 +222,22 @@ void Session::on_confirmed(const SpooledSegment& seg) {
   }
 }
 
+// A segment was dropped from the local spool for disk space, before it could
+// ever be uploaded (see SessionConfig::max_spool_bytes). Nothing here may
+// touch the network: this runs on the encode thread via SpoolQueue's drop
+// callback, and publish_segment() is documented to never block on it. The
+// advanced floor is folded into whichever manifest publish happens next
+// (on_confirmed, or end()) rather than sent immediately.
+void Session::on_dropped(const SpoolDrop& d) {
+    std::lock_guard<std::mutex> lk(m_mtx);
+    if (d.new_floor > m_manifest.first_available_seq)
+        m_manifest.first_available_seq = d.new_floor;
+    ++m_dropped_total;
+    m_last_error = "local spool cap reached: dropped queued segment " +
+                   std::to_string(d.seq) + " before it could be uploaded "
+                   "(upload link has been down or overwhelmed for too long)";
+}
+
 uint64_t Session::bytes_uploaded() const {
     return m_uploader ? m_uploader->stats().bytes.load() : 0;
 }
@@ -282,6 +299,7 @@ Session::Status Session::status() const {
     s.verify_failures = m_uploader->stats().verify_failures.load();
     s.verify_note     = m_uploader->last_verify_note();
     s.health          = m_uploader->health();
+    s.dropped_for_disk = m_dropped_total;
     return s;
 }
 

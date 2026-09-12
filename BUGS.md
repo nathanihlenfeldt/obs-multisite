@@ -201,6 +201,37 @@ which is point 2 above.
 
 ---
 
+### 4. Decoder cache: a crash mid-event leaves an orphaned event directory
+
+**Status: known gap, not fixed. Low priority — costs disk slowly, not
+correctness.**
+
+Found while auditing what manages local cache storage on the decoder side
+(`src/core/segment_cache.cpp`) and on the Pi appliance, which shares the same
+core. `SegmentCache::set_event()` deletes the *previous* event's whole
+directory whenever the followed/pinned event changes cleanly
+(`segment_cache.cpp:56-66`), and `prune_below()`/the segment-count ceiling keep
+the *current* event's directory bounded. Neither ever revisits the top-level
+`cache/` directory to look for a subdirectory left behind by an event that was
+never cleanly switched away from — a crash, a force-kill, or power loss
+mid-event. `build_index_locked()` only ever scans the *current* event's own
+folder (`segment_cache.cpp:29-40`), so an orphaned sibling directory is simply
+invisible to everything that would otherwise prune it.
+
+Consequence: on a machine that crashes mid-event occasionally (which is
+exactly the Pi appliance, unattended in the field), disk usage creeps up by
+one orphaned event's worth of segments per crash, forever. Not a correctness
+bug — nothing serves stale data, nothing stalls — just a slow, silent leak.
+
+**Fix shape:** on `DecoderSession`/appliance startup, list the subdirectories
+of the cache root and remove any that are not the currently-pinned/followed
+event's directory. Small, self-contained, no protocol change.
+
+**Files:** `src/core/segment_cache.h/.cpp`, `src/core/decoder_session.cpp`
+(construction / `set_event`), `src/appliance/player.cpp` (startup).
+
+---
+
 ## Recently landed (context, not action items)
 
 - **The silence that the idle keep-alive writes was not silence, and Stop stopped
@@ -234,6 +265,46 @@ which is point 2 above.
   frames rather than holding them for the next play, and the status line reports
   the operator's state first. Hold deliberately keeps its queue (Continue resumes
   in place); Stop deliberately discards it.
+
+- **The encoder's local spool is now capped, and a low disk warns before it
+  matters.** Auditing cache/spool lifecycle across the encoder, decoder and
+  Pi appliance found one real gap: `RetryUploader` retries forever by design
+  (`max_attempts = 0`), and the durable spool it drains from had no size cap
+  at all — a long or badly degraded upload link filled the encoder machine's
+  disk with unconfirmed segments, unbounded. (The decoder/Pi side was already
+  fine — `keep_behind_segments` + `max_cached_segments` bound it on two
+  independent axes; see entry 4 above for the one gap found there.)
+
+  `SessionConfig::max_spool_bytes` (default 4 GiB, 0 = old unlimited
+  behaviour) now bounds it: `SpoolQueue::enqueue()` drops the OLDEST
+  unconfirmed segment when over the cap — never the one just written, so
+  progress never stalls — and advances a floor (`SpoolQueue::floor()` /
+  `Manifest::first_available_seq`) past whatever it drops. That floor is what
+  keeps this safe: the decoder's playback loop had a deliberate rule to hold
+  position on a missing segment rather than ever skip one silently
+  (`decoder_session.cpp`, "nothing is silently dropped from the programme"),
+  and a naive drop-oldest would have made a viewer or a Pi player stall on a
+  dropped segment forever. `next_segment()` now treats a head below the
+  encoder's declared floor as a directive to jump forward (raising a
+  discontinuity, same as a seek) rather than as an ordinary gap — the two
+  cases are counted separately (`Stats::gap_skips` vs. `gaps_waited`). A
+  second race this exposed: the uploader could already be mid-retry on
+  exactly the segment about to be evicted; `RetryUploader::upload_one` now
+  checks `SpoolQueue::floor()` on every attempt so a stale retry can't
+  resurrect a dropped segment into the manifest after the fact.
+
+  A new `src/core/disk_health.h` (pure threshold arithmetic, no syscalls —
+  same split as `storage_health.h` for the network) backs a live low-disk
+  reading on both ends: the encoder dock's new "Local disk" row (checked
+  whether idle or live, so it is visible before Go Live) and the Pi's `This
+  box` page / operator-interface warning banner, using the free-space number
+  the appliance already had (`sysinfo.cpp`'s `statvfs` call) rather than a new
+  syscall. Tests: `tests/test_disk_health.cpp`, plus new cases in
+  `test_reliability.cpp`, `test_session.cpp` and `test_decoder.cpp` (34
+  tests total pass). Not verified: the Qt/OBS dock UI compiles by inspection
+  and matches the existing `m_link` row's pattern exactly, but was not
+  built — this machine has no libobs/Qt6 SDK, and standing one up needs the
+  obs-deps download described in `docs/DEVELOPER.md`.
 
 - **The sound card is opened at the right width, stays open, and is metered.**
   Three faults that all presented as a silent room, and none of which said so.

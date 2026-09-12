@@ -235,6 +235,11 @@ public:
         uint64_t checksum_failures = 0;
         uint64_t served = 0;
         uint64_t gaps_waited = 0;
+        // Segments the encoder itself declared permanently gone (dropped from
+        // its local spool under disk pressure) that playback skipped past,
+        // rather than waiting on forever. Distinct from gaps_waited, which is
+        // the ordinary "not published yet" case.
+        uint64_t gap_skips = 0;
     };
     const Stats& stats() const { return m_stats; }
 

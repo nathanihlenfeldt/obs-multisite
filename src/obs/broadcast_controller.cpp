@@ -4,6 +4,7 @@
 #include "multisite_ui.h"
 
 #include "../core/link_health.h"
+#include "../core/disk_health.h"
 #include "../core/model.h"
 #include "../core/s3_transport.h"
 
@@ -12,6 +13,7 @@
 #include <algorithm>
 #include <atomic>
 #include <chrono>
+#include <filesystem>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -397,9 +399,39 @@ void BroadcastController::release_all() {
     m_started_ns = 0;
 }
 
+// Same computation as multisite_output.cpp's out_start(): the durable spool
+// lives beside OBS's own plugin config. Kept in sync deliberately rather than
+// shared, since the two call sites otherwise have nothing else in common.
+static std::string spool_dir_path() {
+    char* cfgdir = obs_module_config_path("spool");
+    std::string dir = cfgdir ? cfgdir : "./multisite_spool";
+    bfree(cfgdir);
+    return dir;
+}
+
 BroadcastStatus BroadcastController::status() const {
     BroadcastStatus st;
     st.live = m_output != nullptr;
+
+    // Checked regardless of live/idle: a full disk is worth knowing about
+    // before Go Live, not just discovered mid-event. The directory itself is
+    // only created when a Session first starts, so on a machine that has
+    // never gone live yet, create it here too rather than showing "—" until
+    // the first broadcast.
+    {
+        std::string dir = spool_dir_path();
+        std::error_code ec;
+        auto sp = std::filesystem::space(dir, ec);
+        if (ec) {
+            std::filesystem::create_directories(dir, ec);
+            sp = std::filesystem::space(dir, ec);
+        }
+        if (!ec) {
+            st.disk_known      = true;
+            st.disk_free_bytes = (unsigned long long)sp.available;
+            st.disk_health     = (int)multisite::classify_disk_free(sp.available);
+        }
+    }
     if (st.live) {
         st.bytes = obs_output_get_total_bytes(m_output);
         st.uptime_s = m_started_ns

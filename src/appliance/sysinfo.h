@@ -60,6 +60,10 @@ struct DiskInfo {
     // 3 GB an hour and will wear an SD card out, so it matters whether the
     // cache is on one.
     bool        is_sd_card = false;
+    // "healthy" | "low" | "critical" — see multisite::classify_disk_free().
+    // A box in the field has no screen worth reading, so this has to be
+    // caught over the web UI rather than noticed as a stalled event.
+    std::string health = "healthy";
 };
 DiskInfo disk_info(const std::string& path);
 

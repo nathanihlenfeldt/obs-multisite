@@ -822,6 +822,11 @@ async function loadSystem() {
   if (s.disk && s.disk.is_sd_card)
     warnings.push('The cache is on the SD card, which it will wear out. ' +
                   'Move it to a USB SSD.');
+  if (s.disk && s.disk.health === 'critical')
+    warnings.push(`The cache disk is almost full (${bytes(s.disk.free_bytes)} free). ` +
+                  'Free up space or move the cache to a bigger drive.');
+  else if (s.disk && s.disk.health === 'low')
+    warnings.push(`The cache disk is getting low (${bytes(s.disk.free_bytes)} free).`);
   if (warnings.length) notify(warnings.join(' '), true);
 
   $('#s-ntp').value = String(!!s.time.ntp_enabled);
