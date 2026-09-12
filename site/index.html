@@ -268,10 +268,12 @@
 
       <div class="card">
         <div class="ico"><svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M12 3v12"/><circle cx="12" cy="18" r="3"/><path d="M12 3a6 6 0 0 1 6 6M12 6a3 3 0 0 1 3 3"/></svg></div>
-        <h3>AES67 audio on the network</h3>
-        <p>The Pi appliance can put its sound onto the network as an AES67
-        stream instead of leaving it inside the HDMI picture, so the campus
-        console takes the feed whether or not a screen is attached.</p>
+        <h3>AES67 audio, straight into Dante</h3>
+        <p>The Pi appliance can put its sound on the network as an eight-channel
+        AES67 stream rather than leaving it inside the HDMI picture &mdash; so it
+        appears in <strong>Dante Controller</strong> and routes to any Dante
+        device, or to a console that takes AES67 directly. Open RAVENNA stack,
+        one script.</p>
       </div>
 
       <div class="card">
@@ -358,7 +360,9 @@
         <p>Six audio tracks arrive in the same download &mdash; programme mix,
         mic ISOs, a click for the local band to play to. The campus engineer
         mixes them in the room rather than taking whatever the main site's
-        stereo bus happened to be doing.</p>
+        stereo bus happened to be doing. From the Pi appliance they can leave
+        as AES67 and land in a Dante network, so the console takes them over
+        the same cable as everything else.</p>
       </div>
 
       <div class="case">

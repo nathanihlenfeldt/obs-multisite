@@ -232,10 +232,29 @@
     <a href="https://github.com/stageaudioworks/companion-module-obs-multisite">Companion
     module</a>, which speaks to it directly over HTTP &mdash; no OBS involved at
     the far end at all.</p>
-    <p>It can also put its sound onto the network as
+    <h3 style="margin-top:34px">Putting the sound on the network</h3>
+    <p>By default the Pi's audio leaves on the HDMI socket with the picture, so
+    it reaches whatever is plugged into the Pi and nothing else. A second script
+    puts it on the network as an eight-channel
     <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/SATELLITE.md#aes67-audio-on-the-network">AES67</a>
-    rather than leaving it inside the HDMI picture, so the campus console takes
-    the feed with or without a screen attached. The same script sets it up.</p>
+    stream instead &mdash; where it appears in <strong>Dante Controller</strong>
+    and routes to any Dante device, or to a console that takes AES67 directly:</p>
+<pre><code>curl -fsSL \
+  https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/merging-aes67.sh \
+  | sudo bash</code></pre>
+    <p>It builds an open RAVENNA stack from source, so give it a few minutes.
+    It leaves the player on HDMI until you move it deliberately with
+    <code>--point-player</code>, so the install can be proven before anything
+    the congregation sees is touched.</p>
+    <div class="callout">
+      <p><strong>A PTP master has to exist on the network, or nothing flows.</strong>
+      The daemon slaves to a clock; it does not hand one out. A Dante device, a
+      console or an Anubis can be that master &mdash; with none of them, the
+      stream stays silent. This is the most likely reason for quiet after a
+      clean install, and it is a network question rather than a fault.</p>
+    </div>
+    <p>The route from the Pi's source to a receiver is still made by hand in
+    Dante Controller. Test against the real Dante hardware the site will use.</p>
     <p>Which to choose for a given room &mdash; PC or appliance &mdash; is set
     out in
     <a href="https://github.com/stageaudioworks/obs-multisite/blob/main/docs/SATELLITE.md">Choosing
