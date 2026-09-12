@@ -2295,6 +2295,48 @@ struct TileCtx {
     int      projector = 0;
 };
 
+// The room field on a companion source, but only when it has a job to do.
+//
+// Blank already means "whatever room the Multisite Source is following", which
+// is the answer in every room that runs one decoder — so the field spends most
+// of its life empty, inviting exactly the question "what do I put here?" and
+// occasionally getting an answer that breaks the source. The same rule the
+// encoder dock applies to the audio label fields applies here: show it only
+// when it applies.
+//
+// It applies when there is more than one room being followed on this machine
+// and the companion therefore has to say which. It also applies when this
+// source already carries a room that is NOT the one being followed — hiding
+// that would leave a source pointing somewhere wrong with no way to correct it.
+static void add_companion_room_field(obs_properties_t* p,
+                                     const std::string& current) {
+    std::vector<std::string> rooms;
+    {
+        std::lock_guard<std::mutex> lk(g_owners_mtx);
+        for (auto* o : g_owners) {
+            const std::string& r = o->room_id_for_display;
+            if (r.empty()) continue;
+            if (std::find(rooms.begin(), rooms.end(), r) == rooms.end())
+                rooms.push_back(r);
+        }
+    }
+    const bool several   = rooms.size() > 1;
+    const bool overriden = !current.empty() &&
+                           (rooms.size() != 1 || current != rooms.front());
+    if (several || overriden) {
+        obs_properties_add_text(p, S_ROOM, obs_module_text("RoomID"),
+                                OBS_TEXT_DEFAULT);
+        return;
+    }
+    // One room, and this source follows it. Say which, rather than ask.
+    const std::string room = rooms.empty() ? decoder_settings().room_id
+                                           : rooms.front();
+    const std::string note =
+        std::string(obs_module_text("Companion.Following")) + " " +
+        (room.empty() ? std::string(obs_module_text("Companion.NoRoom")) : room);
+    obs_properties_add_text(p, "room_note", note.c_str(), OBS_TEXT_INFO);
+}
+
 static const char* aud_name(void*) {
     return obs_module_text("Multisite.AudioSource");
 }
@@ -2346,7 +2388,10 @@ static obs_properties_t* aud_props(void* data) {
     obs_properties_t* p = obs_properties_create();
     obs_properties_add_text(p, "audio_note",
                             obs_module_text("AudioSourceNote"), OBS_TEXT_INFO);
-    obs_properties_add_text(p, S_ROOM, obs_module_text("RoomID"), OBS_TEXT_DEFAULT);
+    {
+        auto* c = static_cast<AudioCtx*>(data);
+        add_companion_room_field(p, c ? c->sub.room_id : std::string());
+    }
 
     // Track names come from whichever Multisite Source is following this room.
     std::vector<AudioTrack> layout;
@@ -2459,7 +2504,10 @@ static obs_properties_t* tile_props(void* data) {
     obs_properties_t* p = obs_properties_create();
     obs_properties_add_text(p, "tile_note",
                             obs_module_text("TileSourceNote"), OBS_TEXT_INFO);
-    obs_properties_add_text(p, S_ROOM, obs_module_text("RoomID"), OBS_TEXT_DEFAULT);
+    {
+        auto* c = static_cast<TileCtx*>(data);
+        add_companion_room_field(p, c ? c->sub.room_id : std::string());
+    }
 
     // The list is built from the layout the feed actually declares, so an
     // operator picks "top-left" from four rather than typing an index and
