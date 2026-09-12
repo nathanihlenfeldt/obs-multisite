@@ -19,6 +19,10 @@ docker run -d --name multisite-relay \
   ghcr.io/stageaudioworks/multisite-relay:latest
 ```
 
+`:latest` follows `main` and is rebuilt whenever the relay changes; tagged
+releases also get a `vX.Y.Z` image. `relay/` builds the same image locally if
+you would rather not pull it.
+
 Then open it in a browser, put in the bucket details, and add a destination.
 A $5/month VPS is the target rather than a stretch, because nothing is being
 re-encoded.

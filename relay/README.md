@@ -154,6 +154,11 @@ docker run -d --name multisite-relay \
   ghcr.io/stageaudioworks/multisite-relay:latest
 ```
 
+`:latest` is rebuilt on every change to the relay and follows `main`; a
+`vX.Y.Z` tag is published alongside it whenever a release is tagged. To run
+something you built yourself instead, `docker compose up -d --build` in this
+directory builds the same image locally.
+
 Then open `http://your-server:8080`, put the bucket details on the Settings
 page, and add a destination.
 

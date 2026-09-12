@@ -8,7 +8,9 @@ services:
     build:
       context: ..
       dockerfile: relay/Dockerfile
-    # Or, once there is a published image:
+    # Published on every change to the relay: :latest tracks main, and a
+    # vX.Y.Z tag is published alongside it when one is cut. Uncomment to pull
+    # it rather than build here.
     # image: ghcr.io/stageaudioworks/multisite-relay:latest
     restart: unless-stopped
     # THIS LINE is what decides who can reach the relay, not anything inside

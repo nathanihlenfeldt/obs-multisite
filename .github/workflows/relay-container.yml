@@ -26,6 +26,13 @@ on:
 jobs:
   container:
     runs-on: ubuntu-latest
+    # The build below is the same one a pull request runs, so a PR still only
+    # proves the image is sound — nothing is published from one. Writing to the
+    # registry has to be granted explicitly: the token is otherwise read-only,
+    # and the push fails with the same "denied" a user sees when pulling.
+    permissions:
+      contents: read
+      packages: write
     steps:
       - uses: actions/checkout@v5
 
@@ -129,6 +136,41 @@ jobs:
             || { echo "::error::The container fell over during the checks."; docker logs relay-ci; exit 1; }
           echo "--- container log ---"
           docker logs relay-ci
+
+      # Only publish what was just proven to answer, and only from a branch or
+      # tag that is meant to be reachable — never from a pull request, whose
+      # token has no package access anyway. The image that is pushed is the one
+      # the checks above ran against, not a rebuild of it.
+      #
+      # The package defaults to PRIVATE on first push, and an anonymous pull of
+      # a private package fails with the same "denied" this step fixes for the
+      # publisher. Making it public (Packages -> multisite-relay -> Package
+      # settings -> Change visibility) is what lets the documented
+      # `docker run ghcr.io/...` work for everyone else.
+      - name: Log in to the registry
+        if: github.event_name == 'push'
+        run: |
+          echo "${{ github.token }}" | docker login ghcr.io \
+            -u "${{ github.actor }}" --password-stdin
+
+      - name: Publish
+        if: github.event_name == 'push'
+        run: |
+          set -euo pipefail
+          # GHCR rejects uppercase in an image path, so derive the name and
+          # lower-case it rather than hard-coding a value a rename would break.
+          IMAGE="ghcr.io/${{ github.repository_owner }}/multisite-relay"
+          IMAGE=$(echo "$IMAGE" | tr '[:upper:]' '[:lower:]')
+          # The name is multisite-relay, not obs-multisite: it is what the docs
+          # tell people to pull, so it is what must be pushed.
+          docker tag multisite-relay:ci "${IMAGE}:latest"
+          docker push "${IMAGE}:latest"
+          # A v* tag is a release, so give it an immutable tag of its own too.
+          # An ordinary push to main only refreshes latest.
+          if [[ "${GITHUB_REF}" == refs/tags/* ]]; then
+            docker tag multisite-relay:ci "${IMAGE}:${GITHUB_REF_NAME}"
+            docker push "${IMAGE}:${GITHUB_REF_NAME}"
+          fi
 
       - name: Stop it
         if: always()
