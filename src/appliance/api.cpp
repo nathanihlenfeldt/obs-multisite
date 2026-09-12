@@ -86,6 +86,12 @@ json status_json(const Player& player) {
     j["audio_description"]  = s.audio_description;
     j["video_output_ok"]    = s.video_output_ok;
     j["audio_output_ok"]    = s.audio_output_ok;
+    // "closed" / "open" / "failed", plus the card's own message when it is the
+    // last of those. Sent as a word rather than three booleans because the three
+    // mean different things to somebody looking at the page: for Closed the
+    // answer is "switch it on", for Failed it is "go and look at the card".
+    j["audio_state"]        = s.audio_state;
+    j["audio_error"]        = s.audio_error;
 
     json spans = json::array();
     for (const auto& sp : s.cached_spans)
@@ -488,14 +494,36 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
                                     {"modes", std::move(modes)}});
         }
         json devices = json::array();
-        for (const auto& a : player.audio().devices())
+        const std::string net_card = aes67_card_device(kAes67CardName);
+        const Config cfg = player.config();
+        for (const auto& a : player.audio().devices()) {
+            // Marked so the page can say why one of them cannot be chosen: this
+            // is the card the AES67 daemon reads, so it is the one device whose
+            // selection is owned by the network output rather than by whoever
+            // is looking at the settings page.
+            const bool net = !net_card.empty() && a.id == net_card;
             devices.push_back(json{{"id", a.id},
                                    {"description", a.description},
-                                   {"max_channels", a.max_channels}});
+                                   {"max_channels", a.max_channels},
+                                   {"locks_audio_device", net}});
+        }
+        // While the network output is on, the device is not the operator's to
+        // choose: the sound has to be on the AES67 card, because that is what
+        // the stream publishes. The page disables the picker and needs to say
+        // *why*, and it must not send a device either — a disabled picker still
+        // has a value, and saving that value is what silently moved the sound
+        // off the card while the stream stayed switched on.
+        const bool locked = cfg.aes67_manage;
         res.json(json{{"displays", std::move(displays)},
                       {"audio_devices", std::move(devices)},
                       {"display_in_use", player.video().description()},
-                      {"audio_in_use", player.audio().description()}}.dump());
+                      {"audio_in_use", player.audio().description()},
+                      {"audio_device_locked", locked},
+                      {"audio_device_lock_reason", locked
+                           ? std::string("the network audio output is on: the "
+                                         "sound goes to the AES67 card because "
+                                         "that is the card the stream publishes")
+                           : std::string()}}.dump());
     });
 
     // ── The box ──────────────────────────────────────────────────────────────
@@ -817,6 +845,30 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         res.json(aes67_json(aes67_state()).dump());
     });
 
+    // What the sound card is being given, channel by channel.
+    //
+    // Taken where the samples leave the player rather than where they arrive
+    // from the network, so a muted box and a card that will not open both read
+    // as silence — and `reason` says which of the several causes it is. Polled
+    // rather than streamed, and polled by the page only while its meters are on
+    // screen: a bar meter at two readings a second is a bar meter, and a
+    // websocket for it would be a second protocol to keep working for no
+    // visible gain.
+    server.route("GET", "/api/audio/levels", [&player](const HttpRequest&,
+                                                      HttpResponse& res) {
+        const AudioMeterView m = player.audio_meter();
+        json peak = json::array();
+        for (float v : m.peak) peak.push_back(v);
+        json db = json::array();
+        for (float v : m.db) db.push_back(v);
+        res.json(json{{"channels", (int)m.peak.size()},
+                      {"peak", std::move(peak)},
+                      {"db", std::move(db)},
+                      {"live", m.live},
+                      {"reason", to_string(m.reason)},
+                      {"reason_text", m.reason_text}}.dump());
+    });
+
     // The operator's switch, and the address and width it publishes. One route
     // because they are one decision: asking for the sound on the network means
     // asking for a stream of a given width at a given address, and doing it in a
@@ -826,6 +878,13 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
                  [&player, config_path, aes67_state, aes67_json, aes67_locked](
                      const HttpRequest& req, HttpResponse& res) {
         if (aes67_locked(res)) return;
+
+        // Held while the source is rewritten, against the reconciler's own
+        // pass, which takes the same lock. This is an operator saying what they
+        // want, and a repair that was already in flight must not land a moment
+        // later and undo it — switching the stream off and having it come back
+        // on by itself is the worst possible answer to a deliberate act.
+        std::lock_guard<std::mutex> lk(player.aes67_mutex());
 
         const json body = body_json(req);
         Config updated = player.config();
@@ -844,18 +903,28 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         // written to the AES67 card, so if the player is sending the sound
         // anywhere else, the stream is silent however healthy it looks — and
         // that is the state this moves rather than warns about.
-        const std::string card = aes67_card_device(kAes67CardName);
+        //
+        // The card is not named here: it is asked for by name and the box's own
+        // device list is asked which ALSA id that is, through the same helper
+        // the reconciler uses. Guessing an id is how the setting came to name a
+        // device the box does not have.
+        const std::string net_card = aes67_card_device(kAes67CardName);
+        std::vector<std::string> alsa_ids;
+        for (const auto& d : player.audio().devices()) alsa_ids.push_back(d.id);
+        const std::string want =
+            aes67_pick_alsa_device(updated.alsa_device, net_card, alsa_ids);
         if (enabled) {
-            if (!card.empty() && updated.alsa_device != card) {
+            if (!net_card.empty() && updated.alsa_device != want) {
                 // Remember where the room's sound was, so that switching this
                 // off puts it back there rather than guessing.
                 updated.aes67_previous_device = updated.alsa_device;
-                updated.alsa_device = card;
+                updated.alsa_device = want;
             }
-        } else if (updated.alsa_device.find(kAes67CardName) !=
-                   std::string::npos) {
+        } else if (aes67_device_is_card(updated.alsa_device, kAes67CardName)) {
             // Only if the sound is actually on that card: a box somebody has
-            // already pointed at HDMI deliberately must be left alone.
+            // already pointed at HDMI deliberately must be left alone. The
+            // comparison is a card comparison, not a substring search —
+            // "RAVENNA2" is a different card and must not be moved.
             updated.alsa_device = updated.aes67_previous_device.empty()
                                       ? std::string("default")
                                       : updated.aes67_previous_device;
@@ -881,7 +950,7 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         const std::string name = "Multisite " + hostname();
 
         std::string problem;
-        if (enabled && card.empty()) {
+        if (enabled && net_card.empty()) {
             // Said rather than done. Pointing the player at a card that is not
             // registered would silence the room for a stream that could not have
             // worked anyway, so the sound is left where it was and the reason is
@@ -916,9 +985,14 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
     // an operator's: stopping it takes the whole stack down, including anything
     // else that has been aimed at this box's streams.
     server.route("POST", "/api/aes67/service",
-                 [aes67_state, aes67_json, aes67_locked](
+                 [&player, aes67_state, aes67_json, aes67_locked](
                      const HttpRequest& req, HttpResponse& res) {
         if (aes67_locked(res)) return;
+
+        // The same lock the reconciler takes. Stopping the daemon is a
+        // deliberate act and must not be undone four seconds later by a watch
+        // that noticed it was down.
+        std::lock_guard<std::mutex> lk(player.aes67_mutex());
 
         const json body = body_json(req);
         const bool start = flag_param(req, body, "start", true);

@@ -175,7 +175,7 @@ int main(int argc, char** argv) {
         }
     }
 
-    Player player(cfg, *video, *audio);
+    Player player(cfg, *video, *audio, config_path);
     player.start();
 
     HttpServer server(cfg.web_bind, cfg.web_port);

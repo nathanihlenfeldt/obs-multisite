@@ -351,6 +351,28 @@ add_executable(test_pcm_convert tests/test_pcm_convert.cpp)
 target_include_directories(test_pcm_convert PRIVATE src/appliance)
 add_test(NAME pcm_convert COMMAND test_pcm_convert)
 
+# The sound meter, tapped where the samples are handed to the card rather than
+# where they arrive from the network — because on this box "is there audio?" is
+# a property of what the card was given, and a muted box, a card that would not
+# open and a genuinely silent event have to be told apart. Same reasoning as
+# pcm_convert above for why the arithmetic lives in a header with no ALSA in it:
+# a peak that misses the negative half of a waveform, a channel one slot over, a
+# NaN read as full scale and a window that never closes are all faults that need
+# no sound card to find.
+add_executable(test_audio_levels tests/test_audio_levels.cpp)
+target_include_directories(test_audio_levels PRIVATE src/appliance)
+add_test(NAME audio_levels COMMAND test_audio_levels)
+
+# How wide the sound card is opened. One function, and it is a test of its own
+# because getting it wrong is invisible: the card opens, it reports success, the
+# stream is published, and the sound is simply in the wrong places. A box opened
+# its card with the two-channel fallback before any feed had arrived, and "follow
+# the feed" then latched that two-channel stream against an eight-channel feed.
+# No ALSA, no config file, no clock, so this runs on a laptop with no card in it.
+add_executable(test_audio_plan tests/test_audio_plan.cpp)
+target_include_directories(test_audio_plan PRIVATE src/appliance)
+add_test(NAME audio_plan COMMAND test_audio_plan)
+
 # The AES67 daemon's REST interface, as shapes: the source body the player
 # sends, the JSON it reads back, and the SDP the daemon publishes. All text, all
 # easy to get quietly wrong — a channel map naming the wrong eight channels is

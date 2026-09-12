@@ -203,6 +203,32 @@ which is point 2 above.
 
 ## Recently landed (context, not action items)
 
+- **The sound card is opened at the right width, stays open, and is metered.**
+  Three faults that all presented as a silent room, and none of which said so.
+  **The width** was the worst: a box with the network audio output on opened its
+  card with the two-channel fallback before any feed had arrived, and "follow the
+  feed" then latched that two-channel stream against an eight-channel feed — every
+  listener heard channels 0 and 1 of eight for the life of the process, with
+  nothing logged, because nothing had failed. The width is now decided in one
+  place (`src/appliance/audio_plan.h`), and with nothing to go on the answer is
+  "not yet" rather than a guess. On the network it is the width being published,
+  so the card and the stream cannot disagree. **The mute** closed the card, which
+  on an AES67 box takes the stream off the air — receivers dropped it and
+  un-muting did not bring it back until they re-subscribed. Muting now writes
+  silence to a card that stays open. **Nothing kept an enabled stream up**: a
+  stopped daemon, a card the sound had drifted off, a source the daemon had
+  forgotten, and the switch did none of it again. There is now a reconcile pass on
+  its own thread, sharing a lock with the interface's switch so a stream somebody
+  deliberately switched off cannot come back on air by itself. All three are
+  invisible from the feed, so the new meters are tapped where the samples are
+  handed to the card rather than where they arrive: the bars fall for a mute, a
+  card that would not open and a silent event alike, and the reason under them
+  names which — in the same words the status readout uses, so the two cannot
+  disagree. The panel is drawn at the card's width, not the feed's. Status gains
+  the audio state as a word (closed / open / failed) and the card's own message.
+  The arithmetic lives in headers with no ALSA in them, so it is checked on a
+  laptop with no card: `tests/test_audio_plan.cpp`, `tests/test_audio_levels.cpp`.
+
 - **The player configures and switches the AES67 stream.** The stream used to be
   something an operator built by hand in the daemon's own interface. Now the
   installer creates it and the player owns it: **Settings → Network audio output**

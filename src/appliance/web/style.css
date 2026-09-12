@@ -267,6 +267,36 @@ input[type="number"] { width: 6.5rem; }
 .preview-frame img { width: 100%; height: 100%; object-fit: contain; display: block; }
 .preview-none { position: absolute; color: var(--muted); font-size: 0.9rem; }
 
+/* ── Sound meters ────────────────────────────────────────────────────────────
+   One row of horizontal bars, one per channel of the card. Horizontal rather
+   than the vertical bars of a mixing desk because this is read on a phone in
+   portrait as often as on a laptop, and eight vertical bars on a phone is an
+   aliasing test rather than a meter. */
+.meterbox { margin: 18px 0; background: var(--panel); border: 1px solid var(--line);
+            border-radius: var(--radius); padding: 12px 14px; }
+.meterbox summary { cursor: pointer; font-weight: 600; }
+.meterbars { display: grid; gap: 6px; margin-top: 10px; }
+.meterbars .bar { display: grid; grid-template-columns: 4.5rem 1fr 3.2rem;
+                  align-items: center; gap: 8px; font-size: 0.8rem; }
+.meterbars .bar .ch { color: var(--muted); font-variant-numeric: tabular-nums; }
+.meterbars .bar .track { position: relative; height: 12px; border-radius: 3px;
+                         background: #000; border: 1px solid var(--line);
+                         overflow: hidden; }
+.meterbars .bar .fill { position: absolute; inset: 0 auto 0 0; width: 0;
+                        background: var(--go); transition: width 80ms linear; }
+/* Amber past -6 dBFS and red past -1: the two places a level wants attention,
+   and the same two on every meter anybody has used. */
+.meterbars .bar.hot .fill { background: var(--hold); }
+.meterbars .bar.over .fill { background: var(--danger); }
+.meterbars .bar .db { text-align: right; color: var(--muted);
+                      font-variant-numeric: tabular-nums; }
+.meterbars .empty { color: var(--muted); font-size: 0.85rem; }
+/* A meter that is not live falls to nothing; it is not hidden, because the
+   panel jumping as the sound comes and goes is harder to read than a row of
+   flat bars with a line underneath saying why. */
+.meterbars.flat .bar .fill { background: var(--line); }
+.meternote { margin-top: 8px; }
+
 /* ── Cues ───────────────────────────────────────────────────────────────── */
 .cues { display: flex; flex-wrap: wrap; gap: 8px; margin: 16px 0; }
 .cues button { background: var(--panel); }

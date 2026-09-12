@@ -285,6 +285,15 @@ function drawCues(s) {
   }).join('');
 }
 
+// Whether the sound is worth flagging in the readout.
+//
+// "Muted" is not a fault — it is a setting somebody chose — so it does not earn
+// the amber border that means "go and look at this". A card that would not open
+// does, and those are the two states the box itself distinguishes for us.
+function audioOutWarn(s) {
+  return s.audio_state === 'failed';
+}
+
 function drawReadout(s) {
   const cells = [];
   const push = (k, v, warn) =>
@@ -303,8 +312,15 @@ function drawReadout(s) {
   if (!s.ended) push('Behind the main site', spoken(s.behind_live_s));
   push('Picture', s.video_width ? `${s.video_width}×${s.video_height}` : '—');
   push('Sound', s.audio_channels ? s.audio_channels + ' channels' : '—');
+  // Where the sound is actually going, not just where it was asked to go. The
+  // description comes from the card that is open, so it changes to say "muted"
+  // or to carry the card's own error the moment either of those happens — the
+  // readout and the meters beside it can then never disagree.
   push('Going out on', escapeHtml(s.output_description || '—'),
        !s.video_output_ok);
+  push('Sound out on',
+       escapeHtml(s.audio_description || s.audio_state || '—'),
+       audioOutWarn(s));
   if (s.download_failures || s.checksum_failures)
     push('Re-fetched', String(s.download_failures + s.checksum_failures), true);
   $('#readout').innerHTML = cells.join('');
@@ -489,9 +505,18 @@ $('#c-idle').addEventListener('change', (e) => {
 
 // The display and sound-card pickers list what the box actually has, so a
 // setting cannot be typed that the hardware will refuse.
+//
+// The box also says whether the sound device is the operator's to choose at
+// all: while the network audio output is on, the sound has to be on the AES67
+// card, because that is the card the daemon publishes. `audioDeviceLocked` is
+// what the box said, and it is the box's answer and not the page's guess — the
+// setting in the form could have been changed a moment ago and not yet saved.
+let audioDeviceLocked = false;
+
 async function loadOutputChoices() {
   try {
     const outputs = await api('GET', '/api/outputs');
+    audioDeviceLocked = !!outputs.audio_device_locked;
     const disp = $('#c-display');
     disp.innerHTML = '<option value="">First connected screen</option>' +
       (outputs.displays || []).map((d) =>
@@ -518,11 +543,27 @@ async function loadOutputChoices() {
       }).join('');
 
     const alsa = $('#c-alsa');
+    // Which device is the card the network output owns, if the box knows. The
+    // server marks it, rather than the page guessing from the name: the name is
+    // the daemon's, and matching on a substring in the browser is the sort of
+    // thing that breaks when it changes.
     alsa.innerHTML = '<option value="default">Follow the system</option>' +
       (outputs.audio_devices || []).map((d) =>
         `<option value="${escapeHtml(d.id)}"${
           d.id === settings.alsa_device ? ' selected' : ''}>
-           ${escapeHtml(d.description)}</option>`).join('');
+           ${escapeHtml(d.description)}${
+          d.locks_audio_device ? ' — the network audio output uses this' : ''}
+         </option>`).join('');
+
+    // The box's answer wins over the form's: this is about where the sound is,
+    // not about what somebody has just typed. The reason travels from the box
+    // too, so the sentence beside the picker and the lock cannot drift apart.
+    if (audioDeviceLocked) {
+      alsa.disabled = true;
+      $('#c-alsa-note').textContent =
+        outputs.audio_device_lock_reason ||
+        'The network audio output below owns the sound card.';
+    }
   } catch (e) {
     /* An older box, or no outputs to list. The text fields still work. */
   }
@@ -566,6 +607,14 @@ $('#settings-form').addEventListener('submit', async (e) => {
   };
 
   try {
+    // A disabled picker still has a value, and sending it is how the sound came
+    // to be moved off the AES67 card while the stream stayed switched on: the
+    // page offered `default` in the box, the box saved `default`, and the
+    // stream it was still publishing went silent. While the network output owns
+    // the device, the device is not sent at all — the box keeps whatever it has,
+    // which is the AES67 card it was told to use.
+    if ($('#c-alsa').disabled) delete body.alsa_device;
+
     settings = await api('PUT', '/api/config', body);
 
     // The network audio output is not an ordinary setting: switching it on also
@@ -1005,6 +1054,95 @@ $('#preview-rate').addEventListener('change', startPreview);
 $('#preview-view').addEventListener('change', startPreview);
 $('#preview-box').addEventListener('toggle', startPreview);
 
+/* ── Sound meters ──────────────────────────────────────────────────────────
+   What the sound card is being given. The numbers come from the box already
+   converted to dBFS: doing the logarithm here as well would put the scale in
+   two places, and the one on the box is the one the tests cover.
+
+   The panel is drawn from the channel count the endpoint reports, so it is the
+   card's width and not the feed's — a stereo card fed a six-track feed shows
+   two bars, because two is what is leaving the box. */
+
+let meterShown = 0;   // how many bars the panel currently has
+
+function meterBar(i, db, live) {
+  // dBFS to a bar length: 0 dB is full and -60 dB is empty, which is the span
+  // that is actually useful on a stage — the bottom twenty decibels of a studio
+  // scale are a bar that never quite disappears, which reads as "a little
+  // signal" when there is none.
+  const span = 60;
+  const dbc = Math.max(-span, Math.min(0, db));
+  const pct = ((dbc + span) / span) * 100;
+  const cls = !live ? '' : (db > -1 ? ' over' : (db > -6 ? ' hot' : ''));
+  const text = db <= -120 ? '—' : db.toFixed(1);
+  return `<div class="bar${cls}">
+            <span class="ch">${i + 1}</span>
+            <span class="track"><span class="fill" style="width:${pct.toFixed(1)}%"></span></span>
+            <span class="db">${text}</span>
+          </div>`;
+}
+
+function drawMeters(m) {
+  const box = $('#meters');
+  const n = Number(m.channels || 0);
+  const peaks = m.peak || [];
+  const dbs = m.db || [];
+
+  if (!n) {
+    box.classList.add('flat');
+    // Once, not every poll: replacing the text ten times a second is how a
+    // panel ends up fighting the screen reader that is reading it.
+    if (meterShown !== 0) {
+      box.innerHTML = '<div class="empty">No output channels to meter yet.</div>';
+      meterShown = 0;
+    }
+    return;
+  }
+
+  box.classList.toggle('flat', !m.live);
+  // Only re-lay-out when the width actually changes. Rebuilding the bars every
+  // poll would restart the width transition on every one of them, which turns a
+  // meter into a flicker.
+  if (meterShown !== n) {
+    box.innerHTML = Array.from({ length: n }, (_, i) => meterBar(i, -120, false)).join('');
+    meterShown = n;
+  }
+  const bars = box.querySelectorAll('.bar');
+  for (let i = 0; i < n && i < bars.length; i++) {
+    const db = Number(dbs[i] ?? -120);
+    const live = !!m.live;
+    const cls = !live ? '' : (db > -1 ? ' over' : (db > -6 ? ' hot' : ''));
+    bars[i].className = 'bar' + cls;
+    const fill = bars[i].querySelector('.fill');
+    const span = 60;
+    const pct = ((Math.max(-span, Math.min(0, db)) + span) / span) * 100;
+    fill.style.width = pct.toFixed(1) + '%';
+    bars[i].querySelector('.db').textContent = db <= -120 ? '—' : db.toFixed(1);
+    // The peak, so the bar can be read without the tabular figure beside it.
+    bars[i].title = `${(peaks[i] || 0).toFixed(3)} peak`;
+  }
+  $('#meters-reason').textContent = m.reason_text || '';
+}
+
+async function refreshMeters() {
+  try {
+    drawMeters(await api('GET', '/api/audio/levels'));
+  } catch (e) {
+    // An older box without the endpoint: say so once rather than every poll.
+    if (meterShown !== -1) {
+      $('#meters').innerHTML = '<div class="empty">This box does not report sound levels.</div>';
+      $('#meters').classList.add('flat');
+      $('#meters-reason').textContent = '';
+      meterShown = -1;
+    }
+  }
+}
+
+$('#meters-box').addEventListener('toggle', () => {
+  if ($('#meters-box').open && $('#tab-play').classList.contains('is-on'))
+    refreshMeters();
+});
+
 /* ── Tabs and the poll loop ──────────────────────────────────────────────── */
 
 $$('.tab').forEach((tab) => {
@@ -1026,6 +1164,11 @@ function startPolling() {
   refreshStatus();
   pollTimer = setInterval(() => {
     refreshStatus();
+    // Only on the tab that shows them, and only while the panel is open. The
+    // levels endpoint reads and clears the meter, so not asking is the same as
+    // not measuring — nothing is lost by skipping it.
+    if ($('#tab-play').classList.contains('is-on') && $('#meters-box').open)
+      refreshMeters();
     if ($('#tab-log').classList.contains('is-on') && $('#log-follow').checked)
       refreshLog();
   }, 500);

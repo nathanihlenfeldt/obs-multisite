@@ -26,6 +26,7 @@
 // picture run on for a segment after the operator pressed Hold.
 //
 #include "config.h"
+#include "audio_levels.h"   // what the card was given, for the meters
 #include "audio_output.h"
 #include "video_output.h"
 #include "splash.h"
@@ -129,11 +130,48 @@ struct Status {
     std::string audio_description;
     bool        video_output_ok = false;
     bool        audio_output_ok = false;
+    // "closed" / "open" / "failed", and the reason for the last of those. The
+    // state is a word so the page can say which of the three it is; the error
+    // is the card's own message, kept so the page can show it without the
+    // operator being asked to go and find the journal.
+    std::string audio_state;
+    std::string audio_error;
 };
+
+// What the sound card is being given, with a word for why it reads as it does.
+// Taken where the samples leave the player rather than where they arrive, so
+// muting and a card that will not open both read as silence — and the reason
+// says which of them it is.
+struct AudioMeterView {
+    std::vector<float> peak;        // linear, one per card channel
+    std::vector<float> db;          // dBFS, same order
+    bool        live = false;       // a frame reached the card recently
+    MeterReason reason = MeterReason::CardClosed;
+    std::string reason_text;        // the reason, as a sentence
+};
+
+// Where the sound output stands. Reported as a word rather than derived by the
+// interface from three booleans, because the three states mean genuinely
+// different things to whoever is looking at the page:
+//
+//   Closed — nothing has asked for it yet, or the settings say not to.
+//   Open   — the card is open and the player writes to it.
+//   Failed — the card would not open. Distinct from both of the others: for
+//            Closed the answer is "switch it on", for Failed it is "go and look
+//            at the card", and a silent box is exactly when somebody needs to
+//            tell those two apart without reading the journal.
+enum class AudioState { Closed, Open, Failed };
+const char* to_string(AudioState s);
 
 class Player {
 public:
-    Player(Config cfg, VideoOutput& video, AudioOutput& audio);
+    // `config_path` is where edited settings are written back to. The player
+    // itself never needed it — settings arrive from the web interface already
+    // saved — but the AES67 reconciler does: pointing the sound back at the
+    // card the daemon reads is a settings change like any other, and one that
+    // has to survive the power cut that caused it.
+    Player(Config cfg, VideoOutput& video, AudioOutput& audio,
+           std::string config_path = std::string());
     ~Player();
 
     // Bring up the transport and the worker threads. Safe to call on a box
@@ -147,6 +185,30 @@ public:
     // config actually in force.
     void reconfigure(const Config& cfg);
     Config config() const;
+
+    // ── What the sound output is doing ───────────────────────────────────────
+    // Whether the card is open, and the card's own words if it would not open.
+    // Both are here rather than only in Status so that the audio-levels poll can
+    // say *why* the meters are flat without building a whole Status for it.
+    AudioState audio_state() const {
+        return (AudioState)m_audio_open_state.load();
+    }
+    std::string audio_error() const {
+        std::lock_guard<std::mutex> lk(m_audio_err_mtx);
+        return m_audio_last_error;
+    }
+    // The width the card is open at, 0 when it is not open. What the meters use
+    // to decide how many bars there are.
+    int audio_opened_channels() const { return m_audio_opened_channels.load(); }
+
+    // The lock the web interface's AES67 switch and the reconciler share. Both
+    // write the same source on the same daemon, and a repair that arrives a
+    // moment after somebody switched the stream off must not put it back on.
+    std::mutex& aes67_mutex() { return m_aes67_mtx; }
+
+    // The meters. Read and clear, so the interface's polling interval is the
+    // meter's window: whatever happened since somebody last looked.
+    AudioMeterView audio_meter() const;
 
     // ── Is the storage reachable, from where, and how fast? ─────────────────
     // The three questions asked when a campus stutters, and the ones nothing
@@ -225,6 +287,20 @@ private:
     // definition for why the idle case is not an optimisation.
     void ensure_audio_open(const Config& cfg, int feed_channels, int feed_rate);
 
+    // Asks the delivery thread to let the current card go and open the one the
+    // settings now name. A counter, so two requests arriving together are two
+    // reopens rather than one — see the note on m_audio_reopen_requests.
+    void request_audio_reopen();
+
+    // The AES67 reconciler: keeps an enabled stream up, and does nothing at all
+    // to one that was switched off. Runs on its own thread because every step
+    // is a REST call or a systemctl call to another process, and the delivery
+    // loop is not the place for either.
+    void aes67_loop();
+    // One pass, for the tests and for the loop above: gather the daemon's state,
+    // decide, act. Returns the action taken, as a word, for the log.
+    const char* aes67_reconcile_once();
+
     // Puts the idle screen up when there is no programme going out, and
     // takes it down again when there is. Driven from the poll loop rather
     // than a timer of its own: it only ever needs to act a few times a
@@ -256,6 +332,10 @@ private:
 
     Config       m_cfg;
     mutable std::mutex m_cfg_mtx;
+    // Where a settings change the player makes on its own is written back to.
+    // Blank means "in memory only", which is what a Player built without a path
+    // — a test, say — gets.
+    std::string  m_config_path;
     VideoOutput& m_video;
     AudioOutput& m_audio;
 
@@ -266,7 +346,18 @@ private:
     mutable std::mutex m_obj_mtx;
 
     std::thread m_poll_thread, m_feed_thread, m_deliver_thread;
+    std::thread m_aes67_thread;
     std::atomic<bool> m_running{false};
+
+    // One reconcile pass at a time. The loop takes this, and so does the route
+    // that switches the stream on: an operator's click must not be interleaved
+    // with a repair to the same source, or the last writer wins and it can be
+    // the repair — leaving a stream the operator just switched off back on air.
+    std::mutex m_aes67_mtx;
+    // What the last pass decided and did, so a repeat is silent: a box with no
+    // PTP master must not print the same sentence every few seconds.
+    std::string m_aes67_last_action;
+    uint64_t    m_aes67_last_log_ns = 0;
 
     // Playout clock: due time = base + (media pts − first media pts).
     std::atomic<uint64_t> m_playout_base_ns{0};
@@ -347,8 +438,33 @@ private:
     // let the current device go and open the newly chosen one — otherwise a
     // device picked in the interface would not take effect until the next
     // reboot, which for a box with no keyboard is no use at all.
-    std::atomic<bool> m_audio_open{false};
-    std::atomic<bool> m_audio_reopen{false};
+    //
+    // A counter rather than a flag, because two things ask for a reopen and they
+    // can arrive together: an operator saving the settings, and an AES67
+    // reconcile tick that has decided the card is open at the wrong width. With
+    // a flag the second request is silently swallowed by `exchange(false)` and
+    // the master goes on air at the old width — which is the whole of the fault
+    // this counter was added for.
+    std::atomic<int> m_audio_open_state{(int)AudioState::Closed};
+    std::atomic<int> m_audio_reopen_requests{0};
+    // The width the card was opened at, kept beside the rate for the same
+    // reason: a two-channel card against an eight-channel feed is heard as the
+    // wrong eight channels and reported by nothing, so it has to be compared
+    // and corrected rather than assumed.
+    std::atomic<int> m_audio_opened_channels{0};
+    // When a failed open may be tried again, and how many times in a row it has
+    // failed. The first is a deadline on the monotonic clock; the second only
+    // spaces the retries out, so a card that is never going to open is retried
+    // every few seconds instead of every tick, and the log gets one line per
+    // attempt rather than one per delivery loop.
+    std::atomic<uint64_t> m_audio_retry_at_ns{0};
+    std::atomic<int>      m_audio_fail_count{0};
+    // The card's own message from the last failed open, for the status page.
+    mutable std::mutex m_audio_err_mtx;
+    // The meters, tapped where the samples are handed to the card. Mutable
+    // because reading one also starts the next window.
+    mutable AudioMeter m_meter;
+    std::string        m_audio_last_error;
     // The rate the feed last reported, and the rate the card was actually
     // opened at. The first is what lets the device be opened before anything
     // has played — a box sitting idle between services still has to put its

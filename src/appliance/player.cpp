@@ -3,6 +3,8 @@
 #include "log.h"
 #include "screen.h"
 #include "sysinfo.h"
+#include "audio_plan.h"   // how wide the card is opened — one rule, one place
+#include "aes67.h"        // the daemon on this box, watched from aes67_loop()
 #include "core/playout_clock.h"
 #include "core/tile_crop.h"
 
@@ -27,6 +29,56 @@ uint64_t now_ns() {
 long long now_ms() {
     return (long long)(now_ns() / 1000000ULL);
 }
+
+// How long to wait before trying a sound card again after it refused.
+//
+// A card that is not registered *yet* is the common case and not a fault: the
+// AES67 kernel module registers its card a moment after the module loads, so a
+// box that boots faster than the module used to open the card, fail, and then
+// stay silent until somebody pressed Apply in the settings page. A couple of
+// seconds is long enough for that race to resolve, and a card that is genuinely
+// gone is retried every ten seconds forever — often enough that plugging it in
+// fixes it without a reboot, rare enough that it cannot fill the journal.
+uint64_t retry_backoff_seconds(int failures) {
+    if (failures <= 1) return 2;
+    if (failures == 2) return 4;
+    if (failures == 3) return 6;
+    return 10;
+}
+
+// The same frame, with the sound taken out of it.
+//
+// Muting no longer closes the card, so something still has to be handed over
+// every frame's worth of time or the card under-runs — and a card that has
+// under-run stops producing samples, which on this box is the same thing as the
+// AES67 stream going off the network. Silence of the frame's own shape keeps
+// the output running and everything downstream in step, and because the meter is
+// tapped where this is handed over, the bars fall exactly as they should.
+multisite::DecodedAudioFrame silence_like(
+        const multisite::DecodedAudioFrame& f) {
+    multisite::DecodedAudioFrame s;
+    s.sample_rate = f.sample_rate;
+    s.channels    = f.channels;
+    s.frames      = f.frames;
+    s.track_index = f.track_index;
+    s.pts_ns      = f.pts_ns;
+    const int ch = f.channels > 0 ? f.channels : 1;
+    s.interleaved.assign((size_t)f.frames * (size_t)ch, 0.0f);
+    return s;
+}
+
+} // namespace
+
+const char* to_string(AudioState s) {
+    switch (s) {
+    case AudioState::Closed: return "closed";
+    case AudioState::Open:   return "open";
+    case AudioState::Failed: return "failed";
+    }
+    return "closed";
+}
+
+namespace {
 
 // How far ahead of its due time a frame may be released. Small, because the
 // output has nowhere to buffer it — unlike OBS, which had its own queue.
@@ -72,8 +124,10 @@ constexpr uint64_t kBootSplashNs = 5000000000ULL;             // 5 s
 
 } // namespace
 
-Player::Player(Config cfg, VideoOutput& video, AudioOutput& audio)
-    : m_cfg(std::move(cfg)), m_video(video), m_audio(audio) {
+Player::Player(Config cfg, VideoOutput& video, AudioOutput& audio,
+               std::string config_path)
+    : m_cfg(std::move(cfg)), m_config_path(std::move(config_path)),
+      m_video(video), m_audio(audio) {
     m_locked = m_cfg.locked;
     m_delay_from_live_s = m_cfg.delay_from_live_s;
     m_tile_sel = m_cfg.tile_index;
@@ -208,6 +262,7 @@ void Player::start() {
     m_poll_thread    = std::thread([this] { poll_loop(); });
     m_feed_thread    = std::thread([this] { feed_loop(); });
     m_deliver_thread = std::thread([this] { deliver_loop(); });
+    m_aes67_thread   = std::thread([this] { aes67_loop(); });
 
     m_events_wanted = true;
 
@@ -226,6 +281,7 @@ void Player::stop() {
     if (m_poll_thread.joinable())    m_poll_thread.join();
     if (m_feed_thread.joinable())    m_feed_thread.join();
     if (m_deliver_thread.joinable()) m_deliver_thread.join();
+    if (m_aes67_thread.joinable())   m_aes67_thread.join();
     m_flushing = false;
 
     teardown_decoder();
@@ -242,7 +298,10 @@ void Player::stop() {
     // Never leave the last frame of an event on a screen in an empty room.
     m_video.blank();
     m_audio.close();
-    m_audio_open = false;
+    m_audio_open_state = (int)AudioState::Closed;
+    m_audio_opened_rate.store(0);
+    m_audio_opened_channels.store(0);
+    m_meter.forget();
 }
 
 void Player::teardown_decoder() {
@@ -337,12 +396,27 @@ void Player::reconfigure(const Config& cfg) {
         m_last_frame_ns = 0;
     }
 
+    // The device, the width and the network switch all decide how and where the
+    // card is opened, so all four are compared. `aes67_manage` and
+    // `aes67_channels` were missing from this test, which meant switching the
+    // network output on did not reopen the sound at the width it publishes: the
+    // card stayed at whatever it was opened as — two channels, before any feed
+    // had arrived — and the eight-channel stream it published was two channels
+    // wide for ever after.
+    //
+    // Muting is deliberately NOT in this list. Muting used to close the card,
+    // which on a box whose sound leaves over the network takes the stream off
+    // air: receivers drop it, and un-muting does not get it back until they
+    // re-subscribe. Mute is honoured where the samples are handed over instead
+    // (the delivery loop writes silence of the frame's own shape while muted),
+    // so the stream stays up and carries silence, which is what a mute should
+    // sound like — and the meters, tapped at that same handover, fall with it.
     if (before.alsa_device    != cfg.alsa_device ||
         before.audio_channels != cfg.audio_channels ||
-        before.audio_enabled  != cfg.audio_enabled) {
+        before.aes67_manage   != cfg.aes67_manage ||
+        before.aes67_channels != cfg.aes67_channels) {
         plog_info("sound settings changed — reopening the output");
-        m_audio_reopen = true;
-        if (!cfg.audio_enabled) { m_audio.close(); m_audio_open = false; }
+        request_audio_reopen();
     }
 
     if (!receive_changed) {
@@ -492,38 +566,258 @@ void Player::ensure_audio_open(const Config& cfg, int feed_channels,
                                int feed_rate) {
     if (feed_rate > 0) m_audio_rate.store(feed_rate);
 
-    // Either the device was changed in the interface, or the feed has turned
-    // out not to run at the rate the card was opened at — which would otherwise
-    // play back at the wrong pitch.
-    const int  opened_at = m_audio_opened_rate.load();
-    const bool rate_changed =
-        feed_rate > 0 && m_audio_open.load() && feed_rate != opened_at;
-    if (m_audio_reopen.exchange(false) || rate_changed) {
-        m_audio.close();
-        m_audio_open = false;
-        m_audio_opened_rate.store(0);
-    }
-
-    if (!cfg.audio_enabled || m_audio_open.load()) return;
-
+    // What the rate and the width should be, from the one place that decides
+    // both. 0 means "there is nothing to open for yet" and is a legitimate
+    // answer — a box with no width set and no feed seen — not a reason to guess.
     int rate = m_audio_rate.load();
     if (rate <= 0) rate = 48000;
-    const int channels = cfg.audio_channels > 0 ? cfg.audio_channels
-                        : (feed_channels > 0 ? feed_channels : 2);
+    const int want_channels = desired_audio_channels(cfg, feed_channels);
+
+    const AudioState state = (AudioState)m_audio_open_state.load();
+    const int  opened_rate = m_audio_opened_rate.load();
+    const int  opened_ch   = m_audio_opened_channels.load();
+
+    // Either the device was changed in the interface, or what the card was
+    // opened as is no longer what it should be — a feed that turns out not to
+    // run at the assumed 48 kHz, or (the fault this comparison was added for) a
+    // card opened two channels wide against an eight-channel feed, which plays
+    // the wrong channels to everybody listening and is reported by nothing.
+    const bool reopen_asked = m_audio_reopen_requests.load() > 0;
+    const bool rate_changed =
+        state == AudioState::Open && feed_rate > 0 && feed_rate != opened_rate;
+    const bool width_changed =
+        state == AudioState::Open && want_channels > 0 &&
+        want_channels != opened_ch;
+    // A failed open is retried on its own schedule rather than every tick: a
+    // card that is not registered yet may become registered, and a box that has
+    // to be told to go and look at the settings to bring its own sound back is
+    // not an appliance.
+    const bool retry_due =
+        state == AudioState::Failed && now_ns() >= m_audio_retry_at_ns.load();
+
+    if (reopen_asked || rate_changed || width_changed || retry_due) {
+        if (reopen_asked)
+            m_audio_reopen_requests.fetch_sub(1);
+        // Only a real change says so: an attempted retry that goes on failing
+        // must not print two lines every few seconds for the rest of the year.
+        if ((rate_changed || width_changed) && state == AudioState::Open)
+            plog_info("audio out: reopening — %d Hz/%d ch, card was %d Hz/%d ch",
+                      rate, want_channels, opened_rate, opened_ch);
+        m_audio.close();
+        m_audio_open_state = (int)AudioState::Closed;
+        m_audio_opened_rate.store(0);
+        m_audio_opened_channels.store(0);
+        // The bars fall at the instant the card goes, rather than showing the
+        // last thing heard before it went away for another 400 ms.
+        m_meter.forget();
+    }
+
+    if (m_audio_open_state.load() == (int)AudioState::Open) return;
+
+    // Nothing to open for yet. Not an error and not a failure: a box with no
+    // width set and no frame decoded has simply nothing to say about how wide
+    // the card should be, and the first frame settles it.
+    if (want_channels <= 0) return;
+
+    // A failure that is still in its backoff window is left alone.
+    if (m_audio_open_state.load() == (int)AudioState::Failed &&
+        now_ns() < m_audio_retry_at_ns.load())
+        return;
 
     std::string err;
-    if (m_audio.open(cfg, rate, channels, err)) {
-        m_audio_open = true;
+    if (m_audio.open(cfg, rate, want_channels, err)) {
+        m_audio_open_state = (int)AudioState::Open;
         m_audio_opened_rate.store(rate);
+        m_audio_opened_channels.store(want_channels);
+        m_audio_fail_count.store(0);
+        m_audio_retry_at_ns.store(0);
+        {
+            std::lock_guard<std::mutex> lk(m_audio_err_mtx);
+            m_audio_last_error.clear();
+        }
         plog_info("audio out: %s", m_audio.description().c_str());
     } else {
-        plog_error("audio out failed: %s", err.c_str());
+        // Marked failed, NOT open. This is the difference between a card that
+        // recovers by itself and one that stays silent until somebody goes to
+        // the settings page and presses Apply — which is exactly what a card
+        // that loses a race with its own driver at boot used to do.
+        m_audio_open_state = (int)AudioState::Failed;
+        const int fails = m_audio_fail_count.fetch_add(1) + 1;
+        const uint64_t backoff = retry_backoff_seconds(fails) * 1000000000ULL;
+        m_audio_retry_at_ns.store(now_ns() + backoff);
+        {
+            std::lock_guard<std::mutex> lk(m_audio_err_mtx);
+            m_audio_last_error = err;
+        }
+        plog_error("audio out failed: %s — will try again in %u s",
+                   err.c_str(), (unsigned)retry_backoff_seconds(fails));
         note_error("audio output: " + err);
-        // Do not retry every tick; a dead card would fill the log faster than
-        // an operator could read it. Changing the device in the interface asks
-        // for another attempt.
-        m_audio_open = true;
     }
+}
+
+void Player::request_audio_reopen() {
+    m_audio_reopen_requests.fetch_add(1);
+}
+
+AudioMeterView Player::audio_meter() const {
+    const Config cfg = config();
+    const MeterReading reading = m_meter.read(now_ns());
+    const bool card_open = m_audio_open_state.load() == (int)AudioState::Open;
+
+    bool any_signal = false;
+    for (float v : reading.peak) {
+        if (v > 0.0f) { any_signal = true; break; }
+    }
+
+    AudioMeterView out;
+    out.live = reading.live && card_open;
+    out.reason = meter_reason(cfg.audio_enabled, card_open, reading.live,
+                              any_signal);
+    out.reason_text = meter_reason_text(out.reason);
+    out.peak = reading.peak;
+    out.db.reserve(reading.peak.size());
+    for (float v : reading.peak) out.db.push_back(meter_dbfs(v));
+
+    // A card that is closed has no width to draw, so the page is told the width
+    // the settings ask for instead. Otherwise the bars would vanish every time
+    // the box was quiet, and the panel would jump as they came back.
+    if (out.peak.empty()) {
+        const int want = desired_audio_channels(cfg, 0);
+        if (want > 0) {
+            out.peak.assign((size_t)want, 0.0f);
+            out.db.assign((size_t)want, meter_dbfs(0.0f));
+        }
+    }
+    return out;
+}
+
+// ── Keeping the network stream up ────────────────────────────────────────────
+
+void Player::aes67_loop() {
+    // Nothing to watch on a box that is not asked to manage the network sound,
+    // which is the great majority of them. The thread is started anyway and
+    // sleeps: starting and joining it from here keeps the box's thread lifetime
+    // in one place, and a pass on an unmanaged box costs one config read.
+    constexpr auto kTick = std::chrono::seconds(4);
+    auto next = std::chrono::steady_clock::now();
+
+    while (m_running.load()) {
+        next += kTick;
+        const Config cfg = config();
+        if (cfg.aes67_manage && !cfg.alsa_device.empty()) {
+            const char* action = aes67_reconcile_once();
+            // One line per change of mind, never per tick. A box with no PTP
+            // master sits in "waiting for the clock" indefinitely, and saying so
+            // every four seconds for months is how a journal becomes unreadable
+            // — which is exactly when somebody needs to read it.
+            if (action != nullptr && *action != '\0') {
+                if (m_aes67_last_action != action) {
+                    plog_info("aes67: %s", action);
+                    m_aes67_last_action = action;
+                    m_aes67_last_log_ns = now_ns();
+                } else if (now_ns() - m_aes67_last_log_ns > 300000000000ULL) {
+                    // The same thing, still true, five minutes later: worth
+                    // repeating once so a log gathered at the end of the day
+                    // still shows it was happening.
+                    plog_info("aes67: still %s", action);
+                    m_aes67_last_log_ns = now_ns();
+                }
+            }
+        }
+
+        // Sleep in short steps so a stop is prompt rather than up to four
+        // seconds of systemd waiting for the process to go.
+        while (m_running.load() &&
+               std::chrono::steady_clock::now() < next) {
+            std::this_thread::sleep_for(std::chrono::milliseconds(100));
+        }
+    }
+    plog_info("aes67 watch stopped");
+}
+
+const char* Player::aes67_reconcile_once() {
+    // Serialised against the switch in the web interface, which takes the same
+    // lock: an operator turning the stream off must not have a repair that was
+    // already in flight turn it back on a moment later.
+    std::lock_guard<std::mutex> lk(m_aes67_mtx);
+
+    const Config cfg = config();
+
+    // The daemon's own idea of the source is compared with the width and the
+    // address this box publishes, so "is it set up right?" is a comparison and
+    // not a second opinion.
+    const int width = aes67_channels_to_map(cfg.aes67_channels);
+    const std::string address =
+        cfg.aes67_address.empty() ? aes67_default_address() : cfg.aes67_address;
+
+    const Aes67State st = aes67_probe(cfg.alsa_device, width, address);
+    const Aes67Action action = aes67_converge_action(st, cfg.aes67_manage,
+                                                     st.source_correct);
+    switch (action) {
+    case Aes67Action::None:
+    case Aes67Action::WaitForClock:
+        // Waiting is not doing nothing quietly: the interface says which of the
+        // two it is. Nothing is printed here beyond the transition line above.
+        return action == Aes67Action::None ? "" : aes67_action_word(action);
+
+    case Aes67Action::StartService: {
+        // Started *and* enabled: enabling is what makes the stream come back
+        // after a power cut, which is the promise the switch makes.
+        const std::string problem = aes67_set_service(true, true);
+        if (!problem.empty()) {
+            note_error("aes67: " + problem);
+            return "";
+        }
+        return aes67_action_word(action);
+    }
+
+    case Aes67Action::EnsureSource: {
+        // The source is put back exactly as the operator asked for it, on/off
+        // included: this path is only ever reached with it switched on, and
+        // "on" is what a box that is managing the network sound should be.
+        const std::string name = "Multisite " + hostname();
+        const std::string problem =
+            aes67_ensure_source(width, address, name, true);
+        if (!problem.empty()) {
+            note_error("aes67: " + problem);
+            return "";
+        }
+        return aes67_action_word(action);
+    }
+
+    case Aes67Action::RepointCard: {
+        // The one repair that changes this player rather than the daemon, and
+        // the one the old one-shot switch could not do at all: a box that
+        // booted before its kernel module registered the card had no card to
+        // point at, and went on sending the sound to HDMI for ever.
+        const std::string card = aes67_card_device(kAes67CardName);
+        if (card.empty()) return "";
+
+        Config updated = cfg;
+        if (updated.alsa_device != card) {
+            // A card comparison, not a substring search: "RAVENNA2" is a
+            // different card, and treating it as this one would throw away the
+            // device somebody deliberately chose.
+            if (!aes67_device_is_card(updated.alsa_device, kAes67CardName))
+                updated.aes67_previous_device = updated.alsa_device;
+            updated.alsa_device = card;
+            if (!m_config_path.empty()) {
+                std::string err;
+                if (!updated.save(m_config_path, err))
+                    plog_warn("aes67: could not save the settings: %s",
+                              err.c_str());
+            }
+        }
+        // 8 channels at 48 kHz, the rate every feed this project produces runs
+        // at. A feed that turns out to run at another rate is caught by the
+        // delivery loop's own comparison and reopened, so nothing here has to
+        // guess twice.
+        m_audio_rate.store(48000);
+        reconfigure(updated);
+        return aes67_action_word(action);
+    }
+    }
+    return "";
 }
 
 // ── Delivery ─────────────────────────────────────────────────────────────────
@@ -546,6 +840,7 @@ void Player::deliver_loop() {
         }
 
         PendingFrame item;
+        bool idle = false;
         {
             std::unique_lock<std::mutex> lk(m_dq_mtx);
             m_dq_cv.wait_for(lk, std::chrono::milliseconds(50), [this] {
@@ -553,25 +848,36 @@ void Player::deliver_loop() {
             });
             if (!m_running.load()) break;
             if (m_dq.empty()) {
-                // Nothing to deliver — but the card may still need opening or
-                // reopening, and that is asked here rather than only when a
-                // frame arrives. It is what lets a box that is idle put its
-                // sound on the network at all, and what makes a device chosen
-                // in the interface take effect straight away instead of at the
-                // next service.
-                ensure_audio_open(config(), 0, 0);
-                continue;
+                idle = true;
+            } else {
+                // Release the earliest-timestamped frame in the window, not
+                // simply the first enqueued: video and audio arrive in track
+                // order.
+                auto it = std::min_element(m_dq.begin(), m_dq.end(),
+                    [](const PendingFrame& a, const PendingFrame& b) {
+                        return a.due_ns < b.due_ns;
+                    });
+                item = std::move(*it);
+                m_dq.erase(it);
             }
-            // Release the earliest-timestamped frame in the window, not simply
-            // the first enqueued: video and audio arrive in track order.
-            auto it = std::min_element(m_dq.begin(), m_dq.end(),
-                [](const PendingFrame& a, const PendingFrame& b) {
-                    return a.due_ns < b.due_ns;
-                });
-            item = std::move(*it);
-            m_dq.erase(it);
         }
         m_dq_cv.notify_all();
+
+        // Nothing to deliver — but the card may still need opening or
+        // reopening, and that is asked here rather than only when a frame
+        // arrives. It is what lets a box that is idle put its sound on the
+        // network at all, and what makes a device chosen in the interface take
+        // effect straight away instead of at the next service.
+        //
+        // Done OUTSIDE the queue lock, deliberately. A card that will not open
+        // is now retried on a timer, and an open attempt is milliseconds of
+        // driver work; holding the lock a decoder writes through for that long,
+        // every couple of seconds, is the sort of stall that shows up as
+        // dropped video rather than as anything to do with sound.
+        if (idle) {
+            ensure_audio_open(config(), 0, 0);
+            continue;
+        }
 
         // Far past due means the clock drifted behind wall time, normally
         // because playback stalled waiting for a segment. Re-anchor by
@@ -706,7 +1012,23 @@ void Player::deliver_loop() {
         } else {
             const Config cfg = config();
             ensure_audio_open(cfg, item.audio.channels, item.audio.sample_rate);
-            if (cfg.audio_enabled) m_audio.write(item.audio);
+            // Muted means silence is written to a card that stays open, rather
+            // than the card being closed. On a box whose sound leaves over the
+            // network, closing the card takes the stream off air and receivers
+            // drop it; writing silence leaves the stream up and silent, which is
+            // what a mute is supposed to sound like.
+            if (cfg.audio_enabled) {
+                m_audio.write(item.audio);
+                m_meter.observe(item.audio.interleaved.data(), item.audio.frames,
+                                item.audio.channels, m_audio_opened_channels.load(),
+                                now_ns());
+            } else {
+                const multisite::DecodedAudioFrame quiet = silence_like(item.audio);
+                m_audio.write(quiet);
+                m_meter.observe(quiet.interleaved.data(), quiet.frames,
+                                quiet.channels, m_audio_opened_channels.load(),
+                                now_ns());
+            }
         }
     }
     plog_info("delivery stopped");
@@ -1336,9 +1658,30 @@ void Player::status(Status& out) const {
 
     out.output_description = m_video.description();
     out.video_output_ok    = m_video.ok();
-    out.audio_description  = cfg.audio_enabled ? m_audio.description()
-                                               : std::string("muted");
-    out.audio_output_ok    = !cfg.audio_enabled || m_audio.ok();
+    // Whether the sound is leaving is no longer the same question as whether
+    // the operator left the sound switched on. It is whether the card is open:
+    // muted writes silence to a live card, which a receiver hears as silence
+    // rather than as a stream that has gone away.
+    const AudioState astate = (AudioState)m_audio_open_state.load();
+    // The words are the meters' own, from the one helper that decides them: the
+    // readout beside the meters and the meters themselves must never say two
+    // different things about the same state. `output_reason` rather than
+    // `meter_reason` because this readout is about where the sound is going,
+    // not about what the event happens to be carrying — a silent event is still
+    // playing. The card's own description is used only when there is a card
+    // actually open and being fed.
+    out.audio_description =
+        (astate == AudioState::Open)
+            ? m_audio.description()
+            : meter_reason_text(output_reason(cfg.audio_enabled,
+                                              astate == AudioState::Open));
+    out.audio_output_ok = astate == AudioState::Open;
+    out.audio_state     = to_string(astate);
+    out.audio_error.clear();
+    if (astate == AudioState::Failed) {
+        std::lock_guard<std::mutex> lk(m_audio_err_mtx);
+        out.audio_error = m_audio_last_error;
+    }
 
     {
         std::lock_guard<std::mutex> lk(m_err_mtx);
