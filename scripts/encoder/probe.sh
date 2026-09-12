@@ -338,8 +338,11 @@ WHAT TO SEND BACK
   arrived.
 
 PLEASE ANSWER THESE SIX FIRST
-  1. Which board is this, exactly? (R58 / R58X / R58 mini / R58S — a photo of
-     the label if the model name is not printed anywhere)
+  1. Which board is this, exactly? Model AND variant — R58, R58X, R58 mini,
+     R58S, R57, or something else. A photo of the label if the model name is
+     not printed anywhere. The SoC matters as much as the model: an RK3588 and
+     an RK3576 are not the same board in a different case, and the answers in
+     section 2 mean different things depending on which this is.
   2. Which image was flashed? Board target, release, minimal or desktop — and
      is there another Armbian or Mekotronics image for this board that carries
      the Rockchip vendor kernel (linux-image-*-vendor-rk35xx)?
@@ -371,7 +374,12 @@ try "cpu" 15 "nproc; lscpu | head -20"
 try "memory" 10 "free -h"
 try "storage" 10 "df -h / /tmp /boot 2>/dev/null"
 try "block devices" 15 "lsblk -o NAME,SIZE,TYPE,MOUNTPOINT 2>/dev/null | head -20"
-try "board device trees installed" 15 "ls /boot/dtb*/rockchip/ 2>/dev/null | grep -iE 'r58|rk3588' | head -20"
+# Not filtered to one board. Grepping for 'r58|rk3588' meant a board that is
+# neither — an R57, an RK3576, anything else on the shelf — reported EMPTY here,
+# which reads as "no device trees installed" rather than "we hid them". A probe
+# exists to find out what a board is, so it must not be told in advance. The
+# count goes first so a long list is still one useful number.
+try "board device trees installed" 15 "ls /boot/dtb*/rockchip/ 2>/dev/null | wc -l; ls /boot/dtb*/rockchip/ 2>/dev/null | grep -iE 'rk35|r5[0-9]' | head -30"
 try "boot configuration" 15 "cat /boot/armbianEnv.txt 2>/dev/null || head -30 /boot/extlinux/extlinux.conf 2>/dev/null"
 try "top level device tree nodes" 10 "ls /proc/device-tree/ | head -60"
 
