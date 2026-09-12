@@ -443,13 +443,34 @@ void unregister_vendor_api() {
     g_poll_cv.notify_all();
     if (g_poll_thread.joinable()) g_poll_thread.join();
 
-    for (const char* n : multisite::kEncoderCommands)
-        obs_websocket_vendor_unregister_request(g_vendor, n);
-    for (const char* n : multisite::kDecoderCommands)
-        obs_websocket_vendor_unregister_request(g_vendor, n);
-
+    // The requests are NOT unregistered, and that is the fix for a crash rather
+    // than an oversight.
+    //
+    // obs_websocket_vendor_unregister_request() goes through
+    // obs_websocket_vendor_run_simple_proc(), which calls
+    // proc_handler_call(_ph, ...) on a static pointer the vendored header
+    // caches the first time it is used and never invalidates. This function
+    // runs only from obs_module_unload, i.e. from inside obs_shutdown's
+    // free_module loop — and module unload order is not specified. When
+    // obs-websocket is freed first, `_ph` points at a destroyed proc handler
+    // and the call dereferences its mutex:
+    //
+    //   w32-pthreads.dll!pthread_mutex_unlock
+    //   obs.dll!proc_handler_call
+    //   obs-multisite.dll!...              <- here
+    //   obs.dll!free_module
+    //   obs.dll!obs_shutdown
+    //
+    // Seen on Windows on 2026-09-12, as c0000005 while quitting after a
+    // broadcast. There is nothing to gain by unregistering at this point:
+    // obs-websocket is going away too and frees its own vendor registry, so
+    // the calls were pure risk. Dropping the pointer is all that is needed.
+    //
+    // If this is ever called while OBS keeps running, unregistering would
+    // matter again — and would be safe, because obs-websocket would still be
+    // loaded. It has only ever been called from obs_module_unload.
     g_vendor = nullptr;
-    mlog_info("obs-websocket vendor '%s' unregistered", kVendorName);
+    mlog_info("obs-websocket vendor '%s' released", kVendorName);
 }
 
 bool vendor_api_active() { return g_vendor != nullptr; }
