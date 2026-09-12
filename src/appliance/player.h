@@ -213,6 +213,11 @@ private:
     void poll_loop();
     void feed_loop();
     void deliver_loop();
+    // Makes sure the sound card is open, is open on the device the settings now
+    // name, and is open at the rate the feed actually runs at. Called both when
+    // a frame arrives and when the box is idle — see the note at its
+    // definition for why the idle case is not an optimisation.
+    void ensure_audio_open(const Config& cfg, int feed_channels, int feed_rate);
 
     // Puts the idle screen up when there is no programme going out, and
     // takes it down again when there is. Driven from the poll loop rather
@@ -330,6 +335,14 @@ private:
     // reboot, which for a box with no keyboard is no use at all.
     std::atomic<bool> m_audio_open{false};
     std::atomic<bool> m_audio_reopen{false};
+    // The rate the feed last reported, and the rate the card was actually
+    // opened at. The first is what lets the device be opened before anything
+    // has played — a box sitting idle between services still has to put its
+    // sound on the network — and the second is what catches a feed that turns
+    // out not to be the assumed 48 kHz, so it is reopened rather than played
+    // back at the wrong pitch.
+    std::atomic<int> m_audio_rate{0};
+    std::atomic<int> m_audio_opened_rate{0};
 
     // Latest decoded picture, kept for the preview.
     mutable std::mutex m_frame_mtx;

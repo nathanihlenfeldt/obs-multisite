@@ -122,9 +122,10 @@ that away.
 
 **Production audio** is set up in OBS itself, not in the dock. In Settings →
 Output → Recording, enable the audio tracks you intend to send; in Advanced
-Audio Properties (right-click the mixer), assign each source to its tracks —
-main mix on track 1, a click on its own track, ISOs on theirs. Name them under
-**Settings… → Track labels** so satellites see "Click" rather than "Track 3".
+Audio Properties (right-click the mixer), assign each source to its tracks — for
+example your mix on track 1, mics on their own tracks, a click on another. Name
+them under **Settings… → Track labels** so satellites see "Click" rather than
+"Track 3".
 Every enabled track travels in the same segment, locked to the picture.
 
 Sending stereo only? Do nothing: track 1 is the default at both ends.
@@ -156,7 +157,7 @@ it, because being pulled out of a recording you are part-way through is worse
 than being told. **Back to live** returns to following the room.
 
 For production audio, the Multisite Source carries the video plus **one** audio
-track (track 1 by default — the main mix). To bring in an ISO or the click as
+track (track 1 by default). To bring in another track as
 well, add a **Multisite Audio Track (Decoder)** source for the same room and
 pick the track. It attaches to the decoder already running, so it costs no extra
 download: every track arrives in the same segment either way, and all of them

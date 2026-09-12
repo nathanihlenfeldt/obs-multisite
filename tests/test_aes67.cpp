@@ -262,6 +262,58 @@ int main() {
     CHECK(aes67_address_or_default("") == aes67_default_address(),
           "the fallback is the daemon's own default group");
 
+    // ── Finding the card to point the player at ──────────────────────────────
+    // The device string is built from this, and getting it wrong means pointing
+    // the player at a card that is not there — which silences the room. The
+    // bracketed id is space-padded by ALSA, and the id is only one of the places
+    // a card's name appears on the line.
+    std::printf("== the card's own id ==\n");
+    {
+        // The shape /proc/asound/cards really has, with the Pi's two HDMI
+        // outputs above the card we are looking for.
+        const std::string cards =
+            " 0 [vc4hdmi0       ]: vc4-hdmi - vc4-hdmi\n"
+            "                      vc4-hdmi\n"
+            " 1 [vc4hdmi1       ]: vc4-hdmi - vc4-hdmi\n"
+            "                      vc4-hdmi\n"
+            " 3 [RAVENNA        ]: MergingRavennaALSA - Merging RAVENNA\n"
+            "                      Merging RAVENNA\n";
+
+        CHECK(aes67_card_id_from_cards(cards, "RAVENNA") == "RAVENNA",
+              "the card's id is read, with the padding stripped");
+        CHECK(aes67_card_id_from_cards(cards, "NOTHING") .empty(),
+              "a card that is not there yields nothing");
+        CHECK(aes67_card_id_from_cards("", "RAVENNA").empty(),
+              "an empty listing yields nothing");
+        CHECK(aes67_card_id_from_cards(cards, "").empty(),
+              "being asked for no name yields nothing");
+
+        // The first card on the box must not be mistaken for the one asked for,
+        // and an id that is not the first field must still be found — the id is
+        // not the only place the name appears.
+        CHECK(aes67_card_id_from_cards(cards, "RAVENNA") != "vc4hdmi0",
+              "another card is not returned in its place");
+
+        // A fifteen-character id, which is where ALSA truncates, and the
+        // driver's own name rather than the id.
+        const std::string truncated =
+            " 2 [SomeLongCardId ]: SomeDriver - A Long Name\n";
+        CHECK(aes67_card_id_from_cards(truncated, "SomeLongCardId") ==
+                  "SomeLongCardId",
+              "an id that fills the field comes back whole");
+        CHECK(aes67_card_id_from_cards(truncated, "SomeDriver") ==
+                  "SomeLongCardId",
+              "the driver's name finds the card too");
+        CHECK(aes67_card_id_from_cards(truncated, "A Long Name") ==
+                  "SomeLongCardId",
+              "so does the card's long name");
+
+        // A line that is not a card at all — the indented continuation lines
+        // under each card are the ones that catch a careless parser.
+        CHECK(aes67_card_id_from_cards("      vc4-hdmi\n", "vc4-hdmi").empty(),
+              "a continuation line is not a card");
+    }
+
     std::printf("\n%s\n", g_fail == 0 ? "ALL AES67 TESTS PASSED"
                                       : "SOME AES67 TESTS FAILED");
     return g_fail == 0 ? 0 : 1;

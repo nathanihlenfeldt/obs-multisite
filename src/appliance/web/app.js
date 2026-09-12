@@ -463,6 +463,20 @@ async function loadSettings() {
   set('#c-aes67-on', String(!!settings.aes67_manage));
   set('#c-aes67-address', settings.aes67_address || '');
   set('#c-aes67-channels', settings.aes67_channels);
+
+  // The network audio output takes the sound onto the AES67 card, and that card
+  // is what the stream publishes — so while it is on, the output device is not
+  // the operator's to choose. Offering a picker that cannot be honoured is how
+  // the setting and the sound came to disagree in the first place.
+  const onNet = !!settings.aes67_manage;
+  $('#c-alsa').disabled = onNet;
+  $('#c-alsa-note').textContent = onNet
+    ? 'Taken over by the network audio output below: the sound is going to the ' +
+      'AES67 card, because that is the card the stream publishes. Switch that ' +
+      'off to choose a device here again.'
+    : 'HDMI carries up to eight channels; a de-embedder at the campus recovers ' +
+      'each one separately.';
+
   $('#idle-image-field').hidden = settings.idle_mode !== 'image';
   set('#c-idle-image', settings.idle_image_path);
   await loadOutputChoices();
@@ -518,6 +532,11 @@ $('#settings-form').addEventListener('submit', async (e) => {
   const note = $('#settings-note');
   note.textContent = 'Saving…';
 
+  // What the network audio output was before this save. Read before the PUT,
+  // because afterwards `settings` is the new configuration and there would be
+  // nothing left to compare against.
+  const before = settings || {};
+
   const mode = ($('#c-mode').value || '0x0x0').split('x').map(Number);
   const body = {
     room_id: $('#c-room').value.trim(),
@@ -546,9 +565,31 @@ $('#settings-form').addEventListener('submit', async (e) => {
 
   try {
     settings = await api('PUT', '/api/config', body);
-    note.textContent = 'Saved.';
+
+    // The network audio output is not an ordinary setting: switching it on also
+    // moves the sound onto the AES67 card and tells the daemon what to publish.
+    // Saving the rest of the box without doing that would leave the setting and
+    // the sound disagreeing, which is the fault this exists to remove. Only an
+    // actual change is sent, so pressing Save twice does not disturb a stream
+    // that is already working.
+    const net = {
+      enabled: $('#c-aes67-on').value === 'true',
+      address: $('#c-aes67-address').value.trim(),
+      channels: Number($('#c-aes67-channels').value),
+    };
+    const netChanged = net.enabled !== !!before.aes67_manage ||
+                       net.address !== (before.aes67_address || '') ||
+                       net.channels !== before.aes67_channels;
+
+    let message = 'Saved.';
+    if (netChanged) {
+      const s = await api('POST', '/api/aes67/source', net);
+      if (s.problem) message = s.problem;
+    }
+    note.textContent = message;
     await loadSettings();
-    setTimeout(() => { note.textContent = ''; }, 3000);
+    setTimeout(() => { note.textContent = ''; },
+               message === 'Saved.' ? 3000 : 12000);
   } catch (err) {
     note.textContent = err.message;
   }
@@ -639,10 +680,12 @@ async function loadAes67() {
                     'nothing on the network handing out the clock it sends no ' +
                     'audio at all. That is a network question, not a fault here.');
     if (s.sources_known && !s.source_present)
-      problems.push('No stream has been set up yet — switch it on under Settings.');
+      problems.push('No stream has been set up yet — switch on the network ' +
+                    'audio output under Settings.');
     if (s.source_present && !s.source_correct)
       problems.push('The stream on the daemon is not the shape this box asks ' +
-                    'for. Applying it under Settings will put it right.');
+                    'for. Applying the network audio output under Settings will ' +
+                    'put it right.');
     if (s.source_present && !s.source_enabled)
       problems.push('The stream is switched off, so nothing is being sent.');
     if (s.source_present && !s.card_present)
@@ -650,8 +693,9 @@ async function loadAes67() {
                     'kernel module is probably not loaded.');
     if (s.source_present && s.card_present && !s.player_on_card)
       problems.push('This player is not writing to the AES67 card, so the ' +
-                    'stream would carry silence. Choose the AES67 sound card ' +
-                    'under Settings.');
+                    'stream would carry silence — which the network audio ' +
+                    'output under Settings normally arranges by itself. Apply ' +
+                    'it again to put the sound back on that card.');
   }
 
   const hint = $('#aes67-hint');

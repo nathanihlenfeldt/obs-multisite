@@ -205,9 +205,9 @@ which is point 2 above.
 
 - **The player configures and switches the AES67 stream.** The stream used to be
   something an operator built by hand in the daemon's own interface. Now the
-  installer creates it and the player owns it: **Settings → Sound on the network**
+  installer creates it and the player owns it: **Settings → Network audio output**
   for the switch, the multicast address and the channel count, and **This box →
-  Sound on the network** for what is actually being sent — the daemon's state, the
+  Network audio output** for what is actually being sent — the daemon's state, the
   clock and the grandmaster it locked to, the address and port on the wire, and
   the SDP it publishes. The readout names the four faults that are otherwise
   indistinguishable from a settings page: a clock that is not locked, a stream

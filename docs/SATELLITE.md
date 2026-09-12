@@ -299,27 +299,32 @@ WebUI for the rest of the daemon's settings rather than for the everyday one.
 
 Two places in the player's page (port 8080, the usual one):
 
-- **Settings → Sound on the network.** The switch, the multicast address, and the
+- **Settings → Network audio output.** The switch, the multicast address, and the
   channel count. One button applies all three, because they are one decision:
   switching it on starts the daemon, sets it to come back after a power cut, and
   creates or corrects the stream. Switching it off *stops* the stream rather than
   deleting it, so the address and width are kept and switching it back on is one
   click and not a re-entry of everything. It sits behind **Lock**, like the other
   settings that change what is on air.
-- **This box → Sound on the network.** What is actually being sent, read back
+- **This box → Network audio output.** What is actually being sent, read back
   from the daemon rather than assumed from the settings: whether the daemon is
   running, whether the clock is locked and to which grandmaster, the address and
   port on the wire, and the SDP it publishes — which is the thing a console's
   engineer will ask for. Anything that would stop the audio is said in a sentence
-  underneath, including the two states that look identical from the settings and
-  are not: a stream that is configured but switched off, and one that is switched
-  on while the player is still writing the sound to HDMI.
+  underneath, including the states that look identical from the settings and are
+  not: a stream that is configured but switched off, and a stream that is carrying
+  nothing because the player is writing the sound somewhere else.
 
-**What the switch does not do.** The sound still leaves by the HDMI socket as
-well. Putting it on the network adds a route; it does not move the one already
-there, so a box feeding a room through an amp is unaffected by any of this. It
-also cannot lock the clock for you — if the page says the clock is not locked,
-the fault is on the network, not on this box.
+**What the switch does, which is more than it first looks.** It *moves the
+sound*. There is one output device on this box, not two, and the daemon publishes
+what is written to the AES67 card — so putting the sound on the network means the
+player has to be writing to that card, and turning it off means putting the sound
+back where it was. That is why the output device picker under **Sound** is greyed
+out while this is on: letting the two disagree produces the worst of the
+available failures, a stream that looks healthy and carries nothing.
+
+What it cannot do is lock the clock for you — if the page says the clock is not
+locked, the fault is on the network, not on this box.
 
 **If the AES67 stack is not installed**, both places say so rather than offering
 a switch that would only fail. Install it with the script above and they fill in.

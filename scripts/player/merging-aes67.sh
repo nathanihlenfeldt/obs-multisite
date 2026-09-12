@@ -10,7 +10,7 @@
 #
 # Why this exists
 # ---------------
-# The player needs the production bus on the network, and the licensed virtual
+# The player needs its sound on the network, and the licensed virtual
 # sound cards that would do it are amd64-only and pin a buffer shape of their
 # own: eight milliseconds in the kernel, a playback position that is a daemon's
 # millisecond counter, and no way for us to choose the multicast address, the
@@ -110,7 +110,7 @@ PLAYER_CONF="/etc/multisite-player/config.json"
 POINT_PLAYER=0
 REWRITE_CONFIG=0
 # The stream this script sets up for the player, which is what makes a fresh
-# install a finished one: eight channels is the production bus, and the address
+# install a finished one: eight channels by default, and the address
 # is read out of the daemon's own configuration unless it is given here.
 NO_SOURCE=0
 SOURCE_CHANNELS="${SOURCE_CHANNELS:-8}"
@@ -925,8 +925,8 @@ main() {
     note "clock, it does not hand one out. That is the most likely silence."
     echo
     note "The player's own pages show the same thing, read back from the daemon:"
-    note "  Settings > Sound on the network   the switch, the address, the width"
-    note "  This box > Sound on the network   what is actually being sent"
+    note "  Settings > Network audio output   the switch, the address, the width"
+    note "  This box > Network audio output   what is actually being sent"
     echo
     if [ "$POINT_PLAYER" -eq 0 ]; then
         note "The player is still on whatever card it was using. When the WebUI"

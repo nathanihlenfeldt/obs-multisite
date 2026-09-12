@@ -183,9 +183,10 @@ but has not yet carried real encoder output.
   timeslipping — hold, resume, catch up, scrub, jump to a marker. Playback
   waits until a minute of the event is buffered before starting, so the
   picture never chases the live edge.
-- **Multi-track production audio.** Up to 6 OBS tracks — main mix, ISOs, click —
-  travel in the same fragment and are exposed at the satellite as separate
-  sources, sharing one download and one playout clock.
+- **Multi-track audio, up to 6 tracks.** Whatever the room puts on them — a
+  programme mix, mics on their own tracks, a click for the band — travels in the
+  same fragment and is exposed at the satellite as separate sources, sharing one
+  download and one playout clock.
 - **AES67 audio on the appliance.** A campus can put the player's sound onto the
   network as an AES67 stream instead of leaving it inside the HDMI picture, so
   its own console can take the feed whether or not a screen is attached. Built
@@ -315,7 +316,7 @@ out of scope, and the relay cannot re-encode.</summary>
 - **AES67 audio on the appliance is installed but unproven over an event.**
   Eight channels were received on a bench Pi, so the card, the daemon and the
   player's plumbing do work together, and the stream is created by the install
-  and switched from **Settings → Sound on the network**. What is not measured is
+  and switched from **Settings → Network audio output**. What is not measured is
   lip sync across a two-hour service and the PTP accuracy a Pi's network
   interface can reach without hardware timestamping, and no event has been
   through it. A PTP master must also exist on the network or nothing flows — the

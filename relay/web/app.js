@@ -240,7 +240,7 @@ function renderDestinations(list) {
 $('#add-open').onclick = () => {
   const sel = $('#add-audio');
   // Offer the names the main site published. With none yet, the operator can
-  // still add the destination and the main mix is used.
+  // still add the destination and the first track is used.
   sel.innerHTML = audioLabels.length
     ? audioLabels.map((l) => `<option value="${esc(l)}">${esc(l)}</option>`).join('')
     : '<option value="">The main mix</option>';

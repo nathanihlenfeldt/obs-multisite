@@ -65,8 +65,9 @@ a campus can rewind only as far as retention allows.
 If the internet drops, the encoder keeps recording to disk and sends the
 backlog when it returns. Nothing is lost and nothing is skipped.
 
-**Stereo only? You are done.** For production audio — main mix, mic ISOs, a
-click — enable the tracks in OBS's own Settings → Output → Recording, assign
+**Stereo only? You are done.** For more than stereo — a mix, mics on their own
+tracks, a click for the band — enable the tracks in OBS's own
+Settings → Output → Recording, assign
 sources to tracks in Advanced Audio Properties, then name them under
 **Settings… → Track labels** so the campus sees "Click" and not "Track 3".
 

@@ -825,6 +825,29 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         updated.aes67_channels = (int)number_param(
             req, body, "channels", updated.aes67_channels);
 
+        // ── The sound has to go to the AES67 card, or there is no stream ─────
+        // There is one output device here, not two. The daemon publishes what is
+        // written to the AES67 card, so if the player is sending the sound
+        // anywhere else, the stream is silent however healthy it looks — and
+        // that is the state this moves rather than warns about.
+        const std::string card = aes67_card_device(kAes67CardName);
+        if (enabled) {
+            if (!card.empty() && updated.alsa_device != card) {
+                // Remember where the room's sound was, so that switching this
+                // off puts it back there rather than guessing.
+                updated.aes67_previous_device = updated.alsa_device;
+                updated.alsa_device = card;
+            }
+        } else if (updated.alsa_device.find(kAes67CardName) !=
+                   std::string::npos) {
+            // Only if the sound is actually on that card: a box somebody has
+            // already pointed at HDMI deliberately must be left alone.
+            updated.alsa_device = updated.aes67_previous_device.empty()
+                                      ? std::string("default")
+                                      : updated.aes67_previous_device;
+            updated.aes67_previous_device.clear();
+        }
+
         // Saved before the daemon is asked, so that a daemon which refuses still
         // leaves the box remembering what it was asked to do — and so the
         // setting survives the power cut that might have caused the refusal.
@@ -844,7 +867,17 @@ void register_api(HttpServer& server, Player& player, std::string config_path) {
         const std::string name = "Multisite " + hostname();
 
         std::string problem;
-        if (enabled) {
+        if (enabled && card.empty()) {
+            // Said rather than done. Pointing the player at a card that is not
+            // registered would silence the room for a stream that could not have
+            // worked anyway, so the sound is left where it was and the reason is
+            // given. The setting itself is kept: a module that was not loaded yet
+            // being loaded is then all that is missing.
+            problem =
+                "the AES67 card is not registered with ALSA, so there is "
+                "nothing for the sound to go to — the kernel module is probably "
+                "not loaded. The room's sound has been left where it was.";
+        } else if (enabled) {
             // Started *and* enabled, together, every time: enabling is what
             // makes it come back after a power cut, which is the promise the
             // interface makes, and a daemon that happens to be running but is

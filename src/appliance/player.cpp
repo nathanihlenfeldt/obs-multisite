@@ -465,6 +465,62 @@ void Player::on_audio(const DecodedAudioFrame& f) {
     enqueue(std::move(item));
 }
 
+// ── Opening the sound card ───────────────────────────────────────────────────
+
+// One place that opens, reopens and re-checks the sound card, because there are
+// three moments that need it and they must not disagree: a frame arriving, the
+// device being changed in the interface, and the box sitting idle.
+//
+// The idle case is not an optimisation. On a box whose sound is going onto the
+// network, the AES67 daemon publishes what is written to the AES67 card, so an
+// output that has never been opened is a stream that does not exist — and a
+// satellite between services is idle for far more of the day than it is
+// playing. Before this, the card was opened only when a frame arrived, so a box
+// that had not played anything since it was switched on had nothing on the
+// network at all, and changing the device on an idle box did nothing until
+// something played.
+//
+// The rate is the feed's own when a frame has been seen, and 48 kHz before
+// that, which is what every feed this project produces uses: CMAF at the
+// encoder, and the AES67 stack on this box.
+void Player::ensure_audio_open(const Config& cfg, int feed_channels,
+                               int feed_rate) {
+    if (feed_rate > 0) m_audio_rate.store(feed_rate);
+
+    // Either the device was changed in the interface, or the feed has turned
+    // out not to run at the rate the card was opened at — which would otherwise
+    // play back at the wrong pitch.
+    const int  opened_at = m_audio_opened_rate.load();
+    const bool rate_changed =
+        feed_rate > 0 && m_audio_open.load() && feed_rate != opened_at;
+    if (m_audio_reopen.exchange(false) || rate_changed) {
+        m_audio.close();
+        m_audio_open = false;
+        m_audio_opened_rate.store(0);
+    }
+
+    if (!cfg.audio_enabled || m_audio_open.load()) return;
+
+    int rate = m_audio_rate.load();
+    if (rate <= 0) rate = 48000;
+    const int channels = cfg.audio_channels > 0 ? cfg.audio_channels
+                        : (feed_channels > 0 ? feed_channels : 2);
+
+    std::string err;
+    if (m_audio.open(cfg, rate, channels, err)) {
+        m_audio_open = true;
+        m_audio_opened_rate.store(rate);
+        plog_info("audio out: %s", m_audio.description().c_str());
+    } else {
+        plog_error("audio out failed: %s", err.c_str());
+        note_error("audio output: " + err);
+        // Do not retry every tick; a dead card would fill the log faster than
+        // an operator could read it. Changing the device in the interface asks
+        // for another attempt.
+        m_audio_open = true;
+    }
+}
+
 // ── Delivery ─────────────────────────────────────────────────────────────────
 
 void Player::deliver_loop() {
@@ -475,6 +531,11 @@ void Player::deliver_loop() {
         // output received and the queue stays put, so Continue resumes exactly
         // where the operator stopped.
         if (m_paused.load()) {
+            // Held: deliver nothing, but the card still has to be open and fed.
+            // Holding the picture is not switching the sound off, and on a box
+            // whose sound is on the network a stream that stops while somebody
+            // holds a frame is a stream that receivers drop.
+            ensure_audio_open(config(), 0, 0);
             std::this_thread::sleep_for(std::chrono::milliseconds(20));
             continue;
         }
@@ -486,7 +547,16 @@ void Player::deliver_loop() {
                 return !m_dq.empty() || !m_running.load();
             });
             if (!m_running.load()) break;
-            if (m_dq.empty()) continue;
+            if (m_dq.empty()) {
+                // Nothing to deliver — but the card may still need opening or
+                // reopening, and that is asked here rather than only when a
+                // frame arrives. It is what lets a box that is idle put its
+                // sound on the network at all, and what makes a device chosen
+                // in the interface take effect straight away instead of at the
+                // next service.
+                ensure_audio_open(config(), 0, 0);
+                continue;
+            }
             // Release the earliest-timestamped frame in the window, not simply
             // the first enqueued: video and audio arrive in track order.
             auto it = std::min_element(m_dq.begin(), m_dq.end(),
@@ -603,29 +673,8 @@ void Player::deliver_loop() {
             }
             m_frame_version++;
         } else {
-            Config cfg = config();
-            // The device was changed in the interface. Let the old one go so
-            // the next frame opens the new one.
-            if (m_audio_reopen.exchange(false)) {
-                m_audio.close();
-                m_audio_open = false;
-            }
-            if (cfg.audio_enabled && !m_audio_open.load()) {
-                const int ch = cfg.audio_channels > 0 ? cfg.audio_channels
-                                                      : item.audio.channels;
-                std::string err;
-                if (m_audio.open(cfg, item.audio.sample_rate, ch, err)) {
-                    m_audio_open = true;
-                    plog_info("audio out: %s", m_audio.description().c_str());
-                } else {
-                    plog_error("audio out failed: %s", err.c_str());
-                    note_error("audio output: " + err);
-                    // Do not retry every frame; a dead card would fill the log
-                    // faster than an operator could read it. Changing the
-                    // device in the interface asks for another attempt.
-                    m_audio_open = true;
-                }
-            }
+            const Config cfg = config();
+            ensure_audio_open(cfg, item.audio.channels, item.audio.sample_rate);
             if (cfg.audio_enabled) m_audio.write(item.audio);
         }
     }

@@ -157,6 +157,15 @@ int aes67_daemon_port() {
     return from_conf > 0 ? from_conf : kAes67DaemonDefaultPort;
 }
 
+std::string aes67_card_device(const std::string& name) {
+    const std::string id =
+        aes67_card_id_from_cards(read_text_file("/proc/asound/cards"), name);
+    // plughw rather than hw: the card takes integer samples and the player
+    // hands over floats, so the plug layer is doing the converting. This is the
+    // same device string merging-aes67.sh writes.
+    return id.empty() ? std::string() : "plughw:CARD=" + id;
+}
+
 Aes67State aes67_probe(const std::string& alsa_device, int want_channels,
                        const std::string& want_address) {
     Aes67State st;

@@ -30,6 +30,66 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.15-alpha
+
+Three fixes, and one correction to what the previous notes told you.
+
+### The stream keeps running when nothing is playing
+
+On a receiver, the AES67 source used to disappear the moment the picture
+stopped. The daemon publishes what is written to the AES67 card, and the player
+only writes when there is a frame to deliver — so an idle box left a card that
+was open and never written to, and a card in that state stops producing samples.
+Nothing was wrong at the receiver; there was simply nothing being sent.
+
+The card is now kept fed with silence while the box is idle. That is audible as
+nothing at all, and visible as a receiver that stays online.
+
+The first attempt at it changed nothing, and the reason is worth recording: it
+kept one *period* of audio queued, which is only a cushion on a card with a large
+period. The AES67 card's is one millisecond, so it under-ran on every cycle. It
+keeps twenty milliseconds now, checked four times over.
+
+**The trade, said plainly:** while the box is idle, up to 20 ms of silence sits
+in front of the sound when playback starts again. That is inside what the card
+buffers anyway.
+
+A second thing came out of the same work. The card is opened as soon as the box
+is idle rather than at the first audio frame, so a satellite that has not played
+anything since it was switched on still has a stream on the network — which is
+the state a satellite is in for most of the week.
+
+### Putting the sound on the network moves the sound
+
+**The previous notes were wrong about this, and the error sent somebody looking
+in the wrong place.** They said the HDMI output and the network stream both
+carried the audio. There is one output device on this box, not two, and the
+daemon publishes what is written to the AES67 card — so a player writing to HDMI
+leaves the stream silent however healthy it looks.
+
+Choosing **yes** now moves the sound onto the AES67 card, and choosing **no**
+puts it back on the device it was on before. The output device picker is greyed
+out while it is on, because the two disagreeing is the fault worth preventing
+rather than reporting.
+
+### Renamed, and the audio is the campus's business
+
+**Settings → Sound on the network** is now **Settings → Network audio output**,
+in the player and everywhere it is written about.
+
+The wording around it no longer assumes what the audio contains. It used to say
+the stream carries "the production bus: main mix, mic ISOs and click", which is
+one kind of event's answer to a question that belongs to whoever is running it.
+The box carries up to eight channels and up to six tracks; what is on them is
+their decision, and where an example helps it is now offered as one.
+
+### Also fixed
+
+Saving the settings page quietly discarded the network audio output's switch: the
+control sat inside the settings form but was applied by its own button, so
+pressing **Save** put the old value back and the choice looked like it had not
+stuck. Saving now applies it along with everything else.
+
 ## What's new in v0.1.14-alpha
 
 The appliance can now put its sound on the network without anybody logging into
@@ -39,14 +99,14 @@ the daemon to arrange it, and it says why it is quiet when it is.
 
 A campus that wants its audio on a console rather than only on the HDMI socket
 runs one installer, and from then on the player's own page carries the control.
-**Settings → Sound on the network** is on or off, the multicast address to
+**Settings → Network audio output** is on or off, the multicast address to
 publish to, and the channel count — one button for all three, because they are
 one decision rather than three. Switching it on starts the daemon, sets it to
 come back after a power cut, and creates the stream; switching it off *stops* the
 stream rather than deleting it, so the address survives and switching it back on
 is one click and not a re-entry of everything.
 
-**This box → Sound on the network** is the other half, and it is the half worth
+**This box → Network audio output** is the other half, and it is the half worth
 having: what is actually being sent, read back from the daemon rather than
 assumed from the settings beside it. Whether it is running, whether its clock is
 locked and to which grandmaster, the address and port on the wire, and the

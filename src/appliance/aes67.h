@@ -54,8 +54,10 @@ constexpr int kAes67SamplesPerPacket = 48;
 // expedited-forwarding class AES67 audio is expected to use).
 constexpr int kAes67Ttl  = 15;
 constexpr int kAes67Dscp = 34;
-// The production bus is main mix, mic ISOs and click, and eight channels is what
-// the open stack was proven at on the bench.
+// Eight channels by default: the width the open stack was proven at, and one
+// that suits a stream carrying a room's own mix rather than a stereo listener
+// feed. What those channels contain is the campus's business — this carries
+// them.
 constexpr int kAes67DefaultChannels = 8;
 
 // Where the daemon's own configuration is, and the port it uses when its file
@@ -311,6 +313,56 @@ inline int aes67_daemon_port_from_conf(const std::string& text) {
     return any ? port : 0;
 }
 
+// ── Finding the card, so the player can be pointed at it ─────────────────────
+// The network stream carries what the player sends to the AES67 card — there is
+// one output device, not two — so when the network audio output is switched on,
+// the player has to be sending the sound there and nowhere else. That means the
+// device name has to be built, and the card's ALSA id read back from the kernel
+// rather than written down: the driver never names its own card, so ALSA
+// derives the id from the driver's shortname and truncates it to its
+// fifteen-character limit, and the id is settable at module load, so a box
+// could have registered it as anything at all.
+//
+// `/proc/asound/cards` lines look like:
+//
+//      3 [RAVENNA        ]: MergingRavennaALSA - Merging RAVENNA
+//
+// The id is matched against the whole line rather than the bracket alone,
+// because the id is only one of the places the card's name appears — and the
+// bracketed field is space-padded, which is not part of the id.
+//
+// An empty answer means no card matched, and the caller must treat that as
+// "cannot be done": pointing the player at a device that does not exist would
+// silence the room for a stream that could never have worked.
+inline std::string aes67_card_id_from_cards(const std::string& cards_text,
+                                            const std::string& name) {
+    if (name.empty()) return {};
+
+    size_t pos = 0;
+    while (pos <= cards_text.size()) {
+        const size_t eol = cards_text.find('\n', pos);
+        const std::string line = cards_text.substr(
+            pos, eol == std::string::npos ? std::string::npos : eol - pos);
+        pos = (eol == std::string::npos) ? cards_text.size() + 1 : eol + 1;
+
+        const size_t open = line.find('[');
+        if (open == std::string::npos) continue;
+        const size_t close = line.find(']', open);
+        if (close == std::string::npos) continue;
+
+        std::string id = line.substr(open + 1, close - open - 1);
+        const size_t first = id.find_first_not_of(" \t");
+        if (first == std::string::npos) continue;   // empty brackets
+        id.erase(0, first);
+        while (!id.empty() && (id.back() == ' ' || id.back() == '\t'))
+            id.pop_back();
+        if (id.empty()) continue;
+
+        if (line.find(name) != std::string::npos) return id;
+    }
+    return {};
+}
+
 // ── What the player can see about the daemon ─────────────────────────────────
 // One pass's worth of answers, gathered so the interface can say what is true
 // rather than what should be true. Every field is something an operator can act
@@ -383,5 +435,11 @@ std::string aes67_set_service(bool start, bool enable);
 
 // The port the daemon is on, read from its configuration on this box.
 int aes67_daemon_port();
+
+// The device string the player has to be using for the sound to reach the
+// network: `plughw:CARD=<id>`, built from the card this box actually has. Empty
+// when that card is not registered — which the caller must treat as "this
+// cannot be done", never as "carry on with whatever device is selected".
+std::string aes67_card_device(const std::string& name);
 
 } // namespace multisite_player

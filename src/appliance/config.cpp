@@ -120,6 +120,7 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "aes67_manage",         aes67_manage);
     take(j, "aes67_address",        aes67_address);
     take(j, "aes67_channels",       aes67_channels);
+    take(j, "aes67_previous_device", aes67_previous_device);
     return true;
 }
 
@@ -172,6 +173,7 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["aes67_manage"]         = aes67_manage;
     j["aes67_address"]        = aes67_address;
     j["aes67_channels"]       = aes67_channels;
+    j["aes67_previous_device"] = aes67_previous_device;
 
     const std::string tmp = path + ".tmp";
     {

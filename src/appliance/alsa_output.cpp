@@ -2,8 +2,9 @@
 //
 // alsa_output.cpp — production audio out of the box.
 //
-// The whole point of the audio design is that a satellite receives a
-// production bus — main mix, mic ISOs, click — not a stereo listener feed. So
+// The appliance carries whatever the feed carries, which is more than a stereo
+// listener mix — a campus's own console or router decides what those channels
+// mean, and this program's job is to transport them. So
 // this opens the device with the channel count the FEED carries and holds onto
 // as many of the feed's channels as the card will accept.
 //
@@ -33,6 +34,14 @@
 namespace multisite_player {
 
 namespace {
+
+// Monotonic nanoseconds, for the one question the keep-alive thread asks: has
+// the thread that delivers audio written anything lately?
+uint64_t steady_ns() {
+    using namespace std::chrono;
+    return (uint64_t)duration_cast<nanoseconds>(
+        steady_clock::now().time_since_epoch()).count();
+}
 
 class AlsaOutput : public AudioOutput {
 public:
@@ -97,6 +106,10 @@ private:
     std::vector<uint8_t> m_silence;
     std::thread m_idle;
     std::atomic<bool> m_idle_stop{false};
+    // When the delivery thread last wrote real audio. The idle announcement is
+    // keyed on this rather than on the buffer level, because the level dips
+    // routinely during normal playback and saying "idle" then would be wrong.
+    std::atomic<uint64_t> m_last_write_ns{0};
 };
 
 bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
@@ -366,6 +379,10 @@ void AlsaOutput::write(const multisite::DecodedAudioFrame& frame) {
     std::lock_guard<std::mutex> lk(m_mtx);
     if (!m_pcm || frame.frames == 0 || frame.interleaved.empty()) return;
 
+    // Told to the keep-alive thread, which uses it to tell "the box is idle"
+    // apart from "the box is playing and the buffer happens to be low".
+    m_last_write_ns.store(steady_ns(), std::memory_order_relaxed);
+
     // Straight through only when the card took float *and* the feed's channel
     // count already matches the device: the decoder's own buffer is then
     // exactly what ALSA is waiting for, and copying every sample on the thread
@@ -446,21 +463,54 @@ void AlsaOutput::keep_fed() {
     const snd_pcm_uframes_t buffer = m_buffer_frames;
     if (period == 0 || buffer == 0 || period > buffer) return;
 
-    // Half a period between checks: often enough to top the card up before it
-    // can run dry, rare enough to cost nothing. Clamped, so a card that
-    // reported something odd cannot make this sleep for a second or spin.
     const unsigned rate = (unsigned)(m_rate > 0 ? m_rate : 48000);
-    long long sleep_ms = (long long)((period * 1000ULL) / rate) / 2;
-    if (sleep_ms < 2)  sleep_ms = 2;
-    if (sleep_ms > 50) sleep_ms = 50;
 
-    // So the idle state is announced once each time it happens rather than once
-    // per top-up, which would be fifty lines a second from a box doing nothing.
+    // How much audio to keep in the card's buffer while nothing is playing.
+    //
+    // Twenty milliseconds is the cushion: enough that a wake-up missed by a
+    // scheduler hiccup does not reach the end of it, and short enough that at
+    // most that much silence sits in front of the sound when playback starts
+    // again. It must never be less than a period — a period is the least the
+    // device can be given, and is also the amount that starts a stopped stream
+    // (the start threshold set in open()) — and never more than a quarter of
+    // the buffer, so this cannot crowd out the device's own headroom.
+    //
+    // The first version of this kept one *period*, which is the same thing only
+    // on a card with a large period. The AES67 card's period is one
+    // millisecond, so it kept 1 ms queued and the device consumed 1 ms per
+    // millisecond: it under-ran on every cycle, and the stream stayed broken in
+    // the idle case this exists for.
+    snd_pcm_uframes_t target = (snd_pcm_uframes_t)(rate / 50);   // 20 ms
+    if (target < period)             target = period;
+    if (target > buffer / 4)         target = buffer / 4;
+    if (target < period)             target = period;            // a tiny buffer
+
+    // A quarter of the cushion between checks, so four of them can be missed
+    // before the card runs dry. Microseconds rather than milliseconds: on a
+    // card with a 1 ms period, a sleep rounded up to the next millisecond is
+    // already longer than the period itself.
+    long long sleep_us = (long long)(target * 1000000ULL / rate) / 4;
+    if (sleep_us < 1000)  sleep_us = 1000;
+    if (sleep_us > 20000) sleep_us = 20000;
+
+    // So the idle state is announced once each time it actually happens, rather
+    // than once per top-up. A box playing normally also tops the card up
+    // occasionally — the delivery thread keeps only about one frame ahead of
+    // the device — and saying so every few seconds is noise in a log an
+    // operator has to read.
     bool announced = false;
 
     while (!m_idle_stop.load(std::memory_order_acquire)) {
-        std::this_thread::sleep_for(milliseconds(sleep_ms));
+        std::this_thread::sleep_for(microseconds(sleep_us));
         if (m_idle_stop.load(std::memory_order_acquire)) break;
+
+        // Idle means the delivery thread has not written anything for a while.
+        // That, not the buffer level, is what the operator cares about: the
+        // level dips routinely during normal playback.
+        const bool idle =
+            steady_ns() - m_last_write_ns.load(std::memory_order_relaxed) >
+            1000000000ULL;
+        if (!idle) announced = false;
 
         std::lock_guard<std::mutex> lk(m_mtx);
         if (!m_pcm || m_silence.empty()) continue;
@@ -473,18 +523,15 @@ void AlsaOutput::keep_fed() {
         if (avail <= 0) continue;
 
         const snd_pcm_sframes_t queued = (snd_pcm_sframes_t)buffer - avail;
-        if (queued >= (snd_pcm_sframes_t)period) {
-            // A period or more in hand, so the delivery thread is feeding it and
-            // there is nothing to add. Real audio has resumed.
-            announced = false;
-            continue;
-        }
+        // Cushion still in hand: the delivery thread is feeding it and there is
+        // nothing to add.
+        if (queued >= (snd_pcm_sframes_t)target) continue;
 
         const snd_pcm_uframes_t want =
-            (snd_pcm_uframes_t)((snd_pcm_sframes_t)period - queued);
+            (snd_pcm_uframes_t)((snd_pcm_sframes_t)target - queued);
         if (want == 0 || want > (snd_pcm_uframes_t)avail) continue;
 
-        if (write_frames(m_silence.data(), want) && !announced) {
+        if (write_frames(m_silence.data(), want) && idle && !announced) {
             announced = true;
             plog_info("sound card idle — writing silence so the output keeps "
                       "running and anything reading it stays in step");

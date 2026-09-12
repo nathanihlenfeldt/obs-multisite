@@ -218,9 +218,9 @@
     <div class="field">
       <label for="c-alsa">Output device</label>
       <select id="c-alsa" name="alsa_device"></select>
-      <p class="hint">
-        HDMI carries up to eight channels; a de-embedder at the campus
-        recovers the individual mixes and the click.
+      <p class="hint" id="c-alsa-note">
+        HDMI carries up to eight channels; a de-embedder at the campus recovers
+        each one separately.
       </p>
     </div>
     <div class="field">
@@ -277,19 +277,21 @@
       </select>
     </div>
 
-    <h2>Sound on the network</h2>
+    <h2>Network audio output</h2>
     <div class="field">
-      <label for="c-aes67-on">Publish the sound as AES67</label>
+      <label for="c-aes67-on">Put the sound on the network</label>
       <select id="c-aes67-on">
-        <option value="false">No — the sound stays on the HDMI socket</option>
-        <option value="true">Yes — put it on the network as well</option>
+        <option value="false">No — the sound goes to the output device above</option>
+        <option value="true">Yes — send it as an AES67 stream</option>
       </select>
       <p class="hint">
         Needs the open AES67 stack installed on this box, which is a separate
         step (<code>scripts/player/merging-aes67.sh</code>). Switching this on
-        starts the daemon, sets it to come back after a power cut, and creates an
-        eight-channel stream. The sound still leaves by HDMI as well — this adds
-        a route, it does not move the one already there.
+        starts the daemon, sets it to come back after a power cut, creates the
+        stream, and <strong>moves the sound onto the AES67 card</strong> — that
+        card is what the daemon publishes, so the sound has to be going there for
+        there to be a stream at all. Switching it off stops the stream and puts
+        the sound back on the output device above.
       </p>
     </div>
     <div class="field">
@@ -305,13 +307,15 @@
       <label for="c-aes67-channels">Channels</label>
       <input type="number" id="c-aes67-channels" min="1" max="64" step="1" value="8">
       <p class="hint">
-        Eight is the production bus: main mix, mic ISOs and click. The width is
-        fixed rather than following whatever an event carries, because receiving
-        consoles configure against it and would have to re-learn the stream.
+        How wide the stream is — eight by default. It carries whatever the feed
+        happens to contain; what is sent is the campus's business, not this
+        box's. The width is fixed rather than following each event, because
+        receiving consoles configure against it and would otherwise have to
+        re-learn the stream.
       </p>
     </div>
     <div class="row">
-      <button type="button" id="btn-aes67">Apply to the network</button>
+      <button type="button" id="btn-aes67">Apply network audio</button>
       <span class="muted" id="aes67-note"></span>
     </div>
 
@@ -361,7 +365,7 @@
     screen as the remote access address.
   </p>
 
-  <h2>Sound on the network</h2>
+  <h2>Network audio output</h2>
   <dl class="facts" id="aes67-facts"></dl>
   <p class="hint" id="aes67-hint"></p>
   <details id="aes67-sdp-box" hidden>

@@ -525,9 +525,11 @@ Two tiers, sharing one build:
   anything that takes AES67 directly. Installed by
   `scripts/player/merging-aes67.sh`; the stream is created by that install and
   switched afterwards from the player's own page, which also reports the
-  multicast address, the port and the clock state. It is additive — the sound
-  still leaves by HDMI, so a room fed from the Pi is unaffected — and the daemon
-  is a PTP slave, so a master has to exist on the network or nothing flows.
+  multicast address, the port and the clock state. Switching it on moves the
+  player's sound onto the AES67 card — that card being what the daemon publishes
+  — and switching it off puts the sound back on the chosen output device; there
+  is one output device here, not two. The daemon is a PTP slave, so a master has
+  to exist on the network or nothing flows.
 - **Storage.** The segment cache writes roughly 3 GB per hour at 6 Mbps. That
   will wear out an SD card, so a USB SSD is required rather than recommended,
   and the cache location must be configurable.

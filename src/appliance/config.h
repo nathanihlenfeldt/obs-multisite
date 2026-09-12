@@ -131,14 +131,21 @@ struct Config {
     // a box that has never been edited should get. Set here to publish to a
     // different multicast group.
     std::string aes67_address;
-    // The width of the published stream. Eight is the production bus — main
-    // mix, mic ISOs and click — and it is fixed rather than following the feed,
+    // The width of the published stream. Eight by default — the width the open
+    // stack was proven at, and one most consoles are happy to receive — and it
+    // is fixed rather than following the feed,
     // because receiving consoles configure against a stream's width and would
     // have to re-learn it every time an event carried a different number of
     // tracks. (aes67.h carries the same default as kAes67DefaultChannels; it is
     // repeated rather than included so that this header, which everything
     // includes, does not drag a JSON library in behind it.)
     int         aes67_channels = 8;
+    // Where the sound was going before the network output took it over, so that
+    // switching the network output off puts the room back where it was rather
+    // than leaving it pointed at a card that is no longer carrying anything.
+    // Internal: no interface shows it, and it survives a power cut between the
+    // two clicks.
+    std::string aes67_previous_device;
 
     bool configured() const {
         return !bucket.empty() &&
