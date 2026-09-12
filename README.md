@@ -189,8 +189,9 @@ but has not yet carried real encoder output.
 - **AES67 audio on the appliance.** A campus can put the player's sound onto the
   network as an AES67 stream instead of leaving it inside the HDMI picture, so
   its own console can take the feed whether or not a screen is attached. Built
-  on Digisynthetic's virtual sound card and installed by one script; it passes
-  eight channels on a bench Pi, but has not yet been through an event. See
+  on Merging's open RAVENNA kernel module and the GPL `aes67-daemon` and
+  installed by one script; it passes eight channels on a bench Pi, but has not
+  yet been through an event. See
   [AES67 audio](docs/SATELLITE.md#aes67-audio-on-the-network).
 - **Event browsing.** The decoder lists what a room has recorded, shows which is
   on air, which are finished recordings and which were cut short by an encoder
@@ -313,8 +314,9 @@ out of scope, and the relay cannot re-encode.</summary>
   Eight channels were received on a bench Pi, so the card, the daemon and the
   player's plumbing do work together. What is not measured is lip sync across a
   two-hour service and the PTP accuracy a Pi's network interface can reach
-  without hardware timestamping; also, nothing on the Pi tells a receiver which
-  address and port to listen on — that is set through the vendor's own tool.
+  without hardware timestamping, and no event has been through it. A PTP master
+  must also exist on the network or nothing flows — the daemon slaves to a
+  clock, it does not hand one out.
   See [BUGS.md entry 3](BUGS.md).
 - **AV1 is carried but lightly exercised**, unlike H.264 and HEVC.
 - **Seeking is accurate to about a second**, not to a frame.

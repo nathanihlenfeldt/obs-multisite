@@ -219,108 +219,71 @@ Out of the box the sound leaves on the HDMI socket with the picture, so it
 reaches whatever is plugged into the Pi and nothing else. A campus that wants
 the sound on its own console — a separate feed, its own level control, working
 whether or not a screen is attached — needs it on the network, and on a church
-network that means AES67. `scripts/player/aes67.sh` installs Digisynthetic's
-virtual sound card so the player's audio arrives as an AES67 stream instead of
-staying inside the picture. The vendor's package has to be on the box first,
-and their licence with it:
+network that means AES67. `scripts/player/merging-aes67.sh` installs an open
+AES67 stack so the player's audio arrives as a stream instead of staying inside
+the picture: Merging's `ravenna-alsa-lkm` kernel module, which registers an
+ordinary ALSA sound card, and the GPL `aes67-daemon` that talks to it and does
+RTP, SDP/SAP and PTP. Merging's own daemon ("Butler") is the amd64-only licensed
+part; this one stands in for it, which is why it runs on a Pi:
 
 ```bash
-# put linux-vsc-aarch64-1.0.1-20260529.zip and the licence on the box, then:
-sudo bash scripts/player/aes67.sh \
-    --package /home/pi/linux-vsc-aarch64-1.0.1-20260529.zip \
-    --license-file /home/pi/license.dat
+sudo bash scripts/player/merging-aes67.sh
 ```
 
-Their package is served from a host in China, which is sometimes reachable from
-a campus and sometimes not, so `--package` — a zip copied across on a stick or
-by `scp` — is the reliable path; `--url` (or `VSC_URL=https://…`) downloads it
-instead when the box can reach it. On a box that has never seen this repository,
-fetch the script the way the player installer is fetched:
+On a box that has never seen this repository, fetch the script the way the
+player installer is fetched:
 
 ```bash
-VSC_URL=https://…/linux-vsc-aarch64-1.0.1-20260529.zip \
-AES67_LICENSE_FILE=/home/pi/license.dat \
-  curl -fsSL https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/aes67.sh \
-  | sudo -E bash
+curl -fsSL https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/merging-aes67.sh \
+  | sudo bash
 ```
 
-Add `--with-player` to install the player in the same run, on a box that has
-neither yet. Every option that takes a value can also be passed as `VAR=value`,
-so the whole thing can be run without a terminal.
+It builds from source, so give it a few minutes and let it finish.
 
-- **One run does all of it.** The script builds their kernel module, registers
-  it with DKMS so a kernel update rebuilds it, installs their `DigiAes67Proc`
-  daemon under systemd, stores the licence, and points the player at the new
-  card. It is safe to run again: every step checks before it acts, and an
-  existing player configuration is edited rather than replaced. It writes a
-  report of everything it could check to
-  `/var/tmp/multisite-aes67-<timestamp>/report.txt`, and says out loud which
-  checks it could not make.
-- **The player converts to what the card takes.** The card accepts only S32_LE
-  samples while the decoder hands out floating point, so the player asks for
-  float first, then 32-bit, then 16-bit integers, and converts when it has to.
-  Choosing the `hw:` entry from the device menu in the interface used to end
-  with `will not take floating-point audio: Invalid argument` and no sound,
-  because `hw:` has no plugin to convert for it; that now opens and plays. The
-  installer still writes `plughw:CARD=…`, which continues to work and does the
-  same conversion one layer down. The driver gives the card no id, so ALSA
-  truncates its name to fifteen characters (`Digisyn_vSndCar`); the script reads
-  the real name back from `/proc/asound/cards` rather than guessing.
-- **The card's own buffer is 8 ms and cannot be widened — the player no longer
-  uses it.** The vendor driver fixes the card's buffer at one millisecond per
-  period and only as many periods as `bufMs` — eight, by default — so an ALSA
-  ring behind the picture is 8 ms while a single decoded frame is about 21 ms.
-  Writing frames through ALSA therefore under-ran on every frame, and the log
-  said `sound has broken up` several times a second; it blamed the power
-  supply, the SD card and the network, none of which were at fault. The driver
-  also exposes the daemon's shared buffer, and the player now writes the audio
-  into that directly — one millisecond at a time, at the slot the daemon is
-  about to read — whenever it recognises this card. So on an AES67 box the
-  `sound has broken up` lines should not appear at all. If they do, the player
-  failed to recognise the card and fell back to ALSA; the log says so on the
-  line before, and the detail is in
-  [BUGS.md point 5](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event).
-  The player also prints the buffer the card actually granted, next to the one
-  it asked for, when it is on the ALSA path.
-- **The order of two processes decides whether there is sound at all.** The card
-  has no rate and no channel count of its own; both are read out of a page of
-  shared memory that the *daemon* fills in. A player that starts first opens a
-  card advertising zero channels at zero hertz, refuses it, and carries on
-  running **silently**. A systemd drop-in starts the daemon first and orders the
-  player after it. Do not remove it.
-- **The daemon's settings are written the way their own binary writes them.**
-  The script fills in the sample rate, channel count, buffer, PTP domain and
-  interface in the format the daemon itself uses, then checks the result with
-  `--status` rather than assuming it took. To change one later, use
-  `sudo /usr/local/bin/DigiAes67Proc --setup`, and keep any change of rate or
-  channel count in step with `/etc/multisite-player/config.json`.
-- **A kernel update rebuilds the driver.** The vendor's own instructions make
-  that a hand step, which on an unattended box in a church means the sound
-  quietly disappears one Tuesday and nothing on the screen explains why. DKMS is
-  what prevents that; `--no-dkms` turns it off for a box where a manual rebuild
-  is preferred.
-- **The far end still has to be told what to listen for.** This is the one to
-  settle before a site goes live. Their Pi-side configuration flow asks for a
-  rate, a channel count, a buffer, a PTP domain and an interface, and never asks
-  for a multicast address, a port or a channel map — those live behind their
-  separate route tool, a PC-side program, and land in
-  `/etc/DigiAes67Proc/_route`. So a Pi can install perfectly and still transmit
-  a stream no receiver has been told about, which from the other end of the
-  building looks exactly like a broken driver. Confirm how the destination is
-  specified before trusting an install that only reports the card appeared.
+- **One run does all of it.** The script installs the build dependencies, builds
+  the kernel module for the running kernel, builds the daemon, installs both with
+  a systemd unit, writes `/etc/daemon.conf`, and arranges for the module to load
+  at boot. It is safe to run again: it reuses an existing build tree, and an
+  existing `/etc/daemon.conf` is left alone unless you pass `--rewrite-config`.
+  `--check` reports what is already on the box and changes nothing, which is the
+  first thing to run on a machine you did not install.
+- **The player is moved onto the card separately.** The installer leaves the
+  player alone unless you ask, so an install can be proven before anything the
+  congregation sees is touched. When the daemon's WebUI reports the clock
+  `locked`, move it with:
+
+  ```bash
+  sudo bash scripts/player/merging-aes67.sh --point-player
+  ```
+
+  This sets the player's `alsa_device` to `plughw:CARD=RAVENNA` and restarts it.
+  It is an ordinary ALSA card: the player needs no special handling, and the card
+  grants a normal buffer, so the `sound has broken up` under-runs of the earlier
+  Digisynthetic route do not occur.
+- **A PTP master has to exist on the network, or nothing flows.** The daemon
+  slaves to a clock; it does not hand one out. With no master — a Dante device, a
+  console, an Anubis — the WebUI never says `locked` and there is silence. This
+  is the most likely reason for quiet after a clean install, and it is a network
+  question rather than a fault in the install. The WebUI is at
+  `http://<pi>:8081` — 8081, not the project's 8080, because the player's own
+  interface already uses 8080 on this box.
+- **A forwardable stream: 8 channels, multicast, 1 ms packets.** Those are the
+  AES67 defaults the daemon announces, and the destination — multicast address,
+  port, channel map — is yours to set in the daemon's configuration and WebUI.
+- **Dante.** The source appears in Dante Controller, but the route from it to a
+  receiver is made by hand in that application. Test against the real Dante
+  hardware a site will use.
+- **A kernel upgrade means rerunning this script.** The module is built from
+  source against the running kernel and is deliberately *not* put through DKMS,
+  because its build takes a branch of the submodule and a compiler choice a DKMS
+  hook cannot reconstruct reliably. Rerun after an upgrade if the kernel moves.
 - **What is verified, and what is not.** On a bench Pi the module built, the
-  daemon came up, the card appeared, the player recognised it, and eight
-  channels of clean audio arrived — no break-up, because the player writes the
-  card's calendar directly rather than through ALSA. Not yet verified: that the
-  picture and the sound stay together across a two-hour service. The player
-  writes audio a fixed 3 ms ahead of the daemon's clock (`kDigisynLeadMs`), and
-  nothing actively steers it thereafter — `AlsaOutput::delay_s()` exists and
-  reads the card's position but nothing calls it — so whether that fixed lead
-  holds, or drifts as the daemon's clock and the player's decode rate move
-  apart, is what a full-length service settles; ten seconds of test tone cannot.
-  Also not verified: how accurate PTP becomes, since a Pi's network interface
-  does no hardware timestamping, so it is whatever the software manages. Measure
-  that at the receiver, not on the Pi. The detail is in
+  daemon came up, the card appeared, the player opened it, and eight channels of
+  clean audio arrived. Not yet verified: that the picture and the sound stay
+  together across a two-hour service, and how accurate PTP becomes, since a Pi's
+  network interface does no hardware timestamping and the result is whatever the
+  software manages. Measure both at the receiver, on a real event — ten seconds
+  of test tone cannot settle either. The detail is in
   [BUGS.md entry 3](../BUGS.md#3-aes67-audio-works-on-the-bench-unproven-over-an-event).
 
 ## Remote control from a phone
