@@ -329,6 +329,43 @@ locked, the fault is on the network, not on this box.
 **If the AES67 stack is not installed**, both places say so rather than offering
 a switch that would only fail. Install it with the script above and they fill in.
 
+### Uninstalling the player
+
+To take the player back off a box, run the mirror of the installer:
+
+```bash
+sudo bash scripts/player/uninstall.sh
+```
+
+or, on a box with no checkout, fetch it the way the installer is fetched:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/stageaudioworks/obs-multisite/main/scripts/player/uninstall.sh \
+  | sudo bash
+```
+
+It stops and disables the service and removes its unit, the program, the web
+page, the checkout and its build tree, the settings and the downloaded event —
+including a cache the installer put on a USB SSD rather than under
+`/var/lib/multisite-player`. Every step looks before it acts and the run ends by
+checking the same list again, so a box that is already clean is left alone.
+
+- **Look before you leap.** `--check` reports what is on the box and changes
+  nothing; `--dry-run` prints every change and makes none. Both are safe to run
+  anywhere, including a laptop, which is where this wants to be read through
+  first.
+- **Keeping a box for a reinstall.** `--keep-config` removes the software but
+  leaves `/etc/multisite-player` and the downloaded event; `--keep-cache` keeps
+  only the event.
+- **Remote access and AES67 are decisions, not defaults.** A box can keep either
+  after the player has gone — the tunnel may still be how it is reached, and the
+  sound may still be on the network — so neither is touched unless asked.
+  `--purge-remote-access` removes ZeroTier and cloudflared; `--purge-aes67`
+  removes Merging's kernel module and `aes67-daemon`, their configuration and
+  the build tree, and puts PulseAudio back. The legacy Digisynthetic stack is
+  never touched here; that is
+  [`purge-digisyn.sh`](../scripts/player/purge-digisyn.sh).
+
 ## Remote control from a phone
 
 The decoder in OBS serves the same page the appliance does — play, hold, catch
