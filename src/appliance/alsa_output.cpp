@@ -18,6 +18,7 @@
 #include "log.h"
 #include "sysinfo.h"   // to report why sound broke up, rather than guess
 #include "pcm_convert.h"
+#include "idle_keepalive.h"   // the cushion, and the buffer that holds it
 
 #include <alsa/asoundlib.h>
 
@@ -100,9 +101,16 @@ private:
     // period's worth and how much the buffer holds in total.
     snd_pcm_uframes_t m_period_frames = 0;
     snd_pcm_uframes_t m_buffer_frames = 0;
-    // One period of silence in the card's own format, built once when the card
-    // is opened. Silence is zero bytes in every one of them, which is why this
-    // does not need to know which format was agreed.
+    // How much audio to keep queued while nothing is playing, decided once when
+    // the card is opened (idle_cushion_frames) and used by both the buffer sized
+    // below and the top-up that writes from it. It used to be recomputed in
+    // keep_fed() while the buffer was sized from the period, and the two
+    // disagreeing on a 1 ms-period card is what read past the end of the heap.
+    snd_pcm_uframes_t m_idle_cushion = 0;
+    // The cushion's worth of silence in the card's own format, built once when
+    // the card is opened. Silence is zero bytes in every one of them, which is
+    // why this does not need to know which format was agreed — but it does have
+    // to be as long as the largest write keep_fed() will make from it.
     std::vector<uint8_t> m_silence;
     std::thread m_idle;
     std::atomic<bool> m_idle_stop{false};
@@ -298,8 +306,30 @@ bool AlsaOutput::open(const Config& cfg, int sample_rate, int channels,
     m_buffer_frames = buffer_size;
     const size_t frame_bytes = (size_t)m_channels *
                                (size_t)pcm_bytes_per_sample(m_format);
-    if (m_period_frames > 0 && m_buffer_frames > 0 && frame_bytes > 0) {
-        m_silence.assign(frame_bytes * (size_t)m_period_frames, 0);
+    // The cushion and the buffer that holds it, from the one place that decides
+    // both. Sizing the buffer from the PERIOD, as this did, is the fault this
+    // header exists to prevent: the buffer has to hold the largest write
+    // keep_fed() will make, and that write is the cushion. The two numbers were
+    // one clamp apart on a card with a one millisecond period, and what came out
+    // of the gap was heap read as full-scale float — digital noise at 0 dBFS on
+    // the stream, from a function whose entire job is to be inaudible.
+    m_idle_cushion = (snd_pcm_uframes_t)idle_cushion_frames(
+        (uint32_t)(m_rate > 0 ? m_rate : 48000), (uint64_t)period_size,
+        (uint64_t)buffer_size);
+    const size_t silence_bytes = silence_buffer_bytes(
+        frame_bytes, (uint32_t)(m_rate > 0 ? m_rate : 48000),
+        (uint64_t)period_size, (uint64_t)buffer_size);
+    if (m_idle_cushion > 0 && silence_bytes > 0) {
+        m_silence.assign(silence_bytes, 0);
+        // Asked once, here, rather than trusted: if the top-up ever wants more
+        // than the buffer holds, that is a miss the log should carry and the
+        // card should merely go quiet for — never a read past the end of the
+        // heap, which is what nobody can see from the outside.
+        if (silence_bytes < frame_bytes * (size_t)m_idle_cushion)
+            plog_error("the silence buffer came out short (%zu bytes for %zu "
+                       "frames of %zu) — the card will not be topped up while "
+                       "idle, rather than risk feeding it uninitialised memory",
+                       silence_bytes, (size_t)m_idle_cushion, frame_bytes);
         m_idle_stop.store(false, std::memory_order_release);
         m_idle = std::thread(&AlsaOutput::keep_fed, this);
     } else {
@@ -333,6 +363,7 @@ void AlsaOutput::close() {
     }
     m_period_frames = 0;
     m_buffer_frames = 0;
+    m_idle_cushion = 0;
     m_silence.clear();
     m_description = "no audio output";
 }
@@ -467,31 +498,36 @@ void AlsaOutput::keep_fed() {
 
     // How much audio to keep in the card's buffer while nothing is playing.
     //
-    // Twenty milliseconds is the cushion: enough that a wake-up missed by a
-    // scheduler hiccup does not reach the end of it, and short enough that at
-    // most that much silence sits in front of the sound when playback starts
-    // again. It must never be less than a period — a period is the least the
-    // device can be given, and is also the amount that starts a stopped stream
-    // (the start threshold set in open()) — and never more than a quarter of
-    // the buffer, so this cannot crowd out the device's own headroom.
-    //
-    // The first version of this kept one *period*, which is the same thing only
-    // on a card with a large period. The AES67 card's period is one
-    // millisecond, so it kept 1 ms queued and the device consumed 1 ms per
-    // millisecond: it under-ran on every cycle, and the stream stayed broken in
-    // the idle case this exists for.
-    snd_pcm_uframes_t target = (snd_pcm_uframes_t)(rate / 50);   // 20 ms
-    if (target < period)             target = period;
-    if (target > buffer / 4)         target = buffer / 4;
-    if (target < period)             target = period;            // a tiny buffer
+    // Decided when the card was opened, by the same function that sized the
+    // buffer of zeros this writes from, and deliberately NOT recomputed here.
+    // The two were computed separately once, and on a card with a one
+    // millisecond period they disagreed by a factor of twenty: this kept a
+    // twenty-millisecond cushion while the buffer held one period of it, so
+    // every top-up read past the end of its own buffer and fed the card heap
+    // read as float — full-scale noise, on the stream, permanently. One number,
+    // one place, is the whole fix; the explanation lives in idle_keepalive.h,
+    // and tests/test_idle_keepalive.cpp is what stops it drifting back apart.
+    const snd_pcm_uframes_t target = m_idle_cushion;
+    if (target == 0 || target > buffer) return;
+
+    // The most this thread may ever ask for, in frames. The buffer of zeros was
+    // sized to hold exactly a cushion, so a write larger than this would read
+    // past the end of it — the fault above. Checked rather than assumed: if the
+    // two ever drift apart again the card goes quiet for one under-run, which is
+    // audible as a gap in silence and nothing worse, instead of being fed
+    // uninitialised memory.
+    const size_t frame_bytes = (size_t)m_channels *
+                               (size_t)pcm_bytes_per_sample(m_format);
+    snd_pcm_uframes_t max_write = target;
+    if (frame_bytes > 0) {
+        const snd_pcm_uframes_t holds =
+            (snd_pcm_uframes_t)(m_silence.size() / frame_bytes);
+        if (holds < max_write) max_write = holds;
+    }
 
     // A quarter of the cushion between checks, so four of them can be missed
-    // before the card runs dry. Microseconds rather than milliseconds: on a
-    // card with a 1 ms period, a sleep rounded up to the next millisecond is
-    // already longer than the period itself.
-    long long sleep_us = (long long)(target * 1000000ULL / rate) / 4;
-    if (sleep_us < 1000)  sleep_us = 1000;
-    if (sleep_us > 20000) sleep_us = 20000;
+    // before the card runs dry.
+    const long long sleep_us = idle_sleep_us((uint64_t)target, rate);
 
     // So the idle state is announced once each time it actually happens, rather
     // than once per top-up. A box playing normally also tops the card up
@@ -530,6 +566,11 @@ void AlsaOutput::keep_fed() {
         const snd_pcm_uframes_t want =
             (snd_pcm_uframes_t)((snd_pcm_sframes_t)target - queued);
         if (want == 0 || want > (snd_pcm_uframes_t)avail) continue;
+        // Never more than the buffer of zeros actually holds. A cushion is the
+        // largest write this thread makes, so this can only bite if the two have
+        // drifted apart — and if they have, skipping the top-up is a gap in
+        // silence rather than the noise that reading past the buffer produces.
+        if (want > max_write) continue;
 
         if (write_frames(m_silence.data(), want) && idle && !announced) {
             announced = true;
