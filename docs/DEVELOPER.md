@@ -76,6 +76,37 @@ cmake -S . -B build -DCMAKE_BUILD_TYPE=Release \
   -DLIBOBS_FRONTEND_INCLUDE_DIR="$OBS_SRC/frontend/api"
 cmake --build build --target obs-multisite
 ```
+**`-DQt6_DIR` is not optional, and getting it wrong fails quietly.** If CMake
+finds a different Qt first — Homebrew's, typically, since `/opt/homebrew` is on
+the default search path — the plugin links against that instead of the one OBS
+ships. It builds, it installs, and then `dlopen` fails at OBS startup with a
+missing private symbol:
+
+```
+Symbol not found: __ZN14QWindowPrivateC2E16QtPrivate_6_11_2
+Module '.../obs-multisite' not loaded
+```
+
+Nothing in the build says anything is wrong, because nothing is: the two Qts are
+both valid, they are simply a patch release apart, and Qt tags its private ABI
+with the exact version. The failure only appears once the code touches a symbol
+the two versions do not share — so a build can be wrong for weeks and work,
+until one new `#include` surfaces it.
+
+Check it rather than assume, after configuring and after any change to the
+dependencies:
+
+```sh
+cmake -S . -B build ... 2>&1 | grep "Qt docks enabled"   # says which Qt was found
+otool -L build/obs-multisite.plugin/Contents/MacOS/obs-multisite | grep QtCore
+nm -u build/obs-multisite.plugin/Contents/MacOS/obs-multisite | grep QtPrivate_
+```
+
+The version in the second command must match the Qt inside the OBS you are
+installing into (`/Applications/OBS.app/Contents/Frameworks/QtCore.framework`),
+and the third should print nothing at all — a plugin that needs a private ABI
+tag is a plugin that will not load on any other OBS build.
+
 **Two headers are vendored rather than linked.** `src/vendor/nlohmann/json.hpp`
 is the JSON parser the plugin and the relay use throughout.
 `src/vendor/obs-websocket/obs-websocket-api.h` is obs-websocket's vendor API: it
