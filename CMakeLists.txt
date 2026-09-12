@@ -327,27 +327,17 @@ add_executable(test_idle_screen tests/test_idle_screen.cpp src/appliance/screen.
 target_include_directories(test_idle_screen PRIVATE src/appliance)
 add_test(NAME idle_screen COMMAND test_idle_screen)
 
-# The decoder's floats to whatever the sound card agreed to take. An AES67 card
-# advertised S32_LE and nothing else, so the player's float-only open failed
-# with "will not take floating-point audio" and the install went silent instead
-# of converting. The arithmetic is the part that can be quietly wrong — a clamp
-# that wraps, a scale off by a step, a channel in the wrong slot — and it lives
-# in a header with no ALSA in it, so this runs anywhere, including the laptop the
-# fix was written on, where alsa_output.cpp is not compiled at all.
+# The decoder's floats to whatever the sound card agreed to take. A card that
+# advertises a single 32-bit integer format and nothing else made the player's
+# float-only open fail with "will not take floating-point audio", so the install
+# went silent instead of converting. The arithmetic is the part that can be
+# quietly wrong — a clamp that wraps, a scale off by a step, a channel in the
+# wrong slot — and it lives in a header with no ALSA in it, so this runs
+# anywhere, including the laptop the fix was written on, where alsa_output.cpp
+# is not compiled at all.
 add_executable(test_pcm_convert tests/test_pcm_convert.cpp)
 target_include_directories(test_pcm_convert PRIVATE src/appliance)
 add_test(NAME pcm_convert COMMAND test_pcm_convert)
-
-# The two halves of the AES67 audio path, kept free of ALSA so they build and
-# run anywhere. The card exists only on the appliance; the arithmetic that
-# addresses it does not need to, and that is the part that is easy to get wrong.
-add_executable(test_audio_queue tests/test_audio_queue.cpp)
-target_include_directories(test_audio_queue PRIVATE src/appliance)
-add_test(NAME audio_queue COMMAND test_audio_queue)
-
-add_executable(test_digisyn_calendar tests/test_digisyn_calendar.cpp)
-target_include_directories(test_digisyn_calendar PRIVATE src/appliance)
-add_test(NAME digisyn_calendar COMMAND test_digisyn_calendar)
 
 # ── Optional: the satellite appliance (headless player) ───────────────────────
 # The Raspberry Pi / mini-PC receive box: the same core, with its own video and

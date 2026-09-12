@@ -162,7 +162,7 @@ licensed, and the reason an open build runs on a Pi at all. The daemon does RTP,
 SDP/SAP and PTP itself, and lets a stream be aimed at a chosen multicast address,
 port and channel map. It has now been run on a bench Pi: the module built against
 the running kernel, the daemon came up, the card appeared, the player opened it,
-and eight channels of clean audio arrived. (An earlier route used Digisynthetic's
+and eight channels of clean audio arrived. (An earlier route used a licensed
 virtual sound card, which also played eight channels on the bench but pinned an
 eight-millisecond buffer and could not be aimed at a chosen destination.) The
 operator-facing version of this is
@@ -195,7 +195,7 @@ which is point 2 above.
 ## Recently landed (context, not action items)
 
 - **Merging's open AES67 stack is now the audio route.** AES67 audio previously
-  went out through Digisynthetic's virtual sound card, which worked on the bench
+  went out through a licensed virtual sound card, which worked on the bench
   but pinned an 8 ms ALSA buffer that cannot hold a ~21 ms decoded frame — so the
   card under-ran on every frame (`sound has broken up` twice a second) and the
   stream could not be aimed at a chosen address. `scripts/player/merging-aes67.sh`

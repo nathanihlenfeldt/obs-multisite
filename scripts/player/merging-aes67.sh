@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# merging-aes67.sh — the open AES67 stack, alongside the vendor's.
+# merging-aes67.sh — the open AES67 stack for the satellite's sound.
 #
 #   sudo bash scripts/player/merging-aes67.sh
 #
@@ -10,17 +10,15 @@
 #
 # Why this exists
 # ---------------
-# Digisynthetic's virtual sound card works, and the player now writes straight
-# into its calendar, so the sound is clean. But that card has one shape and it
-# cannot be argued with: an eight-millisecond buffer the vendor's driver pins in
-# the kernel, a playback position that is the daemon's millisecond counter, and
-# no way for us to choose the multicast address, the port or the channel map.
-# The vendor's own configuration flow does not ask for those things, which is
-# what aes67.sh's closing notes admit.
+# The player needs the production bus on the network, and the licensed virtual
+# sound cards that would do it are amd64-only and pin a buffer shape of their
+# own: eight milliseconds in the kernel, a playback position that is a daemon's
+# millisecond counter, and no way for us to choose the multicast address, the
+# port or the channel map.
 #
-# Merging's is the other half of the story. Their kernel module registers a
-# virtual ALSA card too — so the parts of this program that read the card are
-# unchanged — but it is a *normal* card: it takes a sane buffer, and its daemon
+# Merging's kernel module is the open half of that story. It registers a
+# virtual ALSA card — so the parts of this program that read the card are
+# unchanged — and it is a *normal* card: it takes a sane buffer, and its daemon
 # speaks SDP, SAP and PTP properly and lets you aim a stream where you like.
 # The daemon in this repository replaces Merging's commercial Butler (which is
 # amd64-only and licensed) with a GPL process that talks to the same kernel
@@ -29,13 +27,12 @@
 # What it does, and what it does not
 # ----------------------------------
 # It builds and installs the module and the daemon, writes their configuration,
-# and stops here. It does NOT remove Digisynthetic's stack, does NOT unload
-# their module, and does NOT repoint the player: the two cards sit next to each
-# other and the operator chooses with one line of the player's config. That is
-# deliberate — this is being tried on the production Pi, with no spare, and the
-# working installation has to survive a failed experiment. `--point-player`
-# moves the player onto the new card when you ask for it, and prints how to put
-# it back.
+# and stops here. It does NOT repoint the player: the new card sits next to
+# whatever the box already had and the operator chooses with one line of the
+# player's config. That is deliberate — this is being tried on the production
+# Pi, with no spare, and the working installation has to survive a failed
+# experiment. `--point-player` moves the player onto the new card when you ask
+# for it, and prints how to put it back.
 #
 # What is genuinely uncertain, said plainly
 # -----------------------------------------
@@ -56,10 +53,10 @@
 #      application. The notes at the end walk through it.
 #
 #   4. THE MODULE IS BUILT FROM SOURCE AGAINST THIS KERNEL. A kernel upgrade
-#      means rebuilding it, exactly as aes67.sh says of the vendor's. This one
-#      is not put through DKMS here because its own build takes a branch of the
-#      submodule and a compiler choice this script cannot reconstruct reliably
-#      from a DKMS hook; rerun this script after a kernel upgrade instead.
+#      means rebuilding it. It is not put through DKMS here because its own
+#      build takes a branch of the submodule and a compiler choice this script
+#      cannot reconstruct reliably from a DKMS hook; rerun this script after a
+#      kernel upgrade instead.
 #
 # Safe to run again: it reuses an existing clone, and an existing daemon.conf is
 # left alone unless you pass --rewrite-config.
@@ -107,7 +104,6 @@ WEBUI_PORT="${WEBUI_PORT:-8081}"
 # converts the decoder's floats to the L24 the card takes.
 CARD_NAME="${CARD_NAME:-RAVENNA}"
 PLAYER_CONF="/etc/multisite-player/config.json"
-DIGISYN_MODULE="Digisyn_vSndCard"
 
 # Whether to move the player onto the new card, and whether to overwrite an
 # existing daemon.conf. Both default to leaving things alone.
@@ -129,8 +125,7 @@ have() { command -v "$1" >/dev/null 2>&1; }
 usage() {
     cat <<'USAGE'
 Put the open AES67 stack (Merging's kernel module + the aes67-daemon that
-replaces their Butler) on this box, next to Digisynthetic's, without disturbing
-it.
+replaces their Butler) on this box without disturbing anything already here.
 
   sudo bash merging-aes67.sh [options]
 
@@ -154,8 +149,8 @@ What it changes
   loads at boot.
 
 What it never touches
-  Digisynthetic's module, its daemon, its config, /etc/DigiAes67Proc, and the
-  player's config unless --point-player is given.
+  Any card already registered on the box, and the player's config unless
+  --point-player is given.
 USAGE
 }
 
@@ -218,15 +213,6 @@ report_state() {
         note "daemon:      not installed"
     fi
     [ -f "$DAEMON_CONF" ] && note "config:      $DAEMON_CONF exists"
-
-    # The vendor's stack, which must still be here afterwards. Named so the
-    # operator can see this script has noticed it and is leaving it alone.
-    if lsmod | grep -q "^$DIGISYN_MODULE"; then
-        note "vendor:      $DIGISYN_MODULE is loaded — this script will not touch it"
-    fi
-    if systemctl is-active --quiet DigiAes67Proc 2>/dev/null; then
-        note "vendor:      DigiAes67Proc is running — left alone"
-    fi
 
     # PulseAudio fights the daemon for the ALSA devices and the project asks for
     # it to be gone. Reported, and stopped later only if it is running.
@@ -443,8 +429,8 @@ install_module() {
     depmod -a "$KERNEL_RELEASE"
     note "installed $dest/MergingRavennaALSA.ko"
 
-    # Load it at boot. A file of its own, separate from the vendor's, so deleting
-    # this one path leaves Digisynthetic's stack exactly as it was.
+    # Load it at boot. A file of its own, so deleting this one path leaves
+    # anything else on the box exactly as it was.
     echo "MergingRavennaALSA" > /etc/modules-load.d/merging-ravenna.conf
     note "wrote /etc/modules-load.d/merging-ravenna.conf"
 
@@ -788,7 +774,7 @@ PY
     else
         note "player is not running under systemd — start it when ready"
     fi
-    say "To go back to the vendor's card"
+    say "To put the player back on the device it was using"
     note "sudo cp $PLAYER_CONF.bak $PLAYER_CONF && sudo systemctl restart multisite-player"
 }
 
@@ -816,8 +802,7 @@ main() {
     fi
 
     say "Done"
-    note "The open AES67 stack is installed and running. Digisynthetic's is"
-    note "untouched: its module is still loaded and its daemon is still running."
+    note "The open AES67 stack is installed and running."
     echo
     note "The WebUI is at:  http://$(hostname -I 2>/dev/null | awk '{print $1}'):$WEBUI_PORT"
     note "Logs:             journalctl -u $DAEMON_SERVICE -f"
@@ -827,8 +812,8 @@ main() {
     note "clock, it does not hand one out. That is the most likely silence."
     echo
     if [ "$POINT_PLAYER" -eq 0 ]; then
-        note "The player is still on Digisynthetic's card. When the WebUI says the"
-        note "clock is locked, move it with:"
+        note "The player is still on whatever card it was using. When the WebUI"
+        note "says the clock is locked, move it with:"
         note "  sudo bash $0 --point-player"
         note "or, if this was piped in from the network and there is no file at"
         note "$0 to re-run:"
@@ -840,8 +825,8 @@ main() {
     note "a receiver is made by hand in that application. Multicast, 8 channels,"
     note "1 ms packets — the AES67 defaults this daemon announces."
     echo
-    warn "None of this has been run on this box before. If it fails, the"
-    warn "Digisynthetic card still works; the line above puts the player back."
+    warn "Nothing here has changed the card the player is on. If it fails, run"
+    warn "the line above to put the player back where it was."
 }
 
 main "$@"

@@ -259,7 +259,7 @@ It builds from source, so give it a few minutes and let it finish.
   This sets the player's `alsa_device` to `plughw:CARD=RAVENNA` and restarts it.
   It is an ordinary ALSA card: the player needs no special handling, and the card
   grants a normal buffer, so the `sound has broken up` under-runs of the earlier
-  Digisynthetic route do not occur.
+  virtual-card route do not occur.
 - **A PTP master has to exist on the network, or nothing flows.** The daemon
   slaves to a clock; it does not hand one out. With no master — a Dante device, a
   console, an Anubis — the WebUI never says `locked` and there is silence. This

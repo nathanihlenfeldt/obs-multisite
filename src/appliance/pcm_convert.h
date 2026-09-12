@@ -5,18 +5,17 @@
 //
 // The player used to ask ALSA for interleaved float and treat a refusal as the
 // end of the matter. That is right on HDMI, which takes float, and wrong on
-// everything else. The AES67 card is the case that found it: the vendor driver
-// advertises `hw->formats = SNDRV_PCM_FMTBIT_S32_LE` and nothing else
-// (DigiAes67KoLib/Digisyn-vSndCard.c), so `hw:CARD=…` — which has no plugin in
-// the way to convert — answered EINVAL and the install went silent with
+// everything else. A card that advertises one 32-bit integer format and nothing
+// else is the case that found it: `hw:CARD=…` — which has no plugin in the way
+// to convert — answered EINVAL and the install went silent with
 //
-//     hw:CARD=Default,DEV=0 will not take floating-point audio: Invalid argument
+//     hw:CARD=…,DEV=0 will not take floating-point audio: Invalid argument
 //
 // The device list in the interface offers `hw:` entries, so simply choosing the
 // card from the menu was enough to cause it. `plughw:` hides the same fault
-// behind ALSA's plug layer, which is why the installer writes `plughw:` — but
-// relying on a plugin to paper over a device we cannot open directly is a thin
-// defence, and it is the wrong answer for a box that is meant to work.
+// behind ALSA's plug layer — but relying on a plugin to paper over a device we
+// cannot open directly is a thin defence, and it is the wrong answer for a box
+// that is meant to work.
 //
 // So the card is asked for float first (what the decoder produces arrives
 // unchanged, which costs nothing), then 32-bit, then 16-bit integers, and the
