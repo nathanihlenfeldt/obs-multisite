@@ -59,6 +59,19 @@ static constexpr char S_CHANLBL[]   = "channel_labels";
 static constexpr char S_LAYOUT[]    = "tile_layout";
 static constexpr char S_MARKERS[]   = "marker_labels";
 
+// A packet held while the encoder has not yet told us its codec config.
+//
+// Kept as raw fields rather than as a CmafPacket because the muxer track a
+// packet belongs to is decided by build_tracks(), which has not run yet — that
+// is the whole reason these are being held.
+struct HeldPacket {
+    bool     is_video = false;
+    size_t   track_idx = 0;          // OBS mixer index, for audio
+    int64_t  pts_ns = 0, dts_ns = 0;
+    bool     keyframe = false;
+    std::vector<uint8_t> data;
+};
+
 // A finished fragment on its way from the muxer to the durable spool.
 struct PendingFragment {
     std::vector<uint8_t> bytes;
@@ -94,6 +107,39 @@ struct OutputCtx : EncoderControls {
     std::condition_variable     wq_cv;
     std::thread                 writer;
     std::atomic<bool>           writer_run{false};
+
+    // ── Encoders that only reveal their codec config once they encode ────────
+    // x264 computes SPS/PPS when it is initialised, so the config is there
+    // before a single frame has been sent. Apple's VideoToolbox encoders do
+    // not: OBS's mac-videotoolbox fills its extra_data inside handle_keyframe,
+    // which is to say on the first keyframe it actually encodes. Reading it at
+    // start therefore found nothing, and every hardware encoder on a Mac
+    // failed to go live at all.
+    //
+    // So when the config is absent at start, the start is finished later —
+    // once the first video packet proves it has arrived. Packets that turn up
+    // meanwhile are held here rather than dropped, because the first of them
+    // is the keyframe carrying that very config and the event would be
+    // undecodable without it.
+    //
+    // Only when absent. An encoder that answers at start takes exactly the
+    // path it always did, including reporting a bad bucket before OBS says
+    // it went live.
+    // What the start was given, kept so it can be finished later. Not re-read
+    // from the output's settings at that point: an operator editing a field
+    // between Go Live and the first keyframe would otherwise change the event
+    // half way through starting it.
+    S3Config      pending_s3;
+    SessionConfig pending_sc;
+    std::string   pending_labels, pending_chan_labels, pending_layout;
+
+    std::atomic<bool>       deferred{false};     // waiting on the first keyframe
+    std::atomic<bool>       complete_requested{false};
+    std::atomic<bool>       completing{false};   // hand-off happens once
+    std::deque<HeldPacket>  held;
+    std::mutex              held_mtx;
+    size_t                  held_bytes = 0;
+    uint64_t                deferred_since_ms = 0;
 
     // diagnostics
     bool     logged_first_packets = false;
@@ -391,21 +437,98 @@ static obs_properties_t* out_props(void*) {
 }
 
 // Drains finished fragments into the durable spool, off the encoder thread.
+// Defined below, next to out_start, because that is the other place it runs
+// from and reading the two together is the point.
+static bool complete_start(OutputCtx* ctx);
+
+// Finish a start that was waiting on the encoder's codec config, then let
+// through everything held while it waited. Runs on the writer thread.
+static void finish_deferred_start(OutputCtx* ctx) {
+    // out_stop clears `accepting` before it does anything else, so this is how
+    // a stop that arrives first is noticed. Without it, clicking Stop in the
+    // moment before the first keyframe would still create an event in the
+    // bucket — and then immediately end it.
+    if (!ctx->accepting.load()) {
+        mlog_info("stopped before the encoder produced a codec config — "
+                  "no event was started");
+        ctx->deferred = false;
+        return;
+    }
+
+    if (!complete_start(ctx)) {
+        mlog_error("could not start the event once the codec config arrived");
+        if (ctx->accepting.exchange(false))
+            obs_output_signal_stop(ctx->output, OBS_OUTPUT_ERROR);
+        return;
+    }
+
+    // Order matters: the muxer must be reachable by out_packet only after
+    // everything held ahead of those packets has gone through it, or the
+    // event starts part way in — missing the keyframe that carries the very
+    // config this was all waiting for.
+    std::deque<HeldPacket> held;
+    {
+        std::lock_guard<std::mutex> lk(ctx->held_mtx);
+        held.swap(ctx->held);
+        ctx->held_bytes = 0;
+    }
+    // Checked again: start_new() talks to the bucket and can take a while, and
+    // a stop may have begun during it. Pushing into a muxer out_stop has
+    // already flushed and reset is the thing to avoid.
+    if (!ctx->accepting.load()) { ctx->deferred = false; return; }
+
+    size_t pushed = 0, dropped = 0;
+    for (auto& h : held) {
+        int track = h.is_video ? ctx->video_track
+                  : (h.track_idx < MAX_AUDIO_MIXES
+                         ? ctx->audio_track_for[h.track_idx] : -1);
+        if (track < 0) { ++dropped; continue; }   // a track nobody asked for
+        CmafPacket cp;
+        cp.track    = track;
+        cp.data     = std::move(h.data);
+        cp.pts_ns   = h.pts_ns;
+        cp.dts_ns   = h.dts_ns;
+        cp.keyframe = h.keyframe;
+        {
+            std::lock_guard<std::mutex> mlk(ctx->mux_mtx);
+            if (!ctx->muxer) break;
+            ctx->muxer->push(cp);
+        }
+        ++pushed;
+    }
+
+    // Cleared last. Until it is, out_packet is still holding rather than
+    // muxing, which is what keeps the drain above in front of live packets.
+    ctx->deferred = false;
+    mlog_info("multisite output started — room=%s event=%s "
+              "(%zu held packet%s released%s)",
+              ctx->pending_sc.room_id.c_str(),
+              ctx->session ? ctx->session->event_id().c_str() : "?",
+              pushed, pushed == 1 ? "" : "s",
+              dropped ? " — some for tracks not being sent" : "");
+}
+
 static void writer_loop(OutputCtx* ctx) {
     for (;;) {
         PendingFragment f;
+        bool complete_now = false;
         {
             std::unique_lock<std::mutex> lk(ctx->wq_mtx);
             ctx->wq_cv.wait(lk, [ctx] {
-                return !ctx->wq.empty() || !ctx->writer_run.load();
+                return !ctx->wq.empty() || !ctx->writer_run.load() ||
+                       ctx->complete_requested.load();
             });
-            if (ctx->wq.empty()) {
+            if (ctx->complete_requested.exchange(false)) {
+                complete_now = true;
+            } else if (ctx->wq.empty()) {
                 if (!ctx->writer_run.load()) return;   // asked to stop, nothing left
                 continue;
+            } else {
+                f = std::move(ctx->wq.front());
+                ctx->wq.pop_front();
             }
-            f = std::move(ctx->wq.front());
-            ctx->wq.pop_front();
         }
+        if (complete_now) { finish_deferred_start(ctx); continue; }
         // Checksum + durable write happen here, safely away from OBS threads.
         uint64_t seq = ctx->session->publish_segment(std::move(f.bytes),
                                                      f.duration_s, f.pts_offset_s);
@@ -430,55 +553,35 @@ static void writer_shutdown(OutputCtx* ctx, int timeout_ms = 10000) {
     if (ctx->writer.joinable()) ctx->writer.join();
 }
 
-static bool out_start(void* data) {
-    auto* ctx = static_cast<OutputCtx*>(data);
-    std::lock_guard<std::mutex> lk(ctx->mtx);
-
-    obs_data_t* s = obs_output_get_settings(ctx->output);
-    S3Config s3;
-    s3.endpoint_host     = obs_data_get_string(s, S_ENDPOINT);
-    s3.r2_account_id     = obs_data_get_string(s, S_ACCOUNT);
-    s3.bucket            = obs_data_get_string(s, S_BUCKET);
-    s3.access_key_id     = obs_data_get_string(s, S_KEYID);
-    s3.secret_access_key = obs_data_get_string(s, S_SECRET);
-    s3.region            = obs_data_get_string(s, S_REGION);
-
-    SessionConfig sc;
-    sc.room_id            = obs_data_get_string(s, S_ROOM);
-    sc.event_name         = obs_data_get_string(s, S_EVENTNAME);
-    sc.segment_duration_s = obs_data_get_double(s, S_SEGDUR);
-    std::string labels     = obs_data_get_string(s, S_TRACKLBL);
-    std::string chan_labels = obs_data_get_string(s, S_CHANLBL);
-    sc.send_expiry_tag     = obs_data_get_bool(s, S_TAGS) ||
-                             obs_data_get_bool(s, S_TAGS_OLD);
-    ctx->marker_label_csv  = obs_data_get_string(s, S_MARKERS);
-    obs_data_release(s);
-
-    if (s3.bucket.empty() ||
-        (s3.endpoint_host.empty() && s3.r2_account_id.empty())) {
-        mlog_error("storage not configured (need bucket + endpoint or account id)");
-        return false;
-    }
-
-    // Durable spool lives beside OBS's own config.
-    char* cfgdir = obs_module_config_path("spool");
-    sc.spool_dir = cfgdir ? cfgdir : "./multisite_spool";
-    bfree(cfgdir);
-
-    if (!obs_output_can_begin_data_capture(ctx->output, 0)) return false;
-    if (!obs_output_initialize_encoders(ctx->output, 0))     return false;
-
+// Everything the start can only do once the encoder has told us its codec
+// config: build the tracks, build the muxer, and write event.json and init.mp4.
+//
+// Split out because it runs from one of two places. Normally straight from
+// out_start, on the thread that called it, exactly as it always has. When the
+// encoder has no config to give yet, from the writer thread instead, once the
+// first video packet proves it does — which keeps the bucket writes off OBS's
+// encode thread, the rule this file opens by stating.
+static bool complete_start(OutputCtx* ctx) {
     std::vector<CmafTrack> tracks;
     VideoInfo vinfo;
     std::vector<AudioTrack> ainfo;
-    const std::string layout_str = obs_data_get_string(s, S_LAYOUT);
-    if (!build_tracks(ctx, tracks, vinfo, ainfo, labels, chan_labels, layout_str))
+    if (!build_tracks(ctx, tracks, vinfo, ainfo, ctx->pending_labels,
+                      ctx->pending_chan_labels, ctx->pending_layout))
         return false;
 
-    ctx->muxer = std::make_unique<CmafMuxer>(tracks, sc.segment_duration_s);
-    if (!ctx->muxer->ok()) {
-        mlog_error("muxer init failed: %s", ctx->muxer->error().c_str());
-        return false;
+    // Under the lock, because this can now run on the writer thread while
+    // out_stop resets the same pointer from OBS's UI thread. Two unassisted
+    // unique_ptr writes to one pointer is a data race and, with the wrong
+    // interleaving, a double free.
+    {
+        auto m = std::make_unique<CmafMuxer>(tracks,
+                                             ctx->pending_sc.segment_duration_s);
+        if (!m->ok()) {
+            mlog_error("muxer init failed: %s", m->error().c_str());
+            return false;
+        }
+        std::lock_guard<std::mutex> mlk(ctx->mux_mtx);
+        ctx->muxer = std::move(m);
     }
 
     mlog_info("init segment: %zu bytes (carries the codec config for the event)",
@@ -487,11 +590,11 @@ static bool out_start(void* data) {
         mlog_error("init segment looks too small — codec config is probably "
                    "missing, so decoders will reject the stream");
 
-    ctx->transport = std::make_unique<S3Transport>(s3);
+    ctx->transport = std::make_unique<S3Transport>(ctx->pending_s3);
     // Report the URL actually in use: a mistyped endpoint is otherwise only
     // visible as curl's opaque "bad/illegal format" error.
     mlog_info("storage: %s", ctx->transport->base_url().c_str());
-    ctx->session   = std::make_unique<Session>(sc, *ctx->transport);
+    ctx->session   = std::make_unique<Session>(ctx->pending_sc, *ctx->transport);
 
     // Offer resume if a previous event was interrupted.
     auto resume = ctx->session->check_resumable();
@@ -577,18 +680,99 @@ static bool out_start(void* data) {
         ctx->wq_cv.notify_one();
     });
 
+    return true;
+}
+
+static bool out_start(void* data) {
+    auto* ctx = static_cast<OutputCtx*>(data);
+    std::lock_guard<std::mutex> lk(ctx->mtx);
+
+    obs_data_t* s = obs_output_get_settings(ctx->output);
+    S3Config s3;
+    s3.endpoint_host     = obs_data_get_string(s, S_ENDPOINT);
+    s3.r2_account_id     = obs_data_get_string(s, S_ACCOUNT);
+    s3.bucket            = obs_data_get_string(s, S_BUCKET);
+    s3.access_key_id     = obs_data_get_string(s, S_KEYID);
+    s3.secret_access_key = obs_data_get_string(s, S_SECRET);
+    s3.region            = obs_data_get_string(s, S_REGION);
+
+    SessionConfig sc;
+    sc.room_id            = obs_data_get_string(s, S_ROOM);
+    sc.event_name         = obs_data_get_string(s, S_EVENTNAME);
+    sc.segment_duration_s = obs_data_get_double(s, S_SEGDUR);
+    std::string labels     = obs_data_get_string(s, S_TRACKLBL);
+    std::string chan_labels = obs_data_get_string(s, S_CHANLBL);
+    sc.send_expiry_tag     = obs_data_get_bool(s, S_TAGS) ||
+                             obs_data_get_bool(s, S_TAGS_OLD);
+    ctx->marker_label_csv  = obs_data_get_string(s, S_MARKERS);
+    // Read before the release below, not after it. This was being read from
+    // `s` further down, past the point where our reference had been given up.
+    const std::string layout_str = obs_data_get_string(s, S_LAYOUT);
+    obs_data_release(s);
+
+    if (s3.bucket.empty() ||
+        (s3.endpoint_host.empty() && s3.r2_account_id.empty())) {
+        mlog_error("storage not configured (need bucket + endpoint or account id)");
+        return false;
+    }
+
+    // Durable spool lives beside OBS's own config.
+    char* cfgdir = obs_module_config_path("spool");
+    sc.spool_dir = cfgdir ? cfgdir : "./multisite_spool";
+    bfree(cfgdir);
+
+    if (!obs_output_can_begin_data_capture(ctx->output, 0)) return false;
+    if (!obs_output_initialize_encoders(ctx->output, 0))     return false;
+
+    ctx->pending_s3          = s3;
+    ctx->pending_sc          = sc;
+    ctx->pending_labels      = labels;
+    ctx->pending_chan_labels = chan_labels;
+    ctx->pending_layout      = layout_str;
+
+    // The writer thread first: in the deferred case it is what finishes the
+    // start, so it has to be running before any packet can ask it to.
     ctx->writer_run = true;
     ctx->writer = std::thread(writer_loop, ctx);
+
+    // Has the encoder told us its codec config yet?
+    //
+    // x264 has: it computes SPS/PPS when initialised. Apple's VideoToolbox
+    // encoders have not, and cannot — OBS's mac-videotoolbox fills its
+    // extra_data on the first keyframe it encodes, which has not happened,
+    // because capture has not begun. Asking again later is the only way.
+    bool have_config = false;
+    if (obs_encoder_t* venc = obs_output_get_video_encoder(ctx->output)) {
+        uint8_t* hdr = nullptr; size_t hdr_size = 0;
+        have_config = obs_encoder_get_extra_data(venc, &hdr, &hdr_size) &&
+                      hdr && hdr_size;
+    }
+
+    if (have_config) {
+        // The path every encoder that works today already takes, unchanged —
+        // including refusing to start at all when the bucket is wrong, which
+        // is worth keeping: an operator finds out before OBS says they are on.
+        if (!complete_start(ctx)) { writer_shutdown(ctx); return false; }
+    } else {
+        const char* id = "?";
+        if (obs_encoder_t* venc = obs_output_get_video_encoder(ctx->output))
+            if (const char* n = obs_encoder_get_id(venc)) id = n;
+        mlog_info("%s has no codec config yet — finishing the start on its "
+                  "first keyframe, holding packets until then", id);
+        ctx->deferred          = true;
+        ctx->deferred_since_ms = (uint64_t)now_ms();
+    }
 
     if (!obs_output_begin_data_capture(ctx->output, 0)) {
         writer_shutdown(ctx);
         return false;
     }
     ctx->started = true;
-    ctx->accepting = true;      // packets may now enter the muxer
+    ctx->accepting = true;      // packets may now enter the muxer, or be held
     register_encoder_controls(ctx);   // hotkeys can now drop markers
-    mlog_info("multisite output started — room=%s event=%s",
-              sc.room_id.c_str(), ctx->session->event_id().c_str());
+    if (!ctx->deferred.load())
+        mlog_info("multisite output started — room=%s event=%s",
+                  sc.room_id.c_str(), ctx->session->event_id().c_str());
     return true;
 }
 
@@ -663,10 +847,74 @@ static inline int64_t ts_to_ns(int64_t ts, int32_t tb_num, int32_t tb_den) {
     return ts * ns_per_unit + (ts * rem) / (int64_t)tb_den;
 }
 
+// Does this packet mean the encoder can now tell us its codec config?
+static bool h_is_video_and_config_ready(OutputCtx* ctx,
+                                        const struct encoder_packet* pkt) {
+    if (pkt->type != OBS_ENCODER_VIDEO) return false;
+    obs_encoder_t* venc = obs_output_get_video_encoder(ctx->output);
+    if (!venc) return false;
+    uint8_t* hdr = nullptr; size_t hdr_size = 0;
+    return obs_encoder_get_extra_data(venc, &hdr, &hdr_size) && hdr && hdr_size;
+}
+
+// How much may be held while waiting for a codec config, before giving up.
+//
+// A keyframe is due immediately — encoders emit one first — so this should hold
+// a handful of packets for a fraction of a second. These bounds exist for the
+// case where it never arrives at all, so that a stuck encoder ends as a stopped
+// output with a reason rather than as memory climbing until something dies.
+static constexpr size_t kMaxHeldPackets = 900;      // ~30s of 30fps video
+static constexpr size_t kMaxHeldBytes   = 64u << 20;
+static constexpr int64_t kMaxHeldMs     = 15000;
+
 static void out_packet(void* data, struct encoder_packet* pkt) {
     auto* ctx = static_cast<OutputCtx*>(data);
     // Cheap gate first: once stop() begins, packets are dropped immediately.
     if (!ctx || !pkt || !ctx->accepting.load()) return;
+
+    // ── Still waiting for the encoder's codec config ─────────────────────────
+    if (ctx->deferred.load()) {
+        HeldPacket h;
+        h.is_video  = (pkt->type == OBS_ENCODER_VIDEO);
+        h.track_idx = pkt->track_idx;
+        h.pts_ns    = ts_to_ns(pkt->pts, pkt->timebase_num, pkt->timebase_den);
+        h.dts_ns    = ts_to_ns(pkt->dts, pkt->timebase_num, pkt->timebase_den);
+        h.keyframe  = pkt->keyframe;
+        h.data.assign(pkt->data, pkt->data + pkt->size);
+
+        bool overflowed = false;
+        {
+            std::lock_guard<std::mutex> lk(ctx->held_mtx);
+            ctx->held_bytes += h.data.size();
+            ctx->held.push_back(std::move(h));
+            overflowed = ctx->held.size() > kMaxHeldPackets ||
+                         ctx->held_bytes > kMaxHeldBytes ||
+                         (now_ms() - (int64_t)ctx->deferred_since_ms) > kMaxHeldMs;
+        }
+
+        if (overflowed) {
+            // Only once: accepting is cleared first so no further packet can
+            // take this branch and stop the output a second time.
+            if (ctx->accepting.exchange(false)) {
+                mlog_error("the video encoder never produced a codec config — "
+                           "nothing can be published without it. Stopping. Try "
+                           "the x264 encoder, which provides one immediately.");
+                obs_output_signal_stop(ctx->output, OBS_OUTPUT_ENCODE_ERROR);
+            }
+            return;
+        }
+
+        // Ask the writer thread to finish the start, the moment a video packet
+        // means the config exists. Done there rather than here because it
+        // writes event.json and init.mp4 to the bucket, and this is OBS's
+        // encode thread.
+        if (h_is_video_and_config_ready(ctx, pkt) &&
+            !ctx->completing.exchange(true)) {
+            ctx->complete_requested = true;
+            ctx->wq_cv.notify_one();
+        }
+        return;
+    }
 
     int track = -1;
     if (pkt->type == OBS_ENCODER_VIDEO) track = ctx->video_track;
