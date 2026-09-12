@@ -30,6 +30,77 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.16-alpha
+
+Three things that stopped work, all of which looked like something else.
+
+### Hardware encoding works on a Mac
+
+Choosing any of the Apple VideoToolbox encoders failed to go live at all,
+with *"NO VIDEO EXTRADATA available from the encoder"*. On a Mac that is every
+hardware option there is, so the only way to broadcast was x264 on the CPU.
+
+Nothing was wrong with the encoder or the setting. Some encoders can describe
+what they are about to produce before they produce anything; VideoToolbox
+cannot, and only says once it has encoded its first frame. We asked too early
+and took the silence for a failure.
+
+Going live now waits for that answer when it has to, and holds the first moment
+of the broadcast until it arrives rather than discarding it. Encoders that can
+answer immediately are unaffected — including still refusing to start at all
+when the storage settings are wrong, which is worth keeping: you find out
+before OBS tells you you are on air.
+
+Tested on an M5 with the HEVC hardware encoder, start to finish.
+
+### OBS could refuse to quit after a broadcast
+
+Closing OBS after broadcasting could hang with no window, no error and no way
+forward except forcing it to quit — which OBS then reports as a crash the next
+time it opens.
+
+It was never a crash. Two parts of the plugin each held something the other was
+waiting for, so shutdown stopped rather than finished. Reproduced deliberately,
+found, fixed, and reproduced again to confirm: OBS now closes in about two
+seconds, and no longer reports anything amiss on the next launch.
+
+If you saw a crash report after quitting, this was almost certainly it, and
+nothing was lost — the broadcast had already finished and uploaded.
+
+### Play after Stop works again
+
+At a satellite, pressing **Stop** and then **Play** left the picture blank.
+Recovering it took a seek, which is not something anyone should have to
+discover.
+
+Stop releases the decoder — that is what makes it a real stop rather than a
+pause — but it did not tell the feed that the next one would need its setup
+data again. It does now. This was introduced by the Stop changes in
+v0.1.12-alpha.
+
+### A satellite's network audio goes to the right channels
+
+Three faults that all presented as a silent room, and none of which said so.
+The one worth knowing about: a box with network audio switched on opened its
+card before any feed had arrived, guessed two channels, and then held that
+guess against an eight-channel feed for the life of the process. Every listener
+heard channels 1 and 2 of eight. Nothing was logged, because nothing had
+failed — the card opened and the stream was published; the sound was simply in
+the wrong places.
+
+The channel count is now decided in one place, and with nothing to go on the
+answer is "not yet" rather than a guess. The card is also held open and metered,
+so a silent room can be told apart from a stopped one.
+
+### Also
+
+The satellite's preview can now show either what is going to the screen or the
+whole feed behind it — useful when a tile is being used, where those are no
+longer the same picture.
+
+Contributors are asked for a sign-off rather than a copyright assignment, and
+the relay ships an nginx configuration for putting TLS in front of it.
+
 ## What's new in v0.1.15-alpha
 
 One new thing a room can do, a crash on quit, and several fixes — including
