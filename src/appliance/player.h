@@ -113,6 +113,9 @@ struct Status {
 
     // ── The feed's own description of itself ─────────────────────────────────
     int         video_width = 0, video_height = 0;
+    // How the encoder composited the picture: "1x1", "2x1", "2x2". "1x1" is
+    // one picture, and is every event written before tiling existed.
+    std::string video_layout = "1x1";
     int         audio_channels = 0;
     std::vector<std::string> channel_labels;
 
@@ -293,6 +296,14 @@ private:
     std::atomic<long long> m_seg_starts_at_ms{0};
     std::atomic<int64_t>   m_seg_first_pts_ns{-1};
     std::atomic<int64_t>   m_skip_until_pts_ns{-1};
+
+    // Which tile of a composited feed goes to the screen. The layout is read
+    // from the session at every poll — it cannot change mid-event, but a
+    // different event can declare a different one — and the selection from the
+    // config. Both are cached as atomics so the delivery loop, which runs
+    // thirty times a second, never takes a lock to decide the crop. -1 means
+    // the whole picture.
+    std::atomic<int> m_tile_cols{1}, m_tile_rows{1}, m_tile_sel{-1};
 
     std::deque<PendingFrame> m_dq;
     mutable std::mutex       m_dq_mtx;

@@ -403,6 +403,9 @@ current.</summary>
   throughout, or holding the manifests only until a failover.
 - **Phase 10 — Tile layout and assigned outputs.** A 2×1 or 2×2 feed exposed as
   discrete sources and assigned to fullscreen or SDI outputs by the decoder.
+  The layout and crop geometry are in the core, the OBS plugin exposes each
+  region as its own source, and the campus player can show one chosen region
+  full-screen on its single display.
 - **Phase 11 — Appliance hardware tiers.** x86_64, DeckLink SDI, two displays
   from one box, hardware decode, and one installer for all of it.
 - **Phase 12 — Headless encoder appliance.** The main site without OBS: DeckLink

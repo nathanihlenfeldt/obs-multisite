@@ -77,6 +77,7 @@ json status_json(const Player& player) {
 
     j["video_width"]    = s.video_width;
     j["video_height"]   = s.video_height;
+    j["video_layout"]   = s.video_layout;   // e.g. "2x1"; "1x1" is one picture
     j["audio_channels"] = s.audio_channels;
     j["channel_labels"] = s.channel_labels;
 
@@ -132,6 +133,7 @@ json config_json(const Config& c) {
     j["out_width"]       = c.out_width;
     j["out_height"]      = c.out_height;
     j["out_fps"]         = c.out_fps;
+    j["tile_index"]      = c.tile_index;
     j["idle_mode"]       = to_string(c.idle_mode);
     j["idle_image_path"] = c.idle_image_path;
 
@@ -228,6 +230,7 @@ Config apply_edit(Config c, const json& j) {
     take(j, "out_width",  c.out_width);
     take(j, "out_height", c.out_height);
     take(j, "out_fps",    c.out_fps);
+    take(j, "tile_index", c.tile_index);
     {
         std::string idle;
         take(j, "idle_mode", idle);

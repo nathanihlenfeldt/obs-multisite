@@ -96,6 +96,7 @@ bool Config::load(const std::string& path, std::string& error) {
     take(j, "out_width",            out_width);
     take(j, "out_height",           out_height);
     take(j, "out_fps",              out_fps);
+    take(j, "tile_index",           tile_index);
 
     std::string idle = to_string(idle_mode);
     take(j, "idle_mode", idle);
@@ -152,6 +153,7 @@ bool Config::save(const std::string& path, std::string& error) const {
     j["out_width"]            = out_width;
     j["out_height"]           = out_height;
     j["out_fps"]              = out_fps;
+    j["tile_index"]           = tile_index;
     j["idle_mode"]            = to_string(idle_mode);
     j["idle_image_path"]      = idle_image_path;
 

@@ -194,6 +194,22 @@
       </p>
     </div>
     <div class="field">
+      <label for="c-tile">Composited feed</label>
+      <select id="c-tile" name="tile_index">
+        <option value="-1">The whole picture</option>
+        <option value="0">Top-left</option>
+        <option value="1">Top-right</option>
+        <option value="2">Bottom-left</option>
+        <option value="3">Bottom-right</option>
+      </select>
+      <p class="hint">
+        Only applies when the room sends a composited feed — the encoder
+        declares a 2×1 or 2×2 layout in the event. Then this box can put one
+        of the pictures on the screen full-height instead of the wide
+        composite with bars. A feed that is a single picture ignores this.
+      </p>
+    </div>
+    <div class="field">
       <label for="c-idle">When nothing is playing</label>
       <select id="c-idle" name="idle_mode">
         <option value="black">Show black</option>

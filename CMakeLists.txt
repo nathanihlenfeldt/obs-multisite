@@ -112,6 +112,12 @@ add_test(NAME playout_timeline COMMAND test_playout_timeline)
 add_executable(test_tile_layout tests/test_tile_layout.cpp)
 target_link_libraries(test_tile_layout PRIVATE multisite_core)
 add_test(NAME tile_layout COMMAND test_tile_layout)
+
+# One tile of a composited feed as a view: offsets into the same plane pointers,
+# the trick the OBS source uses, spelled out for the appliance's output path.
+add_executable(test_tile_crop tests/test_tile_crop.cpp)
+target_link_libraries(test_tile_crop PRIVATE multisite_core)
+add_test(NAME tile_crop COMMAND test_tile_crop)
 add_test(NAME reliability COMMAND test_reliability)
 
 # The core is shared with the planned headless appliance, which links neither

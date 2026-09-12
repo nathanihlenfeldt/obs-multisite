@@ -454,6 +454,7 @@ async function loadSettings() {
   set('#c-start-buffer', settings.start_buffer_seconds);
   set('#c-cache', settings.cache_dir);
   set('#c-idle', settings.idle_mode);
+  set('#c-tile', String(settings.tile_index ?? -1));
   set('#c-channels', settings.audio_channels);
   set('#c-audio-track', settings.audio_track);
   set('#c-audio-on', String(settings.audio_enabled));
@@ -554,6 +555,7 @@ $('#settings-form').addEventListener('submit', async (e) => {
     out_width: mode[0] || 0,
     out_height: mode[1] || 0,
     out_fps: mode[2] || 0,
+    tile_index: Number($('#c-tile').value),
     idle_mode: $('#c-idle').value,
     idle_image_path: $('#c-idle-image').value.trim(),
     audio_enabled: $('#c-audio-on').value === 'true',

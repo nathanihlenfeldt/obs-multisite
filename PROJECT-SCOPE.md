@@ -1007,7 +1007,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Web / mobile simulcast from the same files | planned; CMAF makes it feasible |
 | Scheduling / auto-go-live | planned — for the relay as well as the encoder |
 | Redundant storage: two independent S3 targets, active/active or active/passive | planned (§10 Phase 9) |
-| Tile layout: a 2x1 or 2x2 feed split into discrete sources, owned by the decoder | planned (§10 Phase 10) |
+| Tile layout: a 2x1 or 2x2 feed split into discrete sources, owned by the decoder | built — OBS plugin sources it; campus player shows one chosen tile on its single screen (§10 Phase 10) |
 | Fullscreen / SDI output assignment driven by the decoder plugin | planned (§10 Phase 10) |
 | Appliance hardware tiers: x86_64, DeckLink SDI, two displays, hardware decode, one installer | planned (§10 Phase 11) |
 | Headless encoder appliance (DeckLink SDI or HDMI input; x86_64 or RK3588) | planned (§10 Phase 12) |
@@ -1118,6 +1118,13 @@ event. Phases 9–15 have not been started.
   new output of its own. Questions recorded here rather than answered: what a
   satellite does when it has fewer outputs than tiles, whether the mapping
   survives a layout change mid-event, and whether audio follows the tile.
+  Built so far: the layout in `event.json` and the crop geometry live in
+  `src/core/` (`TileLayout::tile_rect` and `tile_view()`), the OBS plugin
+  exposes each region as its own source, and the headless campus player can put
+  one chosen region on its single screen — a `tile_index` setting (`-1` whole
+  picture, `0..3` in reading order) crops in the present path as a non-owning
+  view, so no frame is copied and the audio is left where it is. Assigning tiles
+  to several outputs from one box is what remains, and that is Phase 11.
 - **Phase 11 — Appliance hardware tiers.** ⬜ The receive appliance beyond the
   Raspberry Pi: an x86_64 build, DeckLink SDI output, two displays from one box,
   hardware decode, and one installer that copes with all of it. Two displays is

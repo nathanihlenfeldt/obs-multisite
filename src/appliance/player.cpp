@@ -4,6 +4,7 @@
 #include "screen.h"
 #include "sysinfo.h"
 #include "core/playout_clock.h"
+#include "core/tile_crop.h"
 
 #include <algorithm>
 #include <chrono>
@@ -75,6 +76,7 @@ Player::Player(Config cfg, VideoOutput& video, AudioOutput& audio)
     : m_cfg(std::move(cfg)), m_video(video), m_audio(audio) {
     m_locked = m_cfg.locked;
     m_delay_from_live_s = m_cfg.delay_from_live_s;
+    m_tile_sel = m_cfg.tile_index;
 }
 
 Player::~Player() { stop(); }
@@ -286,6 +288,9 @@ void Player::reconfigure(const Config& cfg) {
     }
     m_locked = cfg.locked;
     m_delay_from_live_s = cfg.delay_from_live_s;
+    // Which tile is shown is applied by the present path on the next frame, so
+    // it never interrupts an event the way a resolution change has to.
+    m_tile_sel = cfg.tile_index;
 
     // Only a change to what is being received justifies taking the picture
     // away. Editing the idle colour must not interrupt an event.
@@ -652,7 +657,26 @@ void Player::deliver_loop() {
 
         if (item.is_video) {
             const uint64_t t0 = now_ns();
-            m_video.present(item.video);
+            // One tile of a composited feed, if the operator asked for one.
+            // The selection and the layout are read from atomics so no lock is
+            // taken on a path that runs thirty times a second, and tile_view()
+            // is a non-owning view, so nothing is copied or allocated.
+            //
+            // A 1x1 feed, or a layout with fewer tiles than the selection,
+            // falls through to the whole picture — recoverable by hand, where
+            // a wrongly cropped one is not obviously wrong at all.
+            const int sel = m_tile_sel.load();
+            if (sel >= 0) {
+                TileLayout lay;
+                lay.cols = m_tile_cols.load();
+                lay.rows = m_tile_rows.load();
+                if (lay.is_split() && sel < lay.count())
+                    m_video.present(tile_view(item.video, lay, sel));
+                else
+                    m_video.present(item.video);
+            } else {
+                m_video.present(item.video);
+            }
             const uint64_t took = now_ns() - t0;
             m_present_ns += took;
             m_presents++;
@@ -666,6 +690,13 @@ void Player::deliver_loop() {
             m_idle_showing = false;
             // Keep the newest picture for the preview. Copied under its own
             // lock so a browser reading it can never stall the output.
+            //
+            // Deliberately the WHOLE frame, not the tile that went to the
+            // screen: fix_planes() below re-derives the plane pointers from
+            // this frame's own buffer, and tile_view() is a non-owning view
+            // with no buffer of its own. The preview therefore shows what the
+            // box received, which is also what an operator wants to see when
+            // they are checking that a split feed is arriving at all.
             {
                 std::lock_guard<std::mutex> lk(m_frame_mtx);
                 m_last_frame = item.video;
@@ -852,6 +883,17 @@ void Player::poll_loop() {
                 // poll() does network I/O and can take seconds; never under a
                 // lock.
                 const RoomState st = sess->poll();
+
+                // The declared layout, for the crop the delivery thread
+                // applies. It cannot change mid-event (event.json is written
+                // once at Go Live), but a different event can declare a
+                // different one, so it is re-read every poll rather than once
+                // at startup.
+                {
+                    const TileLayout lay = sess->video_layout();
+                    m_tile_cols = lay.cols;
+                    m_tile_rows = lay.rows;
+                }
 
                 // Load does not go to air, so no frame will arrive to clear
                 // this — the poll that performed the switch has to.
@@ -1364,6 +1406,8 @@ void Player::status(Status& out) const {
         out.video_width  = dec->video_width();
         out.video_height = dec->video_height();
     }
+
+    out.video_layout = sess->video_layout().to_string();
 }
 
 } // namespace multisite_player

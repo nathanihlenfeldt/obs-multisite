@@ -67,6 +67,14 @@ struct Config {
     int  out_width  = 0;
     int  out_height = 0;
     int  out_fps    = 0;
+    // Which tile of a composited feed to put on screen, in reading order
+    // (left to right, then top to bottom), or -1 for the whole picture. The
+    // encoder declares the layout in event.json (Phase 10); a box following a
+    // 2x1 room can show one of the two pictures full-screen rather than the
+    // wide composite with bars. A layout with fewer tiles than this falls back
+    // to the whole picture, which is recoverable by hand where a wrongly
+    // cropped one is not obviously wrong at all.
+    int  tile_index = -1;
 
     IdleMode    idle_mode = IdleMode::Splash;
     std::string idle_image_path;
