@@ -375,10 +375,10 @@ out of scope, and the relay cannot re-encode.</summary>
 ## Roadmap
 
 <details>
-<summary>What is planned next: phases 6 to 15, from the appliance's SDI and
+<summary>What is planned next: phases 6 to 16, from the appliance's SDI and
 x86 hardware tiers to storage redundancy, satellite output routing, headless
-appliances, an ABR transcoder, a low-latency mode and keeping installations
-current.</summary>
+appliances, keeping installations current and an easier way to connect a
+bucket — plus two phases that have been dropped, and why.</summary>
 
 - **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
   tier and proven on a Pi 5, though not yet through an event — that tier is done.
@@ -407,13 +407,23 @@ current.</summary>
   region as its own source, and the campus player can show one chosen region
   full-screen on its single display.
 - **Phase 11 — Appliance hardware tiers.** x86_64, DeckLink SDI, two displays
-  from one box, hardware decode, and one installer for all of it.
+  from one box, hardware decode, and one installer for all of it. The tiers
+  above the Raspberry Pi are boxes Stage Audio Works intends to build and sell;
+  the source stays GPLv3 like everything here, and nothing in the phase may
+  require a purchase to run.
 - **Phase 12 — Headless encoder appliance.** The main site without OBS: DeckLink
-  or HDMI input, on x86_64 or an RK3588 board.
-- **Phase 13 — ABR transcoder.** "Relay plus": an HLS/DASH ladder written to a
-  bucket that becomes its own origin.
-- **Phase 14 — End-to-end low latency.** An early concept, over ZeroTier with
-  WebRTC or SRT.
+  or HDMI input, on x86_64 or an RK3588 board. Same note as Phase 11.
+- **Phase 13 — ABR transcoder.** ⛔ **No longer part of this project.** A
+  rendition ladder exists to serve an audience on the open internet, which is a
+  different question from carrying an event between sites a church runs. It has
+  moved to a hosted service Stage Audio Works intends to build separately. The
+  existing relay stays here, free and undiminished; the engineering notes stay
+  in [PROJECT-SCOPE.md §10](PROJECT-SCOPE.md#10-delivery-phases).
+- **Phase 14 — End-to-end low latency.** ⛔ **Dropped.** It inverted the design
+  priority this project is built on, timeslipping could not survive it, and it
+  would have generated support calls on exactly the connections this project
+  exists to tolerate. Where a site genuinely needs conversational latency, SRT
+  is already in OBS and is a better answer today than a phase would have been.
 - **Phase 15 — Keeping installations current.** Today the plugin is a set of
   files an operator replaces by hand, and the only way anyone learns a newer
   build exists is to go and look. Notifying them is the small half: the plugin
@@ -426,6 +436,19 @@ current.</summary>
   nothing, and a Flatpak install has to go through Flatpak. The prerequisite for
   any of it is packaging into the directory layout OBS now recommends rather than
   the one it has said will stop working.
+- **Phase 16 — Storage credentials and pairing.** A second way to answer "which
+  bucket, and with what keys": pair the plugin to a credential service with a
+  short code, the way a television signs in, beside the typed keys that exist
+  now and never instead of them. Creating a cloud account, scoping a token
+  correctly and writing a lifecycle rule are the three steps that decide whether
+  a church can deploy this unaided, and they are the three this removes. The
+  service address is a setting, not a constant — anyone can run their own — and
+  nothing contacts anything until an operator asks it to. Designed in
+  [PROJECT-SCOPE.md §8.6](PROJECT-SCOPE.md#86-storage-credentials-direct-or-brokered-planned).
+
+Phases 15 and 16 are where the work goes once the plugins are finished. Between
+them they are most of the distance between something a technician can deploy and
+something an ordinary church can, and neither depends on phases 9 to 12.
 
 Each phase is described in full in
 [PROJECT-SCOPE.md §10](PROJECT-SCOPE.md#10-delivery-phases), which is also where
