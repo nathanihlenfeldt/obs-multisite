@@ -1962,6 +1962,17 @@ void SourceCtx::stop_playback() {
     { std::lock_guard<std::mutex> lk(obj_mtx); old = decoder; decoder.reset(); }
     if (old) old->stop();
     decoder_started = false;
+    // Tell the session the next segment must carry init.mp4 again.
+    //
+    // The session sends the init segment once per decoder and then stops
+    // (`m_init_sent`), which is right while one decoder runs for the whole
+    // event. Releasing the decoder makes that stale: the next one is new and
+    // cannot start without it. seek() has always cleared this for exactly that
+    // reason; the Stop path released a decoder without it, so Play afterwards
+    // sat in "first segment arrived without an init segment" until something
+    // else — a seek, usually — happened to clear the flag.
+    if (auto sess = get_session(this)) sess->request_init();
+
 
     flushing = false;
 
@@ -1997,6 +2008,17 @@ void SourceCtx::release_decoder_for_restart() {
     { std::lock_guard<std::mutex> lk(obj_mtx); old = decoder; decoder.reset(); }
     if (old) old->stop();            // blocks; outside the lock, flushing set
     decoder_started = false;
+    // Tell the session the next segment must carry init.mp4 again.
+    //
+    // The session sends the init segment once per decoder and then stops
+    // (`m_init_sent`), which is right while one decoder runs for the whole
+    // event. Releasing the decoder makes that stale: the next one is new and
+    // cannot start without it. seek() has always cleared this for exactly that
+    // reason; the Stop path released a decoder without it, so Play afterwards
+    // sat in "first segment arrived without an init segment" until something
+    // else — a seek, usually — happened to clear the flag.
+    if (auto sess = get_session(this)) sess->request_init();
+
     first_pts_ns     = -1;           // re-anchor the playout clock
     // The media timeline restarts with the new decoder, so the mapping from
     // pts to wall clock has to be learned again.
