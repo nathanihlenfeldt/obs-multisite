@@ -531,12 +531,10 @@ boots into its job, restarts itself on failure, and presents one simple screen.
 
 **Shape**
 
-Two tiers, sharing one build:
-
-- **Low cost (ARM64 / Raspberry Pi):** HDMI out, for a site that needs the feed
-  on a screen and into a small console. This is the expected volume case.
-- **Production (x86 mini-PC + DeckLink):** SDI with embedded audio, genlock,
-  and a professional signal path for larger campuses.
+ARM64 / Raspberry Pi, HDMI out — for a site that needs the feed on a screen and
+into a small console. This is the only receive-appliance tier this project
+builds or documents. Larger hardware tiers are a separate Stage Audio Works
+product line, planned and built outside this repository.
 
 **ARM64 / Raspberry Pi notes**
 
@@ -612,8 +610,7 @@ HTML with a WebSocket for live updates. It should carry the same plain language
   the output mode, with no desktop involved. That is what gives exact control
   of resolution and frame rate, removes a desktop that can be left in the
   wrong state, and suits Raspberry Pi OS Lite, which is the right image for a
-  box that only ever does one thing. DeckLink SDI follows for the production
-  tier.
+  box that only ever does one thing.
 - **Yes to a holding screen, and it is the default.** The first problem with
   an appliance is finding it: until somebody knows its address there is
   nothing to type into a phone. So the first thing it does with the display is
@@ -952,25 +949,7 @@ and the tablet that set it is long since charged and put away.
 
 ---
 
-## 8.5 Headless encoder appliance (in progress)
-
-The sending end of a campus pair is OBS on a PC, which is the wrong shape for a
-church that wants a box on a shelf taking an HDMI feed. The hardware chosen is a
-**Mekotronics R58** (RK3588): its single HDMI input is the SoC's own receiver
-(`rk_hdmirx`, the multiplanar V4L2 node `stream_hdmirx`) and the same SoC's media
-processor (`librockchip_mpp`) does the encoding. The reuse boundary does not
-move — the appliance is one more user of `CmafMuxer` and `Session`, the same path
-the plugin's OBS encoder and the relay already take — but the capture and encode
-side needs Rockchip's vendor kernel, because mainline has no working hardware
-encoder for this SoC at all.
-
-Not started, and deliberately. The first step is a bring-up probe
-(`scripts/encoder/probe.sh`, run by a vendor on an Armbian image, one report
-back) whose answers decide what the appliance ships on and what it can be asked
-to capture. Phase 12 is the rest; the probe is what keeps Phase 12 from being
-written around a guess.
-
-## 8.6 Storage credentials: direct or brokered (planned)
+## 8.5 Storage credentials: direct or brokered (planned)
 
 Setting this up asks a volunteer to create a cloud account, mint an API token
 with exactly the right scope — `s3:ListBucket` included, which the obvious
@@ -1063,7 +1042,7 @@ is the better answer for a given church, section 12 says so plainly.
 | Operator page served from the plugin to a phone or tablet, following the machine's role | built (§8.4) |
 | Video-on-demand playback of past and interrupted events | built |
 | Any OBS machine can originate a broadcast | built |
-| Dedicated receive appliance (Raspberry Pi) | built and proven on a Pi 5; not yet run through an event (§10 Phase 6). The x86/SDI tier is Phase 11 |
+| Dedicated receive appliance (Raspberry Pi) | built and proven on a Pi 5; not yet run through an event (§10 Phase 6) |
 | Self-hosted, on storage you own | built |
 | Open protocol, no vendor lock-in | by design — the whole protocol is §4 |
 | Public simulcast to YouTube / Facebook / RTMP or SRT | built and pushing live to YouTube; not yet through a full event. H.264 over either; HEVC over SRT only, and not yet from real encoder output (§8.2) |
@@ -1081,12 +1060,10 @@ is the better answer for a given church, section 12 says so plainly.
 | Redundant storage: two independent S3 targets, active/active or active/passive | planned (§10 Phase 9) |
 | Tile layout: a 2x1 or 2x2 feed split into discrete sources, owned by the decoder | built — OBS plugin sources it; campus player shows one chosen tile on its single screen (§10 Phase 10) |
 | Fullscreen / SDI output assignment driven by the decoder plugin | planned (§10 Phase 10) |
-| Appliance hardware tiers: x86_64, DeckLink SDI, two displays, hardware decode, one installer | planned (§10 Phase 11) |
-| Headless encoder appliance (DeckLink SDI or HDMI input; x86_64 or RK3588) | planned (§10 Phase 12) |
 | ABR transcoder ("relay plus"): a ladder written to a bucket that is its own HLS/DASH origin | **not part of this project** — moved to a separate hosted service (§10) |
 | End-to-end low latency over ZeroTier, with WebRTC or SRT | **dropped** — use SRT, already in OBS (§10) |
-| Knowing a newer build exists, and applying it without a manual reinstall | planned — notification first; whether an update applies itself is undecided (§10 Phase 13) |
-| Connecting a bucket by pairing rather than by pasting keys, against a broker anyone can run | planned (§8.6, §10 Phase 14) |
+| Knowing a newer build exists, and applying it without a manual reinstall | planned — notification first; whether an update applies itself is undecided (§10 Phase 11) |
+| Connecting a bucket by pairing rather than by pasting keys, against a broker anyone can run | planned (§8.5, §10 Phase 12) |
 
 Further directions to explore: web/mobile simulcast served directly from the
 bucket (which needs no relay at all — the CMAF objects are already the right
@@ -1100,22 +1077,24 @@ Multi-bucket mirroring has graduated from a direction to explore into Phase 9
 
 Each phase leaves the project in a testable, usable state. Phases 1–5 are
 built and have been run end to end. Phase 6 is built, proven on a Pi 5 and
-carrying `v0.1.12-alpha`; the hardware it left over — DeckLink SDI output and
-hardware-decode selection — moved to Phase 11 rather than being built here.
+carrying `v0.1.12-alpha`; the hardware beyond it — SDI output, larger signal
+paths — is a separate Stage Audio Works product line now, not built here.
 Phase 7 is built but has not yet carried an event. Phase 8 is built — the vendor
 API and the Companion module — and both have been driven against a real OBS, the
 module also against a real campus player, though nothing has yet run a whole
-event. Phases 9–14 have not been started.
+event. Phases 9–12 have not been started.
 
-**Phases 13 and 14 are the two that carry weight now.** Between them they are
+**Phases 11 and 12 are the two that carry weight now.** Between them they are
 most of the distance between a project a technician can deploy and one an
 ordinary church can — knowing a new build exists and installing it without a
 manual reinstall, and connecting a bucket without minting a token by hand.
-Neither depends on 9 through 12, and both were written as late phases when the
+Neither depends on 9 or 10, and both were written as late phases when the
 list assumed the hardest problem was features rather than deployment.
 
-Two things that used to be on this list are not any more. They are written up
-after the phases, with the reasoning, rather than deleted.
+This project's scope is now the OBS plugin pair and the Raspberry Pi
+appliance — nothing wider. Three things that used to be on this list are not
+any more. They are written up after the phases, with the reasoning, rather
+than deleted.
 
 - **Phase 1 — Reliability core.** ✅ Durable upload queue, retry/backoff, checksums,
   resume-after-crash, decoder cache with verification, and stale detection. This
@@ -1142,13 +1121,14 @@ after the phases, with the reasoning, rather than deleted.
   on power-up, **proven on a Pi 5 on 2026-09-07** and carrying `v0.1.12-alpha`,
   though not yet through a congregation's event. Complete **for the tier it
   defines**, in section 8.1's terms: the ARM64/HDMI appliance is what this phase
-  set out to build. Its two remaining items are not finished here but moved,
-  because each belongs to a phase that owns the hardware rather than the
-  appliance shape — DeckLink SDI output, which is section 8.1's *production*
-  tier and therefore Phase 11, and hardware-decoder selection on Pi 4, which is
-  the same question Phase 11 asks for x86_64 and answers the same way: prefer a
-  hardware decoder when one exists, fall back to software. The channel
-  de-interleaver has been dropped from scope rather than deferred (§4.3.1).
+  set out to build. One item remains within this same phase rather than moved
+  elsewhere, since it needs no wider hardware tier to answer: hardware-decoder
+  selection on Pi 4 (`h264_v4l2m2m`), alongside the software path Pi 5 already
+  uses — prefer a hardware decoder when one exists, fall back to software.
+  DeckLink SDI output belongs to hardware beyond the Pi, which is out of this
+  project's scope — see "Appliance hardware beyond the Pi" near the end of
+  this section. The channel de-interleaver has been dropped from scope rather
+  than deferred (§4.3.1).
 - **Phase 7 — Extensions.** 🟨 Built: the public simulcast relay (§8.2), as a
   separate container in `relay/` — copy remux to one or more RTMP **or SRT**
   destinations, per-destination audio selection, a delay buffer, and
@@ -1210,50 +1190,10 @@ after the phases, with the reasoning, rather than deleted.
   preview offers both views of the same instant — the region going out and the
   whole feed — because once a tile is selected those are no longer the same
   picture, and an operator checking the crop needs to see the edges. Assigning
-  tiles to several outputs from one box is what remains, and that is Phase 11.
-- **Phase 11 — Appliance hardware tiers.** ⬜ The receive appliance beyond the
-  Raspberry Pi: an x86_64 build, DeckLink SDI output, two displays from one box,
-  hardware decode, and one installer that copes with all of it.
-
-  A note on what this is, since it is the first phase here that is as much a
-  product as a piece of software. The Raspberry Pi tier is a build anyone can
-  make from this repository, and stays that way. The tiers above it are boxes
-  Stage Audio Works intends to assemble, test and sell — SDI, genlock and a
-  professional signal path are for installations with a budget, and the work of
-  sourcing and supporting hardware is worth paying for. **The source is GPLv3
-  like everything else here**, and a site that would rather build its own from
-  it is welcome to; what is being sold is the box, the testing and somebody to
-  call, not permission. Nothing in this phase may require a purchase to run.
-
-  Two displays is
-  Phase 10 applied to hardware — a 3840×1080 feed is a `2x1` layout with tile 0
-  on the first output and tile 1 on the second. Hardware decode is VAAPI or QSV
-  with a software fallback, which the core's FFmpeg path already allows for; the
-  same prefer-hardware-fall-back-to-software rule covers the Pi 4's
-  `h264_v4l2m2m` decoder, which came here from Phase 6 (§8.1).
-  Audio stays HDMI-embedded as it is, or goes to a chosen ALSA device. The
-  awkward parts are not the code: the DeckLink driver is normally a manual
-  install, which fights the one-script promise, and its SDK carries
-  redistribution terms that make it a build-time option at best; and driving two
-  connectors as one logical wide framebuffer depends on the driver, so two
-  outputs is the safer model to promise than one 3840-wide mode.
-- **Phase 12 — Headless encoder appliance.** ⬜ The other end without OBS: an
-  encoder that takes an input and publishes to the bucket with no desktop
-  attached. Two plausible shapes — x86_64 with a DeckLink input, or an ARM64 SBC
-  with HDMI input (RK3588 boards such as the NanoPi or RockPi, whose MPP
-  encoder does H.264 and HEVC in hardware). It reuses what exists: the CMAF
-  muxer, the durable queue, the retry and checksum path. What does not exist and
-  would have to be written: an input abstraction, an encode stage in front of
-  the muxer, and honest answers on clocking, genlock and where the audio comes
-  from. The largest new surface of any phase here. An early concept.
-
-  The same note as Phase 11 applies, and more strongly: this is expected to be
-  a box we build rather than a thing a church assembles, and its source is
-  GPLv3 regardless. It matters beyond its own tier — a main site that needs no
-  OBS is what makes this usable somewhere nobody wants a desktop computer in
-  the signal path, and it is the encoder that a hosted delivery service would
-  eventually be fed by.
-- **Phase 13 — Keeping installations current.** ⬜ Installing the plugin is a
+  tiles to several outputs from one box needs hardware beyond the Pi, which is
+  out of this project's scope — see "Appliance hardware beyond the Pi" near
+  the end of this section.
+- **Phase 11 — Keeping installations current.** ⬜ Installing the plugin is a
   manual act — unzip, move files, restart OBS — and the only way to learn that a
   newer build exists is to go and look at the releases page. Two jobs live here
   and they are not the same size.
@@ -1301,15 +1241,15 @@ after the phases, with the reasoning, rather than deleted.
   reinstalling by hand on each release is costing more than those phases are
   worth.
 
-- **Phase 14 — Storage credentials and pairing.** ⬜ A second way to answer
+- **Phase 12 — Storage credentials and pairing.** ⬜ A second way to answer
   "which bucket, and with what keys" — a device-code pairing against a
   credential broker, beside the typed keys that exist now and never instead of
-  them. Designed in §8.6, including the constraints that keep it honest: inert
+  them. Designed in §8.5, including the constraints that keep it honest: inert
   until an operator asks for it, a broker URL that is a field rather than a
   constant, cached credentials that never gate going live, and a disconnect
   that hands back the bucket details.
 
-  This is on the list because of what §8.6 opens with. Creating a cloud
+  This is on the list because of what §8.5 opens with. Creating a cloud
   account, scoping a token correctly and writing a lifecycle rule are the three
   steps that decide whether a church can deploy this at all, and they are the
   three a broker removes. Whatever the eventual split between what a church
@@ -1317,15 +1257,15 @@ after the phases, with the reasoning, rather than deleted.
   the seam is small, because `S3Config` is already a plain value struct that
   something builds rather than something the transport reaches out for.
 
-  Depends on nothing else here. Along with Phase 13, the most useful work
+  Depends on nothing else here. Along with Phase 11, the most useful work
   available once the plugins are finished.
 
 
-### Two things that were on this list
+### Three things that were on this list
 
-Neither was built, so nothing anyone has is affected. The reasoning is kept
-rather than the entries deleted: the people who read a roadmap are the ones
-who would notice two of them quietly disappearing.
+None of the three was built, so nothing anyone has is affected. The reasoning
+is kept rather than the entries deleted: the people who read a roadmap are the
+ones who would notice things quietly disappearing from it.
 
 ### The ABR transcoder, "relay plus" — no longer part of this project
 
@@ -1339,7 +1279,7 @@ repository of two OBS plugins cannot honour.
 
 It is not cancelled, it has moved: it is the foundation of a hosted service
 Stage Audio Works intends to build separately, fed by the encoder plugin or
-by the Phase 12 appliance. The existing relay stays exactly as it is —
+by Stage Audio Works' own appliance hardware. The existing relay stays exactly as it is —
 free, in this repository, and not degraded to make room for anything.
 
 The engineering notes are kept below because they were dearly bought and
@@ -1384,6 +1324,31 @@ campus pastor taking questions — SRT already exists in OBS, there is good
 hardware for it, and Stage Audio Works can engineer it per project on the SRT
 infrastructure it already runs. That is a better answer than a second delivery
 path in this repository, and it is available today rather than after a phase.
+
+### Appliance hardware beyond the Pi — moved, not dropped
+
+Unlike the two above, this isn't a rejected idea — it's a scope decision.
+This project's receive and encode hardware is the Raspberry Pi appliance
+(Phase 6) and nothing wider: no x86/DeckLink production tier, no RK3588
+headless encoder, no rackmount box. Both were sketched here at one point —
+an x86 satellite with SDI output and genlock, and a headless encoder on a
+Mekotronics R58 (RK3588) using its `rk_hdmirx` capture path and
+`librockchip_mpp` hardware encoder — and both are real, still being built,
+just not in this repository.
+
+Stage Audio Works builds and sells that hardware, and the software that runs
+on it, under its own name (**MultisiteOS**), as a product line planned and
+documented separately from this project. Where it reuses this project's core
+— the CMAF muxer, the durable queue, the storage protocol — that code stays
+exactly what it already is: GPLv3, in this repository, available to anyone
+who wants to build their own version of that hardware rather than buy ours.
+What moved out is the *planning and positioning* of the hardware itself, not
+the license on the software underneath it.
+
+Practically, this is why Phase 6's own text no longer defers Pi 4's
+hardware-decoder selection to a later phase, and why Phase 10's tile-to-output
+assignment no longer promises a numbered phase to finish it in: both were
+waiting on a hardware tier that isn't part of this project's roadmap any more.
 
 ---
 
