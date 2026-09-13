@@ -30,6 +30,64 @@ Releases up to and including v0.1.4-alpha were MIT, and that grant cannot be
 withdrawn: anyone holding those versions keeps their MIT rights to that code.
 Third-party terms are set out in `COPYRIGHT`.
 
+## What's new in v0.1.17-alpha
+
+### A satellite on the network audio card could put digital noise on air
+
+A box with **Sound on the network** switched on could, within a minute of
+starting to play an event, put loud digital noise onto the AES67 stream during
+any quiet stretch — the moment nothing else was queued to send. It looked like
+a hardware fault; it was a software one.
+
+While nothing is playing, the satellite keeps the sound card open by feeding it
+silence, so the stream stays live and a receiver never has to resubscribe. The
+buffer holding that silence was sized from the wrong number — the card's
+smallest internal chunk, rather than the larger amount actually written to keep
+it fed — so every top-up read past the end of a small buffer of zeros into
+whatever else was in memory, and played that as audio. This is now fixed at the
+source: the buffer is sized for the largest write that can ever be made from
+it, and a write that would exceed it is refused outright rather than allowed to
+run past the end.
+
+If your network audio output has ever gone briefly to static or a loud hiss
+right after starting an event, this was it.
+
+### Pressing Stop on a satellite now actually stops the sound
+
+**Stop** cleared what was queued and marked the box stopped, but nothing in the
+audio path actually checked that flag — so the next moment of programme
+refilled the queue anyway and kept playing. The box would report `stopped`
+while sound kept coming out of it. Delivery now genuinely gates on play state:
+**Stop** discards anything queued and stays silent; **Hold** still keeps its
+queue, so **Continue** picks up exactly where it left off. Those were already
+meant to behave differently from each other — now they do.
+
+### The encoder's local disk can no longer fill up unnoticed
+
+The encoder writes every segment to a local durable queue before it is ever
+uploaded, precisely so nothing is lost if the link drops. That queue was also
+allowed to grow without limit: a link that stayed down, or stayed too slow to
+keep up, for long enough would eventually fill the encoder machine's disk.
+
+It now has a cap (4 GB by default). Past it, the OLDEST still-unsent segment is
+the one let go — never the one that just arrived, so a recovering link is never
+blocked behind a segment it will never get to — and every satellite still
+downstream is told plainly that segment is gone rather than being left to wait
+on it forever. A satellite that was sitting on exactly that segment jumps
+forward instead of freezing.
+
+Both the encoder dock and a Pi satellite's own operator page now show a plain
+reading of the local disk — healthy, getting low, or almost full — checked
+whether or not anything is currently broadcasting, so a drive running low is
+something you notice before it starts costing you segments rather than after.
+
+### Also
+
+A related but separate gap was found and written up rather than fixed here: a
+satellite that crashes mid-event (rather than switching away from it cleanly)
+can leave behind a cache folder nothing ever cleans up afterwards. It costs
+disk slowly rather than breaking anything, and is tracked in `BUGS.md`.
+
 ## What's new in v0.1.16-alpha
 
 Three things that stopped work, all of which looked like something else.
