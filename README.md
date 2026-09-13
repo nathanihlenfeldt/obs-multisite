@@ -375,7 +375,7 @@ out of scope, and the relay cannot re-encode.</summary>
   exists, and there is no OBS-level mechanism to add one — no update or upgrade
   entry point exists in `libobs` or `obs-frontend-api`. The Windows instructions
   also still use the install-directory layout OBS has said it will stop reading.
-  Both are Phase 13 in the [Roadmap](#roadmap), and the second is written up as
+  Both are Phase 11 in the [Roadmap](#roadmap), and the second is written up as
   [BUGS.md entry 2](BUGS.md).
 - **Not yet used for a real event.** A six-hour soak has been run (see
   [Status](#status)) but no congregation has watched anything through this. The
@@ -391,17 +391,16 @@ out of scope, and the relay cannot re-encode.</summary>
 ## Roadmap
 
 <details>
-<summary>What is planned next: phases 6 to 14, from the appliance's SDI and
-x86 hardware tiers to storage redundancy, satellite output routing, headless
-appliances, keeping installations current and an easier way to connect a
-bucket — plus two things that have been dropped, and why.</summary>
+<summary>What is planned next: phases 6 to 12, from storage redundancy and
+satellite output routing to keeping installations current and an easier way
+to connect a bucket — plus three things that are no longer part of this
+project, and why.</summary>
 
 - **Phase 6 — Satellite appliance.** Built for the ARM64 / Raspberry Pi HDMI
   tier and proven on a Pi 5, though not yet through an event — that tier is done.
-  The rest is the hardware Phase 11 owns: DeckLink SDI output, which is §8.1's
-  production tier, and hardware-decoder selection on Pi 4. AES67 audio, which
-  puts the sound onto the network rather than leaving it in the picture, is
-  installed and passing eight channels on a bench Pi.
+  Hardware-decoder selection on Pi 4 remains within this same phase. AES67
+  audio, which puts the sound onto the network rather than leaving it in the
+  picture, is installed and passing eight channels on a bench Pi.
 - **Phase 7 — Extensions.** The public simulcast relay is built and has pushed
   live streams to YouTube; SRT in and out is in. Still to come: re-encoding,
   signing in to YouTube instead of pasting a stream key, and starting by itself.
@@ -417,19 +416,13 @@ bucket — plus two things that have been dropped, and why.</summary>
   against a real OBS and a real campus player; nothing has yet run a full event.
 - **Phase 9 — Redundant storage.** Two independent S3 targets: mirrored
   throughout, or holding the manifests only until a failover.
-- **Phase 10 — Tile layout and assigned outputs.** A 2×1 or 2×2 feed exposed as
-  discrete sources and assigned to fullscreen or SDI outputs by the decoder.
+- **Phase 10 — Tile layout.** A 2×1 or 2×2 feed exposed as discrete sources.
   The layout and crop geometry are in the core, the OBS plugin exposes each
   region as its own source, and the campus player can show one chosen region
-  full-screen on its single display.
-- **Phase 11 — Appliance hardware tiers.** x86_64, DeckLink SDI, two displays
-  from one box, hardware decode, and one installer for all of it. The tiers
-  above the Raspberry Pi are boxes Stage Audio Works intends to build and sell;
-  the source stays GPLv3 like everything here, and nothing in the phase may
-  require a purchase to run.
-- **Phase 12 — Headless encoder appliance.** The main site without OBS: DeckLink
-  or HDMI input, on x86_64 or an RK3588 board. Same note as Phase 11.
-- **Phase 13 — Keeping installations current.** Today the plugin is a set of
+  full-screen on its single display. Assigning tiles to *several* outputs from
+  one box needs hardware beyond the Pi, which is out of this project's scope
+  — see below.
+- **Phase 11 — Keeping installations current.** Today the plugin is a set of
   files an operator replaces by hand, and the only way anyone learns a newer
   build exists is to go and look. Notifying them is the small half: the plugin
   already speaks HTTPS through the libcurl it links for uploads — and already
@@ -441,7 +434,7 @@ bucket — plus two things that have been dropped, and why.</summary>
   nothing, and a Flatpak install has to go through Flatpak. The prerequisite for
   any of it is packaging into the directory layout OBS now recommends rather than
   the one it has said will stop working.
-- **Phase 14 — Storage credentials and pairing.** A second way to answer "which
+- **Phase 12 — Storage credentials and pairing.** A second way to answer "which
   bucket, and with what keys": pair the plugin to a credential service with a
   short code, the way a television signs in, beside the typed keys that exist
   now and never instead of them. Creating a cloud account, scoping a token
@@ -449,22 +442,30 @@ bucket — plus two things that have been dropped, and why.</summary>
   a church can deploy this unaided, and they are the three this removes. The
   service address is a setting, not a constant — anyone can run their own — and
   nothing contacts anything until an operator asks it to. Designed in
-  [PROJECT-SCOPE.md §8.6](PROJECT-SCOPE.md#86-storage-credentials-direct-or-brokered-planned).
+  [PROJECT-SCOPE.md §8.5](PROJECT-SCOPE.md#85-storage-credentials-direct-or-brokered-planned).
 
-Phases 13 and 14 are where the work goes once the plugins are finished. Between
+Phases 11 and 12 are where the work goes once the plugins are finished. Between
 them they are most of the distance between something a technician can deploy and
-something an ordinary church can, and neither depends on phases 9 to 12.
+something an ordinary church can, and neither depends on phases 9 or 10.
 
-Two things that used to be on this list are not any more. **The ABR transcoder**
-is no longer part of this project: a rendition ladder exists to serve an audience
-on the open internet, which is a different question from carrying an event
-between sites a church runs, and it has moved to a hosted service Stage Audio
-Works intends to build separately. The existing relay stays here, free and
-undiminished. **End-to-end low latency** is dropped outright — it inverted the
-design priority this project is built on, timeslipping could not survive it, and
-it would have generated support calls on exactly the connections this project
-exists to tolerate; where a site genuinely needs conversational latency, SRT is
-already in OBS. Neither was built. Both are written up with the reasoning in
+Three things that used to be on this list are not any more. **The ABR
+transcoder** is no longer part of this project: a rendition ladder exists to
+serve an audience on the open internet, which is a different question from
+carrying an event between sites a church runs, and it has moved to a hosted
+service Stage Audio Works intends to build separately. The existing relay
+stays here, free and undiminished. **End-to-end low latency** is dropped
+outright — it inverted the design priority this project is built on,
+timeslipping could not survive it, and it would have generated support calls
+on exactly the connections this project exists to tolerate; where a site
+genuinely needs conversational latency, SRT is already in OBS. **Appliance
+hardware beyond the Pi** — an x86/DeckLink production tier, a headless
+RK3588 encoder — has moved too, but for a different reason: not a rejected
+idea, a scope decision. This project's hardware is the OBS plugin pair and
+the Raspberry Pi appliance, nothing wider. Stage Audio Works builds and sells
+further hardware, and the software that runs on it (**MultisiteOS**), as a
+separate product line; where it reuses this project's core, that code stays
+exactly what it already is — GPLv3, in this repository. None of the three
+was built. All three are written up with the reasoning in
 [PROJECT-SCOPE.md §10](PROJECT-SCOPE.md#10-delivery-phases).
 
 Each phase is described in full in

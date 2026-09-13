@@ -62,10 +62,10 @@ crop and transform are built into OBS.
 > 2×2 feed can be routed to its own output instead of being cut up with filters.
 > The headless campus player does the single-screen half of it: a **Composited
 > feed** setting picks which region a box shows, in reading order, with the whole
-> picture as the default. Assigning tiles to *several* outputs from one box is
-> still to come (Phase 11 in
-> [PROJECT-SCOPE.md](../PROJECT-SCOPE.md#10-delivery-phases)). Until then, the
-> filters below are how to do it in OBS.
+> picture as the default. Assigning tiles to *several* outputs from one box needs
+> hardware beyond the Pi appliance, which is outside this project's scope — see
+> ["Appliance hardware beyond the Pi"](../PROJECT-SCOPE.md#10-delivery-phases).
+> The filters below are how to do it in OBS.
 
 The cost is bandwidth: a 3840×2160 canvas costs roughly what a single 4K
 stream does, whatever number of cameras are inside it. Worth it for a room
